@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
+import { outputFallsWithinSchedule, scheduleOutputBounds } from '@/lib/schedule/importSafety'
 import { parseScheduleReport } from '@/lib/excel/parseScheduleReport'
 
 export const maxDuration = 30
@@ -68,6 +69,38 @@ export async function POST(req: NextRequest) {
     orderBy: { startDate: 'asc' },
   })
 
+  // A schedule refresh must never silently remove a machine assignment that
+  // already has knitted output attached to it.  Include this signal in the
+  // preview so the user can resolve it before confirming the import.
+  const assignmentMachineIds = Array.from(new Set(existingAssignments.map(a => a.machineId)))
+  const outputBounds = existingAssignments.map((assignment) => scheduleOutputBounds(assignment))
+  const outputStart = outputBounds.length > 0
+    ? new Date(Math.min(...outputBounds.map(bounds => bounds.gte.getTime())))
+    : null
+  const outputEnd = outputBounds.length > 0
+    ? new Date(Math.max(...outputBounds.map(bounds => bounds.lte.getTime())))
+    : null
+  const outputRows = assignmentMachineIds.length > 0
+    ? await prisma.knittingDailyOutput.findMany({
+        where: {
+          machineId: { in: assignmentMachineIds },
+          dailyMeters: { gt: 0 },
+          ...(outputStart && outputEnd ? { reportDate: { gte: outputStart, lte: outputEnd } } : {}),
+        },
+        select: { machineId: true, reportDate: true, dailyMeters: true },
+      })
+    : []
+  const outputByMachine = new Map<string, { date: Date; meters: number }[]>()
+  for (const row of outputRows) {
+    const list = outputByMachine.get(row.machineId) ?? []
+    list.push({ date: row.reportDate, meters: Number(row.dailyMeters) })
+    outputByMachine.set(row.machineId, list)
+  }
+  const productionFor = (assignment: { machineId: string; startDate: Date; endDate: Date }) =>
+    (outputByMachine.get(assignment.machineId) ?? [])
+      .filter(row => outputFallsWithinSchedule(row.date, assignment))
+      .reduce((sum, row) => sum + row.meters, 0)
+
   // Separate borderline (starts before month) vs fully-within
   const borderlineRaw = existingAssignments.filter(a => a.startDate < startOfMonth)
   const toDeleteRaw   = existingAssignments.filter(a => a.startDate >= startOfMonth)
@@ -78,17 +111,17 @@ export async function POST(req: NextRequest) {
     piNumber:  a.order.piNumber,
     startDate: a.startDate.toISOString(),
     endDate:   a.endDate.toISOString(),
+    productionMeters: productionFor(a),
   }))
 
-  const borderlineAssignment = borderlineRaw.length > 0
-    ? {
-        id:        borderlineRaw[0].id,
-        machineId: borderlineRaw[0].machineId,
-        piNumber:  borderlineRaw[0].order.piNumber,
-        startDate: borderlineRaw[0].startDate.toISOString(),
-        endDate:   borderlineRaw[0].endDate.toISOString(),
-      }
-    : null
+  const borderlineAssignments = borderlineRaw.map(a => ({
+        id:        a.id,
+        machineId: a.machineId,
+        piNumber:  a.order.piNumber,
+        startDate: a.startDate.toISOString(),
+        endDate:   a.endDate.toISOString(),
+        productionMeters: productionFor(a),
+      }))
 
   // ── 5. Collect PI numbers from file ───────────────────────────────────────
   const skippedInvalid:   string[] = []
@@ -166,8 +199,11 @@ export async function POST(req: NextRequest) {
     year,
     month,
     daysInMonth,
+    assignmentSnapshot: existingAssignments.map(a => ({ id: a.id, orderId: a.orderId, updatedAt: a.updatedAt.toISOString() })),
     toDelete,
-    borderlineAssignment,
+    borderlineAssignments,
+    // Kept for old clients; new clients use the complete list above.
+    borderlineAssignment: borderlineAssignments[0] ?? null,
     toCreateDraftOrders,
     toCreateAssignments,
     machineSpecs,
@@ -175,7 +211,8 @@ export async function POST(req: NextRequest) {
     skippedInvalid,
     summary: {
       deleteCount:         toDelete.length,
-      borderlineCount:     borderlineRaw.length,
+      borderlineCount:     borderlineAssignments.length,
+      protectedCount:      [...toDelete, ...borderlineAssignments].filter(a => a.productionMeters > 0).length,
       assignmentsToCreate: toCreateAssignments.length,
       draftsToCreate:      toCreateDraftOrders.length,
       ambiguousCount:      skippedAmbiguous.length,

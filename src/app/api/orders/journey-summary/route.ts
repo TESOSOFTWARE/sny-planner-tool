@@ -5,6 +5,11 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 
+// This endpoint reads live production progress and must never be prerendered
+// during `next build` or served from a stale cache after an import.
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 function normalizePI(str: string | null | undefined): string {
   if (!str) return ''
   return str.trim().toUpperCase().replace(/\s+/g, '')

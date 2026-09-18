@@ -24,6 +24,8 @@ export const createOrderSchema = z.object({
     .max(100, 'Customer must be 100 characters or fewer')
     .transform((v) => v.trim()),
 
+  customerId: z.string().nullable().optional(),
+
   orderDate: z
     .string()
     .min(1, 'Order date is required')
@@ -44,6 +46,14 @@ export const createOrderSchema = z.object({
     .int('GSM must be a whole number')
     .gt(0, 'GSM must be greater than 0')
     .max(500, 'GSM must be 500 or less'),
+
+  productionGsm: z
+    .number()
+    .int('GSM sản xuất must be a whole number')
+    .gt(0, 'GSM sản xuất must be greater than 0')
+    .max(500, 'GSM sản xuất must be 500 or less')
+    .nullable()
+    .optional(),
 
   color: z
     .string()

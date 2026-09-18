@@ -86,6 +86,7 @@ export async function PATCH(
   if (data.piNumber !== undefined)     updateData.piNumber = data.piNumber
   if (data.subLineIndex !== undefined) updateData.subLineIndex = data.subLineIndex
   if (data.customer !== undefined)     updateData.customer = data.customer
+  if ('customerId' in data)            updateData.customerId = data.customerId
   if (data.orderDate !== undefined)    updateData.orderDate = new Date(data.orderDate)
   if (data.widthM !== undefined)       updateData.widthM = data.widthM
   if (data.lengthM !== undefined)      updateData.lengthM = data.lengthM
@@ -135,19 +136,23 @@ export async function PATCH(
       select: { widthM: true, lengthM: true, gsm: true, productionGsm: true, qty: true, rollLength: true, pieceLength: true, orderType: true },
     })
     if (current) {
-      const { qtySqm, totalWeightKgs, requiredYarnKg } = calculateOrderWeight({
+      const { totalMeters, qtySqm, totalWeightKgs, requiredYarnKg } = calculateOrderWeight({
         orderType:     (updateData.orderType   ?? current.orderType)   as string,
         widthM:        (updateData.widthM      ?? current.widthM)      as number,
         lengthM:       (updateData.lengthM     ?? current.lengthM)     as number,
         gsm:           (updateData.gsm         ?? current.gsm)         as number,
         productionGsm: (updateData.productionGsm !== undefined ? updateData.productionGsm : current.productionGsm) as number | null,
         qty:           (updateData.qty         ?? current.qty)         as number | null,
-        rollLength:    (updateData.rollLength  ?? current.rollLength  != null ? Number(current.rollLength)  : null) as number | null,
-        pieceLength:   (updateData.pieceLength ?? current.pieceLength != null ? Number(current.pieceLength) : null) as number | null,
+        rollLength:    (updateData.rollLength !== undefined ? updateData.rollLength : current.rollLength != null ? Number(current.rollLength) : null) as number | null,
+        pieceLength:   (updateData.pieceLength !== undefined ? updateData.pieceLength : current.pieceLength != null ? Number(current.pieceLength) : null) as number | null,
       })
       updateData.qtySqm         = qtySqm
       updateData.totalWeightKgs = totalWeightKgs
       updateData.requiredYarnKg = requiredYarnKg
+      const effectiveOrderType = (updateData.orderType ?? current.orderType) as string
+      if (totalMeters != null && effectiveOrderType !== 'meters') {
+        updateData.lengthM = totalMeters
+      }
     }
   }
 

@@ -65,7 +65,7 @@ const importedRowSchema = z
   )
 
 const confirmBodySchema = z.object({
-  rows: z.array(importedRowSchema).min(1).max(500),
+  rows: z.array(importedRowSchema).min(1).max(5000),
 })
 
 export async function POST(req: NextRequest) {

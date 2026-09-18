@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
+import { scheduleDay, scheduleOutputBounds, outputFallsWithinSchedule } from '@/lib/schedule/importSafety'
 
 interface Params { params: { orderId: string } }
 
@@ -54,30 +55,37 @@ export async function GET(_req: NextRequest, { params }: Params) {
     })
   }
 
-  const today = new Date()
-  today.setUTCHours(0, 0, 0, 0)
+  const today = new Date(`${scheduleDay(new Date())}T00:00:00Z`)
 
   // ── 3. Compute producedMeters per assignment ───────────────────────────────
   let totalProduced = 0
+  const countedOutputKeys = new Set<string>()
 
   for (const assignment of assignments) {
-    const effectiveEnd = assignment.endDate < today ? assignment.endDate : today
+    const bounds = scheduleOutputBounds(assignment)
+    const effectiveEnd = bounds.lte < today ? bounds.lte : today
 
     // Skip if assignment hasn't started yet
-    if (assignment.startDate > today) continue
+    if (bounds.gte > today) continue
 
     const rows = await prisma.knittingDailyOutput.findMany({
       where: {
         machineId: assignment.machineId,
         reportDate: {
-          gte: assignment.startDate,
+          gte: bounds.gte,
           lte: effectiveEnd,
         },
       },
-      select: { dailyMeters: true },
+      select: { reportDate: true, dailyMeters: true },
     })
 
     for (const r of rows) {
+      // KnittingDailyOutput is unique per machine/day.  An order can have
+      // overlapping assignments after a schedule correction; count that
+      // machine/day once instead of multiplying the same output.
+      const key = `${assignment.machineId}:${r.reportDate.toISOString()}`
+      if (countedOutputKeys.has(key)) continue
+      countedOutputKeys.add(key)
       totalProduced += Number(r.dailyMeters)
     }
   }
@@ -96,13 +104,26 @@ export async function GET(_req: NextRequest, { params }: Params) {
       reportDate: { gte: sevenDaysAgo, lte: today },
       dailyMeters: { gt: 0 }, // exclude idle days from average
     },
-    select: { dailyMeters: true },
+    select: { machineId: true, reportDate: true, dailyMeters: true },
+  })
+
+  const assignedRecentKeys = new Set<string>()
+  const assignedRecentRows = recentRows.filter((row) => {
+    const inAssignment = assignments.some((assignment) =>
+      assignment.machineId === row.machineId &&
+      outputFallsWithinSchedule(row.reportDate, assignment)
+    )
+    if (!inAssignment) return false
+    const key = `${row.machineId}:${row.reportDate.toISOString()}`
+    if (assignedRecentKeys.has(key)) return false
+    assignedRecentKeys.add(key)
+    return true
   })
 
   let avgDailyOutput: number | null = null
-  if (recentRows.length > 0) {
-    const sum = recentRows.reduce((acc, r) => acc + Number(r.dailyMeters), 0)
-    avgDailyOutput = sum / recentRows.length
+  if (assignedRecentRows.length > 0) {
+    const sum = assignedRecentRows.reduce((acc, r) => acc + Number(r.dailyMeters), 0)
+    avgDailyOutput = sum / assignedRecentRows.length
   }
 
   const remainingDays =

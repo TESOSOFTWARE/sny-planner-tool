@@ -1,7 +1,7 @@
 // src/app/api/orders/import/route.ts
 // POST /api/orders/import
 // Accepts a multipart/form-data request with a .xlsx file (field name: "file").
-// Parses the file with SheetJS and returns the first 20 valid rows as a preview.
+// Parses the file with SheetJS and returns every parsed row for preview.
 // Does NOT write anything to the database.
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -9,7 +9,6 @@ import { parseOrderList } from '@/lib/excel/parseOrderList'
 import { prisma } from '@/lib/db'
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 // 10 MB
-const PREVIEW_LIMIT = 20
 
 export async function POST(req: NextRequest) {
   // ── 1. Read multipart form data ───────────────────────────────────────────
@@ -139,12 +138,10 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 6. Return first PREVIEW_LIMIT rows (no DB write) ─────────────────────
-  const preview = rows.slice(0, PREVIEW_LIMIT)
-
   return NextResponse.json({
     success: true,
     totalParsed: rows.length,
-    preview,
+    preview: rows,
     piWarnings,
   })
 }

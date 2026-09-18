@@ -39,14 +39,18 @@ export async function POST(req: NextRequest) {
   let materialsUpdated = 0
   let transactionsCreated = 0
 
-  // ── Process each row in a transaction ─────────────────────────────────────
-  for (const row of rows) {
+  // ── Process the complete report atomically ────────────────────────────────
+  // A partial report must never leave transactions and currentStock out of
+  // sync. Existing materials are read before the transaction only to build a
+  // fast lookup; all writes use the transaction client below.
+  await prisma.$transaction(async (tx) => {
+   for (const row of rows) {
     const nameKey = row.materialName.toUpperCase().trim()
 
     // Upsert material if not found
     let materialId = materialMap.get(nameKey)
     if (!materialId) {
-      const created = await prisma.material.create({
+      const created = await tx.material.create({
         data: {
           name: row.materialName.trim(),
           currentStock: row.lastStock,
@@ -73,18 +77,19 @@ export async function POST(req: NextRequest) {
     if (row.outReject > 0)  txRecords.push({ materialId, txType: 'out_reject', quantityKg: row.outReject,  txDate: txDateObj })
 
     if (txRecords.length > 0) {
-      await prisma.materialTransaction.createMany({ data: txRecords })
+      await tx.materialTransaction.createMany({ data: txRecords })
       transactionsCreated += txRecords.length
     }
 
     // Update currentStock to lastStock from file (source of truth)
-    await prisma.material.update({
+    await tx.material.update({
       where: { id: materialId },
       data: { currentStock: row.lastStock },
     })
 
     materialsUpdated++
-  }
+   }
+  }, { timeout: 30_000 })
 
   return NextResponse.json({
     success: true,

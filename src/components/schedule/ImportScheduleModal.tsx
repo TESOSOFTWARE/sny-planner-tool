@@ -20,6 +20,7 @@ interface AssignmentRef {
   piNumber: string
   startDate: string
   endDate: string
+  productionMeters?: number
 }
 
 interface AssignmentToCreate {
@@ -35,6 +36,7 @@ interface MachineSpecEntry {
 }
 
 interface PreviewResponse {
+  assignmentSnapshot: { id: string; orderId: string; updatedAt: string }[]
   success: boolean
   error?: string
   availableSheets: string[]
@@ -44,6 +46,7 @@ interface PreviewResponse {
   daysInMonth: number
   toDelete: AssignmentRef[]
   borderlineAssignment: AssignmentRef | null
+  borderlineAssignments?: AssignmentRef[]
   toCreateDraftOrders: string[]
   toCreateAssignments: AssignmentToCreate[]
   machineSpecs: MachineSpecEntry[]
@@ -56,6 +59,7 @@ interface PreviewResponse {
     draftsToCreate: number
     ambiguousCount: number
     invalidCount: number
+    protectedCount?: number
   }
 }
 
@@ -119,14 +123,17 @@ export default function ImportScheduleModal({ isOpen, onClose, onImported }: Pro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           toDelete: preview.toDelete,
+          assignmentSnapshot: preview.assignmentSnapshot,
           deleteBorderline,
           borderlineAssignment: preview.borderlineAssignment,
+          borderlineAssignments: preview.borderlineAssignments,
           toCreateDraftOrders: preview.toCreateDraftOrders,
           toCreateAssignments: preview.toCreateAssignments,
           machineSpecs: preview.machineSpecs,
           year: preview.year,
           month: preview.month,
           summary: preview.summary,
+          ambiguousPiNumbers: preview.skippedAmbiguous,
         }),
       })
 
@@ -260,6 +267,14 @@ export default function ImportScheduleModal({ isOpen, onClose, onImported }: Pro
                     {preview.summary.ambiguousCount} PI
                   </span>
                 </div>
+                {(preview.summary.protectedCount ?? 0) > 0 && (
+                  <div className="p-3 rounded-lg bg-error-container border border-error/30">
+                    <span className="text-xs text-error block mb-1">Giữ nguyên lịch có sản lượng; bỏ qua lịch mới trùng khoảng máy</span>
+                    <span className="text-lg font-semibold text-error">
+                      {preview.summary.protectedCount} lịch
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* 1. Sẽ xóa */}
@@ -273,6 +288,7 @@ export default function ImportScheduleModal({ isOpen, onClose, onImported }: Pro
                     {preview.toDelete.map((item) => (
                       <div key={item.id} className="py-0.5 text-secondary">
                         [{item.machineId}] {item.piNumber} ({formatDate(item.startDate)} → {formatDate(item.endDate)})
+                        {item.productionMeters && item.productionMeters > 0 ? ` · ${item.productionMeters}m đã dệt` : ''}
                       </div>
                     ))}
                   </div>
@@ -282,7 +298,7 @@ export default function ImportScheduleModal({ isOpen, onClose, onImported }: Pro
               </div>
 
               {/* 2. Cảnh báo Borderline Assignment (M-023) */}
-              {preview.borderlineAssignment && (
+              {(preview.borderlineAssignments ?? (preview.borderlineAssignment ? [preview.borderlineAssignment] : [])).length > 0 && (
                 <div className="p-3 rounded-lg bg-[#fffbeb] border border-[#f59e0b]/40 space-y-2">
                   <div className="flex items-start gap-2">
                     <span className="material-symbols-outlined text-[#d97706] text-[20px] shrink-0">
@@ -294,10 +310,13 @@ export default function ImportScheduleModal({ isOpen, onClose, onImported }: Pro
                       </h5>
                       <p className="text-xs text-[#b45309] mt-0.5">
                         Phát hiện lịch máy{' '}
-                        <strong>{preview.borderlineAssignment.machineId}</strong> (PI:{' '}
-                        <strong>{preview.borderlineAssignment.piNumber}</strong>) kéo dài từ{' '}
-                        {formatDate(preview.borderlineAssignment.startDate)} đến{' '}
-                        {formatDate(preview.borderlineAssignment.endDate)}.
+                        {(preview.borderlineAssignments ?? (preview.borderlineAssignment ? [preview.borderlineAssignment] : [])).map((assignment) => (
+                          <span key={assignment.id} className="block">
+                            <strong>{assignment.machineId}</strong> (PI: <strong>{assignment.piNumber}</strong>) kéo dài từ{' '}
+                            {formatDate(assignment.startDate)} đến {formatDate(assignment.endDate)}
+                            {assignment.productionMeters && assignment.productionMeters > 0 ? ` · ${assignment.productionMeters}m đã dệt` : ''}.
+                          </span>
+                        ))}
                       </p>
                     </div>
                   </div>
@@ -306,6 +325,7 @@ export default function ImportScheduleModal({ isOpen, onClose, onImported }: Pro
                       type="checkbox"
                       checked={deleteBorderline}
                       onChange={(e) => setDeleteBorderline(e.target.checked)}
+                      disabled={(preview.borderlineAssignments ?? (preview.borderlineAssignment ? [preview.borderlineAssignment] : [])).some(a => (a.productionMeters ?? 0) > 0)}
                       className="rounded border-[#d97706] text-[#d97706] focus:ring-[#d97706]"
                     />
                     Xóa luôn lịch vắt ngang này để đè lịch mới từ tháng {preview.month}

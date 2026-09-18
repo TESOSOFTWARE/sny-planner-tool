@@ -83,9 +83,20 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
   // ── Locate columns by header name ─────────────────────────────────────────
   const piIdColIdx = findColIdx(
     headers,
-    (h) => h.toUpperCase().includes('PI') && h.toUpperCase().includes('NUMBER'),
+    (h) => {
+      const value = h.toUpperCase()
+      return value.includes('PI NUMBER') || value.includes('PI ID')
+    },
   )
-  const piNumberColIdx = piIdColIdx >= 0 ? piIdColIdx + 1 : -1
+  // ORDER LIST OFFICIAL labels the actual PI column itself "PI NUMBER".
+  // Older templates may use "PI ID" as a label for a display/helper column
+  // followed by the real PI value, so only those legacy headers advance one
+  // column.  Blindly adding one turns the sequence column into the PI number.
+  const piHeader = piIdColIdx >= 0 ? String(headers[piIdColIdx]).toUpperCase() : ''
+  const exactPiColIdx = findColIdx(headers, h => h.trim().toUpperCase() === 'PI NUMBER')
+  const piNumberColIdx = exactPiColIdx >= 0 ? exactPiColIdx : piIdColIdx >= 0
+    ? (piHeader.includes('PI ID') && !piHeader.includes('PI NUMBER') ? piIdColIdx + 1 : piIdColIdx)
+    : -1
   const subLineColIdx = 2
 
   const customerColIdx = findColIdx(headers, (h) => h.toUpperCase() === 'CUSTOMER')
