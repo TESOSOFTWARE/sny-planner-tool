@@ -83,8 +83,8 @@ export default function SchedulePage() {
     }
   }
 
-  const getAssignment = (machineId: string, date: Date) => {
-    return assignments.find(a => {
+  const getAssignments = (machineId: string, date: Date) => {
+    return assignments.filter(a => {
       if (a.machineId !== machineId) return false
       const start = startOfDay(new Date(a.startDate))
       const end = startOfDay(new Date(a.endDate))
@@ -92,6 +92,8 @@ export default function SchedulePage() {
       return d >= start && d <= end
     })
   }
+
+  const getAssignment = (machineId: string, date: Date) => getAssignments(machineId, date)[0]
 
   return (
     <div className="px-container-margin py-xl">
@@ -174,7 +176,8 @@ export default function SchedulePage() {
                 {days.map((day) => {
                   const date = new Date(year, month, day)
                   const weekend = isWeekend(year, month, day)
-                  const assignment = getAssignment(machine, date)
+                  const cellAssignments = getAssignments(machine, date)
+                  const assignment = cellAssignments[0]
                   
                   if (assignment) {
                     const isStart = isSameDay(startOfDay(new Date(assignment.startDate)), date)
@@ -182,12 +185,13 @@ export default function SchedulePage() {
                     const showLabel = isStart || day === 1
                     const isPlaceholder = assignment.isPlaceholder || assignment.order?.isDraft
                     const colorStyle = getPiColorStyle(assignment.order?.piNumber)
+                    const cellTitle = cellAssignments.map(a => a.order?.piNumber ?? '—').join(', ')
 
                     return (
                       <td key={day} className={`border-r-[0.5px] border-outline-variant/40 p-0 last:border-r-0 ${weekend ? 'bg-surface-container/60' : ''}`}>
                         <div 
                           onClick={() => handleCellClick(machine, date)}
-                          title={`${assignment.order.piNumber}${isPlaceholder ? ' [Giữ chỗ tạm - Đơn nháp]' : ''}`}
+                          title={`${cellTitle}${cellAssignments.length > 1 ? ` (${cellAssignments.length} lịch chồng nhau)` : ''}${isPlaceholder ? ' [Giữ chỗ tạm - Đơn nháp]' : ''}`}
                           style={{
                             backgroundColor: colorStyle.bgHex,
                             color: colorStyle.textHex,
@@ -206,6 +210,7 @@ export default function SchedulePage() {
                             <span className="text-[10px] px-1.5 truncate leading-none pt-0.5 flex items-center gap-0.5">
                               {isPlaceholder && <span className="material-symbols-outlined text-[11px] leading-none shrink-0" style={{ color: colorStyle.textHex }}>push_pin</span>}
                               <span>{assignment.order.piNumber}</span>
+                              {cellAssignments.length > 1 && <span className="text-[9px] font-bold px-1 rounded bg-white/60">+{cellAssignments.length - 1}</span>}
                               {isPlaceholder && <span className="text-[9px] font-bold px-1 py-0.2 rounded border border-amber-500/60 bg-amber-200/90 text-amber-950 shrink-0">Nháp</span>}
                             </span>
                           ) : null}

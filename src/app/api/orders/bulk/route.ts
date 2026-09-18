@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/db'
+import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
 
 // ── Server-side validation schema for pasted rows ─────────────────────────────
 const pastedRowSchema = z.object({
@@ -19,8 +20,13 @@ const pastedRowSchema = z.object({
   gsm:          z.number().int().gt(0),
   color:        z.string().min(1).max(50).transform((v) => v.trim().toUpperCase()),
   qty:          z.number().int().gt(0).nullable(),
+  orderType:    z.enum(['meters', 'rolls', 'pieces']).default('meters'),
+  rollLength:   z.number().positive().nullable().optional(),
+  pieceLength:  z.number().positive().nullable().optional(),
+  productionGsm:z.number().int().gt(0).nullable().optional(),
   uvPct:        z.number().min(0).max(100).nullable(),
   frFlag:       z.boolean(),
+  frPct:        z.number().min(0).max(100).nullable().optional(),
   description:  z.string().max(200).nullable().transform((v) => v?.trim() ?? null),
   remark:       z.string().max(200).nullable().transform((v) => v?.trim() ?? null),
 })
@@ -91,6 +97,16 @@ export async function POST(req: NextRequest) {
   const createData = rows.map((row) => {
     const custName = row.customer.trim()
     const customerId = customerMap.get(custName.toUpperCase()) ?? null
+    const calc = calculateOrderWeight({
+      orderType: row.orderType,
+      widthM: row.widthM,
+      lengthM: row.lengthM,
+      gsm: row.gsm,
+      productionGsm: row.productionGsm ?? null,
+      qty: row.qty,
+      rollLength: row.rollLength ?? null,
+      pieceLength: row.pieceLength ?? null,
+    })
 
     return {
       piNumber:     row.piNumber,
@@ -99,14 +115,22 @@ export async function POST(req: NextRequest) {
       ...(customerId && { customerId }),
       orderDate:    new Date(row.orderDate),
       widthM:       row.widthM,
-      lengthM:      row.lengthM,
+      lengthM:      calc.totalMeters ?? row.lengthM,
       gsm:          row.gsm,
+      ...(row.productionGsm != null && { productionGsm: row.productionGsm }),
       color:        row.color,
+      orderType:    row.orderType,
       ...(row.qty     != null && { qty: row.qty }),
+      ...(row.rollLength != null && { rollLength: row.rollLength }),
+      ...(row.pieceLength != null && { pieceLength: row.pieceLength }),
       ...(row.uvPct   != null && { uvPct: row.uvPct }),
       frFlag:       row.frFlag,
+      ...(row.frPct != null && { frPct: row.frPct }),
       ...(row.description != null && { description: row.description }),
       ...(row.remark      != null && { remark: row.remark }),
+      ...(calc.qtySqm != null && { qtySqm: calc.qtySqm }),
+      ...(calc.totalWeightKgs != null && { totalWeightKgs: calc.totalWeightKgs }),
+      ...(calc.requiredYarnKg != null && { requiredYarnKg: calc.requiredYarnKg }),
       dataSource: 'import',
     }
   })

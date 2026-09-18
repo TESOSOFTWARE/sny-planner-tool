@@ -23,14 +23,19 @@ export async function POST(req: NextRequest) {
     const dbOrders = await prisma.productionOrder.findMany({
       select: { id: true, piNumber: true },
     })
-    const piMap = new Map<string, string>()
+    // A PI may contain several sub-lines.  Only auto-link a rolling row when
+    // the PI resolves to exactly one order; never silently attach it to the
+    // last row returned by the database.
+    const piMap = new Map<string, string | null>()
     for (const o of dbOrders) {
-      piMap.set(o.piNumber.trim().toUpperCase(), o.id)
+      const key = o.piNumber.trim().toUpperCase()
+      piMap.set(key, piMap.has(key) ? null : o.id)
     }
 
+    let ambiguousOrderCount = 0
     const rollingData = parseResult.metrics.map((m) => {
       const matchedOrderId = m.orderRef ? (piMap.get(m.orderRef.trim().toUpperCase()) ?? null) : null
-
+      if (m.orderRef && piMap.has(m.orderRef.trim().toUpperCase()) && matchedOrderId == null) ambiguousOrderCount++
       return {
         date: new Date(m.date),
         orderRef: m.orderRef,
@@ -59,6 +64,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       recordsInserted: insertedCount,
+      ambiguousOrderCount,
       fileName: file.name,
     })
   } catch (error: any) {

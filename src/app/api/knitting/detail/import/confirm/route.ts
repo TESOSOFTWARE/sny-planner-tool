@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
+import { preserveOrderLinks, OutputLinkConflict } from '@/lib/excel/preserveOrderLinks'
 import { z } from 'zod'
 
 const knittingDetailRowSchema = z.object({
@@ -49,6 +50,7 @@ export async function POST(req: NextRequest) {
 
   const { rows } = parsed.data
 
+
   const groupKeys = new Set<string>()
   for (const row of rows) {
     groupKeys.add(`${row.machineId}::${row.reportDate}`)
@@ -57,6 +59,16 @@ export async function POST(req: NextRequest) {
   let insertedCount = 0
   try {
     await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
+      await tx.$executeRawUnsafe('LOCK TABLE "knitting_daily_detail" IN SHARE ROW EXCLUSIVE MODE')
+      const existingRows = await tx.knittingDailyDetail.findMany({
+        where: { OR: Array.from(groupKeys).map(key => {
+          const [machineId, date] = key.split('::')
+          return { machineId, reportDate: new Date(date) }
+        }) },
+      })
+      const orderRows = await tx.productionOrder.findMany({ select: { id: true, piNumber: true } })
+      const linkedRows = preserveOrderLinks(rows, existingRows, orderRows)
       // Rule B: Delete existing records in knitting_daily_detail for [machineId, reportDate] pairs in the file
       for (const key of Array.from(groupKeys)) {
         const [machineId, reportDateStr] = key.split('::')
@@ -69,7 +81,7 @@ export async function POST(req: NextRequest) {
       }
 
       // Insert new rows into knitting_daily_detail
-      const data = rows.map(row => ({
+      const data = linkedRows.map(row => ({
         machineId:      row.machineId,
         reportDate:     new Date(row.reportDate),
         shift:          row.shift,
@@ -89,6 +101,7 @@ export async function POST(req: NextRequest) {
         meterPerDay:    row.meterPerDay !== null ? row.meterPerDay : undefined,
         operatingGrade: row.operatingGrade,
         totalPct:       row.totalPct !== null ? row.totalPct : undefined,
+        orderId: row.orderId,
         dataSource:     'import' as const,
       }))
 
@@ -96,6 +109,9 @@ export async function POST(req: NextRequest) {
       insertedCount = data.length
     })
   } catch (err) {
+    if (err instanceof OutputLinkConflict) {
+      return NextResponse.json({ success: false, code: 'OUTPUT_LINK_CONFLICT', error: err.message }, { status: 409 })
+    }
     console.error('[POST /api/knitting/detail/import/confirm]', err)
     return NextResponse.json(
       { success: false, error: 'Lỗi lưu dữ liệu Knitting Detail vào DB.' },

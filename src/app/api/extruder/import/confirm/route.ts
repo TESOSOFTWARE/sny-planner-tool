@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
+import { preserveOrderLinks, OutputLinkConflict } from '@/lib/excel/preserveOrderLinks'
 import { z } from 'zod'
 
 // ── Zod schema cho từng row ──────────────────────────────────────────────────
@@ -41,6 +42,7 @@ export async function POST(req: NextRequest) {
 
   const { rows } = parsed.data
 
+
   // ── 2. Group rows by [machineId, reportDate] for idempotent delete ─────────
   const groupKeys = new Set<string>()
   for (const row of rows) {
@@ -51,6 +53,16 @@ export async function POST(req: NextRequest) {
   let insertedCount = 0
   try {
     await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
+      await tx.$executeRawUnsafe('LOCK TABLE "extruder_daily_output" IN SHARE ROW EXCLUSIVE MODE')
+      const existingRows = await tx.extruderDailyOutput.findMany({
+        where: { OR: Array.from(groupKeys).map(key => {
+          const [machineId, date] = key.split('::')
+          return { machineId, reportDate: new Date(date) }
+        }) },
+      })
+      const orderRows = await tx.productionOrder.findMany({ select: { id: true, piNumber: true } })
+      const linkedRows = preserveOrderLinks(rows, existingRows, orderRows)
       // Delete existing records cho các [machineId, reportDate] trong file
       for (const key of Array.from(groupKeys)) {
         const [machineId, reportDateStr] = key.split('::')
@@ -63,7 +75,7 @@ export async function POST(req: NextRequest) {
       }
 
       // Insert tất cả rows mới
-      const data = rows.map(row => ({
+      const data = linkedRows.map(row => ({
         machineId:  row.machineId,
         reportDate: new Date(row.reportDate),
         shift:      row.shift,
@@ -72,6 +84,7 @@ export async function POST(req: NextRequest) {
         weightKgs:  row.weightKgs,
         beamNote:   row.beamNote,
         orderRef:   row.orderRef,
+        orderId: row.orderId,
         dataSource: 'import' as const,
       }))
 
@@ -79,6 +92,9 @@ export async function POST(req: NextRequest) {
       insertedCount = data.length
     })
   } catch (err) {
+    if (err instanceof OutputLinkConflict) {
+      return NextResponse.json({ success: false, code: 'OUTPUT_LINK_CONFLICT', error: err.message }, { status: 409 })
+    }
     console.error('[POST /api/extruder/import/confirm]', err)
     return NextResponse.json(
       { success: false, error: 'Lỗi lưu dữ liệu vào DB.' },

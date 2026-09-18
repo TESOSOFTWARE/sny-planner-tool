@@ -33,11 +33,12 @@ export async function POST(req: NextRequest) {
   const data = parsed.data
 
   // ── 3. Calculate weight (Case A formula) ──────────────────────────────────
-  const { qtySqm, totalWeightKgs } = calculateOrderWeight({
+  const { qtySqm, totalWeightKgs, requiredYarnKg } = calculateOrderWeight({
     orderType: data.orderType ?? 'meters',
     widthM: data.widthM,
     lengthM: data.lengthM,
     gsm: data.gsm,
+    productionGsm: data.productionGsm ?? null,
     qty: data.qty ?? null,
     rollLength: data.rollLength ?? null,
     pieceLength: data.pieceLength ?? null,
@@ -50,11 +51,13 @@ export async function POST(req: NextRequest) {
         piNumber: data.piNumber,
         subLineIndex: data.subLineIndex,
         customer: data.customer,
+        ...(data.customerId != null && { customerId: data.customerId }),
         // Convert YYYY-MM-DD string → JS Date for Prisma DateTime field
         orderDate: new Date(data.orderDate),
         widthM: data.widthM,
         lengthM: data.lengthM,
         gsm: data.gsm,
+        ...(data.productionGsm != null && { productionGsm: data.productionGsm }),
         color: data.color,
         // Optional fields — only included when present
         ...(data.qty != null && { qty: data.qty }),
@@ -62,6 +65,10 @@ export async function POST(req: NextRequest) {
         frFlag: data.frFlag ?? false,
         ...(data.description && { description: data.description }),
         ...(data.remark && { remark: data.remark }),
+        ...(data.lineNote != null && { lineNote: data.lineNote }),
+        requiresPacking: data.requiresPacking ?? false,
+        ...(data.deliveryDate && { deliveryDate: new Date(data.deliveryDate) }),
+        ...(data.containerSize != null && { containerSize: data.containerSize }),
         // Technical specs
         ...(data.meshType   != null && { meshType:    data.meshType }),
         ...(data.needleCount != null && { needleCount: data.needleCount }),
@@ -75,9 +82,12 @@ export async function POST(req: NextRequest) {
         // Eyelet
         hasEyelet: data.hasEyelet ?? false,
         ...(data.eyeletColor != null && { eyeletColor: data.eyeletColor }),
+        ...(data.eyeletLines != null && { eyeletLines: data.eyeletLines }),
+        ...(data.eyeletSpec != null && { eyeletSpec: data.eyeletSpec }),
         // Calculated weight
         qtySqm,
         totalWeightKgs,
+        requiredYarnKg,
       },
     })
 

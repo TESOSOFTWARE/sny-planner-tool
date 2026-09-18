@@ -24,9 +24,10 @@ export async function POST(req: NextRequest) {
     const dbOrders = await prisma.productionOrder.findMany({
       select: { id: true, piNumber: true },
     })
-    const piMap = new Map<string, string>()
+    const piMap = new Map<string, string | null>()
     for (const o of dbOrders) {
-      piMap.set(o.piNumber.trim().toUpperCase(), o.id)
+      const key = o.piNumber.trim().toUpperCase()
+      piMap.set(key, piMap.has(key) ? null : o.id)
     }
 
     let matchedOrderCount = 0
