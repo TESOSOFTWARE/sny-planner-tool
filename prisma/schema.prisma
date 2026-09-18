@@ -1,0 +1,411 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Neon.tech requires connection pooling via the pooler URL for serverless
+  // directUrl = env("DIRECT_URL") // uncomment if using Neon pooler + migrations
+}
+
+model ProductionOrder {
+  id           String   @id @default(cuid())
+
+  // PI = Proforma Invoice — the primary order identifier at SNY
+  piNumber     String
+  // Sub-line index within a PI (0-based). A PI can have multiple fabric specs.
+  subLineIndex Int      @default(0) // 0 cho đơn 1 dòng, 0..N cho đơn nhiều dòng
+  customer     String   // Tên khách hàng (vẫn giữ lại text tự do cho backward compat)
+  customerId   String?  // NEW: optional link tới Customer table
+  customerRef  Customer? @relation(fields: [customerId], references: [id])
+  
+  // Order info
+  orderDate    DateTime
+
+  // Fabric specs (optional for draft orders, required for approved orders)
+  widthM        Float?   // roll width in metres (e.g. 4.0)
+  lengthM       Float?   // order length in metres
+  gsm           Int?     // grams per square metre (e.g. 165)
+  productionGsm Int?     // GSM sản xuất thực tế (Sprint I2) — optional, dùng tính requiredYarnKg
+  color         String?  // e.g. "BLACK", "WHITE"
+  mbCode       String?  // Mã Masterbatch màu — e.g. "MYD4501A", "7079", "LS309315"
+
+  // Draft Order (Sprint F1) — true cho đơn lưu tạm thiếu thông tin
+  isDraft      Boolean  @default(false)
+
+  // Optional order details (added S2)
+  qty             Int?                  // quantity in rolls
+  uvPct           Decimal?  @db.Decimal(5, 2) // UV treatment percentage 0-100
+  frFlag          Boolean   @default(false)   // flame-retardant treatment (legacy UI, kept for compat)
+  frPct           Decimal?  @db.Decimal(5, 2) // % FR (vd: 6.5, 9.0)
+  description     String?               // free-text order description
+  remark          String?               // free-text internal remark
+  lineNote        String?               // per-line: ghi chú cho dòng hàng này
+  requiresPacking Boolean   @default(false)   // checkbox đóng gói
+  deliveryDate    DateTime?             // shared: ngày giao hàng
+  containerSize   String?               // shared: "40HQ x 1", "20FT x 1"
+
+  // Technical specs (added M3)
+  meshType     String?               // Thể loại lưới
+  needleCount  Int?                  // Số kim
+  beamCount    Int?                  // Số dàn
+
+  // Kiểu đơn hàng — xác định cách tính tổng mét
+  orderType   String   @default("meters")
+  // "rolls"  = tính theo cuộn (qty × rollLength)
+  // "meters" = tính theo tổng mét (lengthM)
+  // "pieces" = gia công tấm (qty × pieceLength)
+
+  rollLength  Decimal? @db.Decimal(10, 2)
+  // Số mét/cuộn — chỉ dùng khi orderType = "rolls"
+
+  pieceLength Decimal? @db.Decimal(10, 2)
+  // Chiều dài tấm (m) — chỉ dùng khi orderType = "pieces"
+
+  // Eyelet — phụ kiện khoen trên sản phẩm lưới
+  hasEyelet    Boolean  @default(false)  // Có eyelet không
+  eyeletColor  String?                   // Màu eyelet
+  eyeletLines  Int?     // số lines eyelet: 2, 3, 4, 6... (per-line spec, bổ sung cho hasEyelet)
+  eyeletSpec   String?  // mô tả: "5cm interval", "4-5cm middle", "single band both edges"
+
+  // Calculated weight fields (Case A formula)
+  // qtySqm = widthM × totalMeters
+  // totalWeightKgs = qtySqm × gsm / 1000
+  // requiredYarnKg = totalWeightKgs × 1.05 (loss 5% cộng thêm vào thành phẩm)
+  qtySqm         Decimal? @db.Decimal(12, 2)  // tổng diện tích m²
+  totalWeightKgs Decimal? @db.Decimal(12, 2)  // tổng trọng lượng kg
+  requiredYarnKg Decimal? @db.Decimal(12, 2)  // tổng trọng lượng sợi cần dùng (kg)
+
+  // Workflow status
+  status       String   @default("PENDING") // PENDING | IN_PRODUCTION | DONE | CANCELLED
+
+  // dataSource tracking for AI training data quality (Phase 2):
+  // "manual" = KH nhập tay thật → dùng cho AI training
+  // "import" = Excel/bulk paste → dùng cho AI training
+  // "seed"   = demo data do TESO tạo → KHÔNG dùng cho AI training
+  dataSource   String   @default("manual")
+
+  // Relations — một đơn hàng có thể chạy trên nhiều máy song song
+  assignments  MachineAssignment[]
+  extruderOutputs ExtruderDailyOutput[]
+  warpingOutputs  WarpingDailyOutput[]
+  knittingDetails KnittingDailyDetail[]
+  rollingMetrics  RollingDailyMetric[]
+
+  // Timestamps
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Composite unique constraint: one PI can have many sub-lines but each (PI, subLine) is unique
+  @@unique([piNumber, subLineIndex])
+  @@index([piNumber])
+  @@index([orderDate])
+  @@index([isDraft])
+  @@map("production_orders")
+}
+
+model Customer {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  address     String?
+  tel         String?
+  fax         String?
+  contact     String?
+  country     String?
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orders      ProductionOrder[]
+  colorPresets ColorPreset[]
+}
+
+enum MaterialGroup {
+  HDPE
+  MB
+  KOREA
+}
+
+model Material {
+  id           String   @id @default(cuid())
+  name         String   // e.g. "MF", "UV 4%", "Tái chế", "FR", "IR"
+  group        MaterialGroup @default(KOREA)
+  color        String?  // Dùng chủ yếu cho nhóm MB
+  brand        String?  // Hãng sản xuất (cho nhóm MB)
+  currentStock Decimal  @db.Decimal(10, 2)  // kg hiện có
+  minThreshold Decimal? @db.Decimal(10, 2)  // ngưỡng tối thiểu cảnh báo — null = chưa đặt ngưỡng
+  unit         String   @default("kg")
+  note         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  transactions MaterialTransaction[]
+
+  @@map("materials")
+}
+
+model MachineAssignment {
+  id        String   @id @default(cuid())
+  machineId String   // e.g. "M-001" to "M-040"
+  
+  orderId   String
+  order     ProductionOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  // Số mét phân công cho máy này (optional, dùng khi chia đơn)
+  allocatedMeters Decimal? @db.Decimal(10, 2)
+
+  // Sản lượng dự kiến (m/ngày) — planner nhập tay khi assign
+  // Dùng cho công thức ngày hoàn thành ở Phase 2 (không tính trong sprint này)
+  estimatedDailyOutput Decimal? @db.Decimal(10, 2)
+
+  // true = Giữ chỗ tạm (đơn nháp), false = Lịch chính thức
+  isPlaceholder        Boolean  @default(false)
+  
+  startDate DateTime
+  endDate   DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([machineId, startDate, orderId])
+  @@map("machine_assignments")
+}
+
+model MaterialTransaction {
+  id         String   @id @default(cuid())
+  materialId String
+  material   Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  // txType valid values:
+  // "in"         = nhập kho
+  // "out_using"  = xuất sử dụng sản xuất
+  // "out_broken" = xuất hỏng (HDPE BROKEN)
+  // "out_tape"   = xuất làm băng keo (OUT TAPE)
+  // "out_reject" = xuất reject
+  txType     String
+
+  quantityKg Decimal  @db.Decimal(10, 2)   // số kg
+  txDate     DateTime                       // ngày giao dịch
+  mbPct      Decimal? @db.Decimal(5, 2)    // % MB trên 1 tấn nhựa (chỉ dùng cho loại MB)
+  orderId    String?                        // link đơn hàng nếu có (optional)
+  note       String?
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([materialId])
+  @@index([txDate])
+  @@map("material_transactions")
+}
+
+model KnittingDailyOutput {
+  id               String   @id @default(cuid())
+  machineId        String   // "M-001" to "M-040"
+  reportDate       DateTime // exact date of the report (time = 00:00:00 UTC)
+
+  // dailyMeters = delta from previous day's cumulative — NOT the cumulative itself.
+  // If no previous-day record exists (first import of the month), dailyMeters = cumulativeMeters.
+  // If delta is negative (idle / data anomaly) → stored as 0.
+  dailyMeters      Decimal  @db.Decimal(10, 2)
+
+  // Raw cumulative total(m) from file — kept for audit and future re-calculation.
+  cumulativeMeters Decimal  @db.Decimal(10, 2)
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([machineId, reportDate])
+  @@index([machineId])
+  @@index([reportDate])
+  @@map("knitting_daily_output")
+}
+
+model ExtruderDailyOutput {
+  id         String   @id @default(cuid())
+  machineId  String   // "EXT-01", "EXT-02"... (KHÔNG trùng M-001..M-040 là máy dệt)
+  reportDate DateTime // UTC midnight — timezone-independent (giống Knitting)
+  shift      String   // "D" (ca ngày) hoặc "N" (ca đêm)
+  color      String   // vd "BLACK B045 UV 2%"
+  denier     Decimal? @db.Decimal(10, 2)
+  weightKgs  Decimal  @db.Decimal(10, 2)  // cột WEIGHT trong Excel (0 là hợp lệ)
+
+  // remark tách thành 2 field riêng biệt:
+  beamNote   String?  // vd "11 BEAM ( 158 SỢI)"
+  orderRef   String?  // vd "JPY26-274" — mã PI liên quan (KHÔNG validate FK)
+
+  orderId    String?  // Link chính xác tới ProductionOrder (nếu PI duy nhất 1 sub-line)
+  order      ProductionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  dataSource String   @default("import")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([machineId])
+  @@index([reportDate])
+  @@index([orderId])
+  @@map("extruder_daily_output")
+}
+
+model WarpingDailyOutput {
+  id                String   @id @default(cuid())
+  machineId         String   // "WARP-01".."WARP-06" (mắc/xe sợi, khác M-001..M-040 máy dệt)
+  reportDate        DateTime // UTC midnight — timezone-independent (giống Knitting & Extruder)
+  shift             String   // "D" (ca ngày) hoặc "N" (ca đêm)
+
+  // Số máy dệt liên quan (vd "40", "M-040") — text tự do, KHÔNG validate FK
+  weavingMachineRef String?
+
+  color             String   // tên màu (vd "BLACK", "WHITE", "AQUA BLUE")
+  denier            Decimal? @db.Decimal(10, 2)
+  strand            Decimal? @db.Decimal(10, 2) // số sợi (STRAND)
+
+  beamCount1        Decimal? @db.Decimal(10, 2) // Cột BEAM thứ 1 (trước M/EA)
+  mPerEa            Decimal? @db.Decimal(10, 2) // Cột M/EA (mét/ea)
+  weigValue         Decimal? @db.Decimal(10, 2) // Cột WEIG (trọng lượng đơn vị)
+  beamCount2        Decimal? @db.Decimal(10, 2) // Cột BEAM thứ 2 (trước QUANTITY)
+
+  quantity          Decimal? @db.Decimal(10, 2) // Cột QUANTITY
+  weightKgs         Decimal  @db.Decimal(10, 2) // Cột WEIGHT (sản lượng kg, 0 hợp lệ)
+
+  orderRef          String?  // Mã PI / đơn hàng (từ cột REMARK, vd "JPY26-274")
+
+  orderId           String?  // Link chính xác tới ProductionOrder (nếu PI duy nhất 1 sub-line)
+  order             ProductionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  dataSource        String   @default("import")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([machineId])
+  @@index([reportDate])
+  @@index([orderId])
+  @@map("warping_daily_output")
+}
+
+model KnittingDailyDetail {
+  id             String   @id @default(cuid())
+
+  // Dùng LUÔN format "M-001".."M-040" (khớp trực tiếp với 40 máy dệt trên Schedule)
+  machineId      String   // "M-001" to "M-040"
+
+  reportDate     DateTime // UTC midnight (timezone-independent)
+  shift          String   // "D" (ca ngày) hoặc "N" (ca đêm)
+
+  width          Decimal? @db.Decimal(10, 2)
+  color          String   // tên màu
+  weightSpec     Decimal? @db.Decimal(10, 2) // cột weight (gsm/spec)
+  lengthM        Decimal? @db.Decimal(10, 2) // cột length(m)
+  tapeRoll       Decimal? @db.Decimal(10, 2) // cột tape/roll
+  mValue         Decimal? @db.Decimal(10, 2) // cột m
+  avgPerRoll     Decimal? @db.Decimal(10, 2) // cột average/roll
+  quantity       Decimal? @db.Decimal(10, 2) // cột quantity
+  weightKgs      Decimal  @db.Decimal(10, 2) // cột weight(kg) — 0 hợp lệ
+
+  orderRef       String?  // Mã PI / đơn hàng (nếu Remark không bắt đầu bằng "*")
+  machineNote    String?  // Ghi chú vận hành máy (nếu Remark bắt đầu bằng "*")
+
+  orderId        String?  // Link chính xác tới ProductionOrder (nếu PI duy nhất 1 sub-line)
+  order          ProductionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  // Thông số năng suất & kích thước cấp máy/ngày (trích xuất từ hàng header máy)
+  machineSizeM   Decimal? @db.Decimal(10, 2) // SIZE OF MACHINE(M) (vd 6.56, 6.85, 4.6)
+  cmPerMin       Decimal? @db.Decimal(10, 2) // Qty of Netting Cm/per min (vd 96, 108, 126)
+  meterPerDay    Decimal? @db.Decimal(10, 2) // Qty of Netting Meter/per day (vd 1382.4, 1814.4)
+  operatingGrade String?                      // Operating grade (vd "A", "B")
+  totalPct       Decimal? @db.Decimal(5, 2)  // Total % (vd 98.5)
+
+  dataSource     String   @default("import")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([machineId])
+  @@index([reportDate])
+  @@index([orderId])
+  @@map("knitting_daily_detail")
+}
+
+// Sprint F3 — lưu thông số khổ máy (từ col A file lịch sản xuất)
+// Dùng cho Sprint D (tính sản lượng theo khổ) và hiển thị máy trên UI
+model MachineSpec {
+  machineId String   @id            // "M-001" to "M-040"
+  widthM    Float                   // khổ máy (m), e.g. 6.85
+  updatedAt DateTime @updatedAt
+  @@map("machine_specs")
+}
+
+// Sprint F3 — audit log cho mỗi lần import lịch tháng
+// backupData chứa snapshot toàn bộ MachineAssignment bị xóa — dùng để khôi phục nếu cần
+model ScheduleImportLog {
+  id         String   @id @default(cuid())
+  importedAt DateTime @default(now())
+  backupData Json     // array of { id, machineId, orderId, piNumber, startDate, endDate }
+  summary    Json     // { deleted, created, draftsCreated, ambiguousSkipped }
+  @@map("schedule_import_logs")
+}
+
+// Sprint F4 — Bảng màu tiêu chuẩn theo khách hàng (ColorPreset)
+model ColorPreset {
+  id          String   @id @default(cuid())
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  color       String
+  mbCode      String?
+  mbSupplier  String?
+  wale        Int?
+  cours       Int?
+  eyeletColor String?
+  eyeletLines Int?
+  note        String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([customerId, color, mbCode])
+  @@index([customerId])
+  @@map("color_presets")
+}
+
+// Sprint H1 — Rolling daily output metrics per order item (long-format, preserving exact 6 primary shift labels)
+model RollingDailyMetric {
+  id             String           @id @default(cuid())
+  date           DateTime
+  orderRef       String?
+  orderId        String?
+  order          ProductionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  color          String?
+  widthM         Float?
+  lengthM        Float?
+  weightKgsOrder Decimal?
+  metricLabel    String           // e.g. "QUANTITY SMALL", "WEIGHT NIGHT" — ONLY the 6 primary shift/size labels
+  metricValue    Decimal?
+  dataSource     String
+  createdAt      DateTime         @default(now())
+
+  @@map("rolling_daily_metrics")
+  @@index([date])
+  @@index([orderRef])
+  @@index([orderId])
+}
+
+// Sprint H1 — Packing daily factory outputs (1 row per calendar day, total factory output)
+model PackingDailyOutput {
+  id          String   @id @default(cuid())
+  date        DateTime @unique
+  qtyDay      Int?
+  totalMDay   Decimal?
+  weightDay   Decimal?
+  qtyNight    Int?
+  totalMNight Decimal?
+  weightNight Decimal?
+  dataSource  String
+  createdAt   DateTime @default(now())
+
+  @@map("packing_daily_outputs")
+  @@index([date])
+}
+
