@@ -13,12 +13,14 @@ type RouteContext = { params: { id: string } }
 const updateMaterialSchema = z.object({
   currentStock: z
     .number({ message: 'Tồn kho phải là số' })
+    .finite()
     .min(0, 'Tồn kho không được âm')
     .optional(),
 
   // null = remove threshold (“chưa đặt ngưỡng”); number = set threshold
   minThreshold: z
     .number({ message: 'Ngưỡng tối thiểu phải là số' })
+    .finite()
     .min(0, 'Ngưỡng tối thiểu không được âm')
     .nullable()
     .optional(),
@@ -72,10 +74,19 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
   if (data.brand !== undefined) updateData.brand = data.brand
 
   try {
-    const material = await prisma.material.update({
-      where: { id },
-      data: updateData,
-    })
+    const material = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
+      await tx.$executeRawUnsafe('LOCK TABLE "materials" IN SHARE ROW EXCLUSIVE MODE')
+      await tx.$executeRawUnsafe('LOCK TABLE "material_transactions" IN SHARE ROW EXCLUSIVE MODE')
+      await tx.$executeRawUnsafe('LOCK TABLE "material_report_snapshots" IN SHARE ROW EXCLUSIVE MODE')
+      const current = await tx.material.findUnique({ where: { id }, include: { reportSnapshots: { take: 1 } } })
+      if (!current) throw Object.assign(new Error('NOT_FOUND'), { code: 'P2025' })
+      if (data.group !== undefined && data.group !== current.group && current.reportSnapshots.length > 0) {
+        throw Object.assign(new Error('SNAPSHOT_COVERED'), { code: 'SNAPSHOT_COVERED' })
+      }
+      if (data.currentStock !== undefined && current.stockReportDate) updateData.stockReportDirty = true
+      return tx.material.update({ where: { id }, data: updateData })
+    }, { timeout: 30_000, maxWait: 5_000 })
 
     const serialized = {
       ...material,
@@ -92,11 +103,14 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       typeof err === 'object' &&
       'code' in err &&
       (err as { code: string }).code === 'P2025'
-    ) {
+      ) {
       return NextResponse.json(
         { success: false, error: 'Nguyên liệu không tồn tại.' },
         { status: 404 },
       )
+    }
+    if (err !== null && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'SNAPSHOT_COVERED') {
+      return NextResponse.json({ success: false, code: 'SNAPSHOT_COVERED', error: 'Không thể thay đổi nhóm hoặc tồn trực tiếp sau khi đã có snapshot.' }, { status: 409 })
     }
     console.error(`[PATCH /api/materials/${id}] Error:`, err)
     return NextResponse.json(
@@ -112,7 +126,16 @@ export async function DELETE(_req: NextRequest, context: RouteContext) {
   const { id } = context.params
 
   try {
-    await prisma.material.delete({ where: { id } })
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
+      await tx.$executeRawUnsafe('LOCK TABLE "materials" IN SHARE ROW EXCLUSIVE MODE')
+      await tx.$executeRawUnsafe('LOCK TABLE "material_transactions" IN SHARE ROW EXCLUSIVE MODE')
+      await tx.$executeRawUnsafe('LOCK TABLE "material_report_snapshots" IN SHARE ROW EXCLUSIVE MODE')
+      const current = await tx.material.findUnique({ where: { id }, include: { reportSnapshots: { take: 1 } } })
+      if (!current) throw Object.assign(new Error('NOT_FOUND'), { code: 'P2025' })
+      if (current.reportSnapshots.length > 0) throw Object.assign(new Error('SNAPSHOT_COVERED'), { code: 'SNAPSHOT_COVERED' })
+      await tx.material.delete({ where: { id } })
+    }, { timeout: 30_000, maxWait: 5_000 })
     return NextResponse.json({ success: true })
   } catch (err: unknown) {
     if (
@@ -120,11 +143,14 @@ export async function DELETE(_req: NextRequest, context: RouteContext) {
       typeof err === 'object' &&
       'code' in err &&
       (err as { code: string }).code === 'P2025'
-    ) {
+      ) {
       return NextResponse.json(
         { success: false, error: 'Nguyên liệu không tồn tại.' },
         { status: 404 },
       )
+    }
+    if (err !== null && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'SNAPSHOT_COVERED') {
+      return NextResponse.json({ success: false, code: 'SNAPSHOT_COVERED', error: 'Không thể xóa nguyên liệu đã có snapshot tồn kho.' }, { status: 409 })
     }
     console.error(`[DELETE /api/materials/${id}] Error:`, err)
     return NextResponse.json(

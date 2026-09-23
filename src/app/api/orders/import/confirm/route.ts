@@ -1,191 +1,200 @@
 // src/app/api/orders/import/confirm/route.ts
 // POST /api/orders/import/confirm
-// Accepts { rows: ParsedOrder[] } JSON body.
-// Validates each row strictly against mandatory order rules before saving to DB.
+// Classifies the complete parsed list again inside a transaction and writes
+// only genuinely new rows. Existing rows are never overwritten by import.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import type { Prisma } from '@prisma/client'
+import type { OrderImportDecision, OrderImportSummary, ParsedOrder } from '@/types'
 import { prisma } from '@/lib/db'
+import { classifyOrderImport } from '@/lib/excel/parseOrderList'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
+import { MAX_IMPORTED_ORDER_ROWS } from '@/lib/validations/order'
 
-// ── Server-side validation schema for imported rows ───────────────────────────
-// Strict validation matching MultiLineOrderForm & lineSchema
-
-const importedRowSchema = z
-  .object({
-    piNumber:     z.string().min(1, 'PI Number là bắt buộc').max(50).transform((v) => v.trim()),
-    subLineIndex: z.number().int().min(0),
-    customer:     z.string().min(1, 'Khách hàng là bắt buộc').max(100).transform((v) => v.trim()),
-    orderDate:    z.string().min(1, 'Ngày đặt là bắt buộc').regex(/^\d{4}-\d{2}-\d{2}$/),
-    widthM:       z.number().gt(0, 'Khổ m phải > 0').max(20),
-    lengthM:      z.number().gt(0).max(100_000).nullable().optional(),
-    gsm:          z.number().int().gt(0, 'GSM phải > 0').max(500),
-    productionGsm: z.number().int().gt(0).max(500).nullable().optional(),
-    color:        z.string().min(1, 'Màu là bắt buộc').max(50).transform((v) => v.trim().toUpperCase()),
-    orderType:    z.enum(['meters', 'rolls', 'pieces']).default('meters'),
-    qty:          z.number().int().gt(0).nullable().optional(),
-    rollLength:   z.number().gt(0).nullable().optional(),
-    pieceLength:  z.number().gt(0).nullable().optional(),
-    uvPct:        z.number().min(0).max(100).nullable().optional(),
-    frFlag:       z.boolean().default(false),
-    frPct:        z.number().min(0).max(100).nullable().optional(),
-    description:  z.string().max(200).nullable().optional().transform((v) => v?.trim() ?? null),
-    remark:       z.string().max(200).nullable().optional().transform((v) => v?.trim() ?? null),
-    mbCode:       z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
-  })
-  .refine(
-    (data) => {
-      if (data.frFlag && (data.frPct == null || data.frPct <= 0)) {
-        return false
-      }
-      return true
-    },
-    {
-      message: 'FR% phải > 0 khi chọn chống cháy (FR)',
-      path: ['frPct'],
-    }
-  )
-  .refine(
-    (data) => {
-      if (data.orderType === 'meters') {
-        return data.lengthM != null && data.lengthM > 0
-      }
-      if (data.orderType === 'rolls') {
-        return data.qty != null && data.qty > 0 && data.rollLength != null && data.rollLength > 0
-      }
-      if (data.orderType === 'pieces') {
-        return data.qty != null && data.qty > 0 && data.pieceLength != null && data.pieceLength > 0
-      }
-      return true
-    },
-    {
-      message: 'Thiếu thông số chiều dài (Tổng mét / Số cuộn & mét cuộn / Số tấm & chiều dài tấm)',
-      path: ['lengthM'],
-    }
-  )
-
-const confirmBodySchema = z.object({
-  rows: z.array(importedRowSchema).min(1).max(5000),
+const importEnvelopeSchema = z.object({
+  rows: z.array(z.unknown()).min(1).max(MAX_IMPORTED_ORDER_ROWS),
 })
 
+function asParsedOrder(value: unknown): ParsedOrder {
+  return (value && typeof value === 'object' ? value : {}) as ParsedOrder
+}
+
+function isRetryableTransactionError(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('code' in error)) return false
+  const code = String((error as { code?: unknown }).code)
+  return code === 'P2034' || code === 'P2028'
+}
+
+function normalizedName(value: string): string {
+  return value.trim().toUpperCase()
+}
+
+function buildCreateData(row: ParsedOrder, customerId: string | null): Prisma.ProductionOrderCreateManyInput {
+  const orderType = row.orderType ?? 'meters'
+  const calculation = calculateOrderWeight({
+    orderType,
+    widthM: row.widthM,
+    lengthM: row.lengthM,
+    gsm: row.gsm,
+    productionGsm: row.productionGsm ?? null,
+    qty: row.qty ?? null,
+    rollLength: row.rollLength ?? null,
+    pieceLength: row.pieceLength ?? null,
+  })
+
+  return {
+    piNumber: row.piNumber.trim(),
+    subLineIndex: row.subLineIndex,
+    customer: row.customer.trim(),
+    customerId,
+    orderDate: new Date(`${row.orderDate}T00:00:00.000Z`),
+    widthM: row.widthM,
+    lengthM: calculation.totalMeters,
+    gsm: row.gsm,
+    productionGsm: row.productionGsm ?? null,
+    color: row.color,
+    mbCode: row.mbCode ?? null,
+    isDraft: false,
+    qty: row.qty ?? null,
+    uvPct: row.uvPct ?? null,
+    frFlag: row.frFlag ?? false,
+    frPct: row.frPct ?? null,
+    description: row.description ?? null,
+    remark: row.remark ?? null,
+    lineNote: row.lineNote ?? null,
+    requiresPacking: row.requiresPacking ?? false,
+    deliveryDate: row.deliveryDate ? new Date(`${row.deliveryDate}T00:00:00.000Z`) : null,
+    containerSize: row.containerSize ?? null,
+    meshType: row.meshType ?? null,
+    needleCount: row.needleCount ?? null,
+    beamCount: row.beamCount ?? null,
+    orderType,
+    rollLength: row.rollLength ?? null,
+    pieceLength: row.pieceLength ?? null,
+    hasEyelet: row.hasEyelet ?? false,
+    eyeletColor: row.eyeletColor ?? null,
+    eyeletLines: row.eyeletLines ?? null,
+    eyeletSpec: row.eyeletSpec ?? null,
+    qtySqm: calculation.qtySqm,
+    totalWeightKgs: calculation.totalWeightKgs,
+    requiredYarnKg: calculation.requiredYarnKg,
+    dataSource: 'import',
+  }
+}
+
+function summaryFor(decisions: OrderImportDecision[]): OrderImportSummary {
+  return decisions.reduce<OrderImportSummary>((summary, decision) => {
+    summary.total += 1
+    if (decision.status === 'new') summary.created += 1
+    if (decision.status === 'identical') summary.identical += 1
+    if (decision.status === 'conflict') summary.conflicted += 1
+    if (decision.status === 'invalid') summary.invalid += 1
+    return summary
+  }, { total: 0, created: 0, identical: 0, conflicted: 0, invalid: 0 })
+}
+
+function decisionErrors(decisions: OrderImportDecision[]): string[] {
+  return Array.from(new Set(
+    decisions
+      .filter((decision) => decision.status !== 'new')
+      .flatMap((decision) => decision.reasons.map((reason) => `Dòng ${decision.rowIndex + 1}: ${reason}`)),
+  ))
+}
+
 export async function POST(req: NextRequest) {
-  // ── 1. Parse body ─────────────────────────────────────────────────────────
   let body: unknown
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json(
-      { success: false, error: 'Request body chứa dữ liệu JSON không hợp lệ.' },
-      { status: 400 },
-    )
+    return NextResponse.json({ success: false, error: 'Request body chứa dữ liệu JSON không hợp lệ.' }, { status: 400 })
   }
 
-  // ── 2. Validate ───────────────────────────────────────────────────────────
-  const parsed = confirmBodySchema.safeParse(body)
-  if (!parsed.success) {
-    const messages = parsed.error.issues
-      .map((e) => `${String(e.path.join('.'))}: ${e.message}`)
-      .join('; ')
-    return NextResponse.json(
-      { success: false, error: `Lỗi kiểm tra dữ liệu bắt buộc — ${messages}` },
-      { status: 422 },
-    )
+  const envelope = importEnvelopeSchema.safeParse(body)
+  if (!envelope.success) {
+    const messages = envelope.error.issues.map((issue) => `${String(issue.path.join('.'))}: ${issue.message}`).join('; ')
+    return NextResponse.json({ success: false, error: `Lỗi kiểm tra danh sách import — ${messages}` }, { status: 422 })
   }
 
-  const { rows } = parsed.data
+  const rows = envelope.data.rows.map(asParsedOrder)
+  const inputPis = Array.from(new Set(
+    rows
+      .map((row) => String(row.piNumber ?? '').trim())
+      .filter((pi) => pi && pi !== 'CHƯA_CÓ_PI'),
+  ))
 
-  // ── 3. Resolve customerId for all unique customer names ────────────────────
-  const uniqueCustomerNames = Array.from(
-    new Set(rows.map((r) => r.customer.trim()).filter(Boolean))
-  )
-
-  const existingCustomers = await prisma.customer.findMany({
-    where: {
-      name: { in: uniqueCustomerNames, mode: 'insensitive' },
-    },
-    select: { id: true, name: true },
-  })
-
-  const customerMap = new Map<string, string>() // UPPERCASE NAME -> customerId
-  for (const c of existingCustomers) {
-    customerMap.set(c.name.trim().toUpperCase(), c.id)
-  }
-
-  // Create new Customer record only if name truly does not exist in DB
-  for (const name of uniqueCustomerNames) {
-    const key = name.trim().toUpperCase()
-    if (!customerMap.has(key)) {
-      try {
-        const created = await prisma.customer.create({
-          data: { name: name.trim() },
-        })
-        customerMap.set(key, created.id)
-      } catch (err) {
-        console.warn(`[orders/import/confirm] Could not create Customer "${name}":`, err)
-      }
-    }
-  }
-
-  // ── 4. Build DB create-data array with calculated weight fields ───────────
-  const createData = rows.map((row) => {
-    const custName = row.customer.trim()
-    const customerId = customerMap.get(custName.toUpperCase()) ?? null
-
-    const calcResult = calculateOrderWeight({
-      orderType: row.orderType,
-      widthM: row.widthM,
-      lengthM: row.lengthM ?? 0,
-      gsm: row.gsm,
-      productionGsm: row.productionGsm ?? null,
-      qty: row.qty ?? null,
-      rollLength: row.rollLength ?? null,
-      pieceLength: row.pieceLength ?? null,
-    })
-
-    return {
-      piNumber:     row.piNumber,
-      subLineIndex: row.subLineIndex,
-      customer:     custName,
-      ...(customerId && { customerId }),
-      orderDate:    new Date(row.orderDate),
-      widthM:       row.widthM,
-      lengthM:      calcResult.totalMeters ?? row.lengthM ?? 0,
-      gsm:          row.gsm,
-      ...(row.productionGsm && { productionGsm: row.productionGsm }),
-      color:        row.color,
-      orderType:    row.orderType,
-      ...(row.qty        != null && { qty: row.qty }),
-      ...(row.rollLength != null && { rollLength: row.rollLength }),
-      ...(row.pieceLength!= null && { pieceLength: row.pieceLength }),
-      ...(row.uvPct      != null && { uvPct: row.uvPct }),
-      frFlag:       row.frFlag,
-      ...(row.frPct      != null && { frPct: row.frPct }),
-      ...(calcResult.qtySqm != null && { qtySqm: calcResult.qtySqm }),
-      ...(calcResult.totalWeightKgs != null && { totalWeightKgs: calcResult.totalWeightKgs }),
-      ...(calcResult.requiredYarnKg != null && { requiredYarnKg: calcResult.requiredYarnKg }),
-      ...(row.description != null && { description: row.description }),
-      ...(row.remark      != null && { remark: row.remark }),
-      ...(row.mbCode      != null && { mbCode: row.mbCode }),
-      dataSource: 'import',
-    }
-  })
-
-  // ── 5. createMany with skipDuplicates ────────────────────────────────────
   try {
-    const result = await prisma.productionOrder.createMany({
-      data: createData,
-      skipDuplicates: true,
-    })
+    const result = await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
+      // These locks serialize this importer with other order/customer writes
+      // during classification. The table names are static by design.
+      await tx.$executeRawUnsafe('LOCK TABLE "production_orders" IN SHARE ROW EXCLUSIVE MODE')
+      await tx.$executeRawUnsafe('LOCK TABLE "Customer" IN SHARE ROW EXCLUSIVE MODE')
 
-    const imported = result.count
-    const skipped = rows.length - imported
+      const existingOrders = inputPis.length > 0
+        ? await tx.productionOrder.findMany({ where: { piNumber: { in: inputPis, mode: 'insensitive' } } })
+        : []
+      const decisions = classifyOrderImport(rows, existingOrders)
 
-    return NextResponse.json({ success: true, imported, skipped, errors: [] })
-  } catch (err) {
-    console.error('[POST /api/orders/import/confirm] DB error:', err)
-    return NextResponse.json(
-      { success: false, error: 'Có lỗi CSDL xảy ra khi lưu đơn hàng. Vui lòng thử lại.' },
-      { status: 500 },
-    )
+      const customerNames = Array.from(new Set(
+        rows
+          .filter((_, index) => decisions[index].status !== 'invalid')
+          .map((row) => String(row.customer ?? '').trim())
+          .filter(Boolean),
+      ))
+      const customers = customerNames.length > 0
+        ? await tx.customer.findMany({ where: { name: { in: customerNames, mode: 'insensitive' } }, select: { id: true, name: true } })
+        : []
+      const customerByName = new Map<string, string>()
+      const ambiguousNames = new Set<string>()
+      for (const customer of customers) {
+        const key = normalizedName(customer.name)
+        if (customerByName.has(key)) ambiguousNames.add(key)
+        else customerByName.set(key, customer.id)
+      }
+      rows.forEach((row, index) => {
+        const key = normalizedName(String(row.customer ?? ''))
+        if (ambiguousNames.has(key) && decisions[index].status !== 'invalid') {
+          decisions[index].status = 'conflict'
+          decisions[index].reasons.push('Có nhiều khách hàng trùng tên sau khi chuẩn hóa; không tự chọn bản ghi')
+        }
+      })
+
+      const acceptedIndexes = decisions
+        .map((decision, index) => decision.status === 'new' ? index : -1)
+        .filter((index) => index >= 0)
+      for (const index of acceptedIndexes) {
+        const row = rows[index]
+        const key = normalizedName(String(row.customer ?? ''))
+        if (!customerByName.has(key)) {
+          const customer = await tx.customer.create({ data: { name: String(row.customer).trim() } })
+          customerByName.set(key, customer.id)
+        }
+      }
+
+      const createData = acceptedIndexes.map((index) => {
+        const row = rows[index]
+        const customerId = customerByName.get(normalizedName(String(row.customer ?? ''))) ?? null
+        return buildCreateData(row, customerId)
+      })
+      if (createData.length > 0) await tx.productionOrder.createMany({ data: createData })
+
+      const summary = summaryFor(decisions)
+      return {
+        imported: summary.created,
+        skipped: summary.identical + summary.conflicted + summary.invalid,
+        errors: decisionErrors(decisions),
+        summary,
+        decisions,
+      }
+    }, { timeout: 30_000, maxWait: 5_000 })
+
+    return NextResponse.json({ success: true, ...result })
+  } catch (error) {
+    if (isRetryableTransactionError(error)) {
+      return NextResponse.json({ success: false, code: 'STALE_PREVIEW', error: 'Dữ liệu đã thay đổi trong lúc import. Vui lòng xem trước lại.' }, { status: 409 })
+    }
+    console.error('[POST /api/orders/import/confirm] DB error:', error)
+    return NextResponse.json({ success: false, error: 'Có lỗi CSDL xảy ra khi lưu đơn hàng. Vui lòng thử lại.' }, { status: 500 })
   }
 }

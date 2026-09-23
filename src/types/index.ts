@@ -4,6 +4,8 @@
 // in sync automatically — no manual duplication of field definitions.
 
 import type { Prisma } from '@prisma/client'
+import type { MaterialGroupInput, ParsedMaterialRow } from '@/lib/excel/parseMaterialReport'
+import type { ParsedPackingOutput } from '@/lib/excel/parsePackingReport'
 
 /**
  * Full ProductionOrder as returned by Prisma (Date objects for timestamps,
@@ -79,7 +81,8 @@ export interface SerializedProductionOrder {
 /**
  * A single row parsed from the ORDER_LIST Excel file.
  * Plain JSON-serializable — travels from server parser → client preview → server confirm.
- * All required fields are non-nullable after parsing; optional fields may be null.
+ * Required fields are represented with their parsed value; rows that fail
+ * validation keep their values so the preview can explain what needs fixing.
  */
 export interface ParsedOrder {
   piNumber: string
@@ -87,7 +90,7 @@ export interface ParsedOrder {
   customer: string
   orderDate: string        // YYYY-MM-DD
   widthM: number
-  lengthM: number
+  lengthM: number | null
   gsm: number
   color: string
   productionGsm?: number | null
@@ -108,9 +111,81 @@ export interface ParsedOrder {
   requiresPacking?: boolean
   deliveryDate?: string | null
   containerSize?: string | null
+  hasEyelet?: boolean
+  eyeletColor?: string | null
+  eyeletLines?: number | null
+  eyeletSpec?: string | null
+  /** True when the parser generated a missing NO/sub-line value. */
+  noWasGenerated?: boolean
   // Validation status fields for preview UI
   isValid?: boolean
   validationErrors?: string[]
+}
+
+export type OrderImportStatus = 'new' | 'identical' | 'conflict' | 'invalid'
+
+export interface OrderImportDecision {
+  rowIndex: number
+  piNumber: string
+  subLineIndex: number
+  status: OrderImportStatus
+  existingOrderId: string | null
+  changedFields: string[]
+  reasons: string[]
+}
+
+export interface OrderImportSummary {
+  total: number
+  created: number
+  identical: number
+  conflicted: number
+  invalid: number
+}
+
+export type StockDecisionStatus = 'new' | 'identical' | 'replace' | 'conflict' | 'invalid'
+
+export interface StockDecision {
+  rowIndex: number
+  materialKey: string
+  materialId: string | null
+  status: StockDecisionStatus
+  reasons: string[]
+}
+
+export interface StockPreviewResponse {
+  success: true
+  rows: ParsedMaterialRow[]
+  parsed: number
+  matched: number
+  unmatched: number
+  group: MaterialGroupInput
+  txDate: string
+  headerRow: number
+  expectedSnapshot: string
+  decisions: StockDecision[]
+}
+
+export interface StockConfirmBody {
+  group: MaterialGroupInput
+  txDate: string
+  rows: ParsedMaterialRow[]
+  expectedSnapshot: string
+  replaceKeys: string[]
+}
+
+export type PackingDecisionStatus = 'new' | 'identical' | 'replace'
+
+export interface PackingDecision {
+  date: string
+  status: PackingDecisionStatus
+  changedFields: string[]
+}
+
+export interface PackingConfirmBody {
+  outputs: ParsedPackingOutput[]
+  fileName: string
+  expectedSnapshot: string
+  replaceDates: string[]
 }
 
 export interface SerializedRollingMetric {
@@ -140,4 +215,3 @@ export interface SerializedPackingOutput {
   dataSource: string
   createdAt: string
 }
-

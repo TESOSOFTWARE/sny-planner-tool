@@ -63,6 +63,7 @@ export async function POST(req: NextRequest) {
         ...(data.qty != null && { qty: data.qty }),
         ...(data.uvPct != null && { uvPct: data.uvPct }),
         frFlag: data.frFlag ?? false,
+        ...(data.frPct != null && { frPct: data.frPct }),
         ...(data.description && { description: data.description }),
         ...(data.remark && { remark: data.remark }),
         ...(data.lineNote != null && { lineNote: data.lineNote }),

@@ -7,7 +7,7 @@
 
 import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import type { ParsedOrder } from '@/types'
+import type { OrderImportDecision, ParsedOrder } from '@/types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -23,13 +23,14 @@ interface PreviewData {
   rows: ParsedOrder[]
   totalParsed: number
   piWarnings?: string[]
+  decisions: OrderImportDecision[]
 }
 
 interface ConfirmResult {
   imported: number
   skipped: number
-  invalidSkipped: number
   totalRows: number
+  summary: { identical: number; conflicted: number; invalid: number }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -41,6 +42,28 @@ function formatDate(iso: string): string {
     month: '2-digit',
     year: 'numeric',
   })
+}
+
+function formatAdditionalFields(row: ParsedOrder): string {
+  const fields = [
+    row.orderType && `Kiểu: ${row.orderType}`,
+    row.qty != null && `SL: ${row.qty}`,
+    row.rollLength != null && `m/cuộn: ${row.rollLength}`,
+    row.pieceLength != null && `m/tấm: ${row.pieceLength}`,
+    row.productionGsm != null && `GSM SX: ${row.productionGsm}`,
+    row.frPct != null && `FR: ${row.frPct}%`,
+    row.mbCode && `MB: ${row.mbCode}`,
+    row.meshType && `Lưới: ${row.meshType}`,
+    row.needleCount != null && `Kim: ${row.needleCount}`,
+    row.beamCount != null && `Dàn: ${row.beamCount}`,
+    row.requiresPacking && 'Đóng gói',
+    row.deliveryDate && `Giao: ${formatDate(row.deliveryDate)}`,
+    row.containerSize && `Cont: ${row.containerSize}`,
+    row.hasEyelet && `Eyelet${row.eyeletLines != null ? ` ${row.eyeletLines} lines` : ''}${row.eyeletColor ? ` ${row.eyeletColor}` : ''}`,
+    row.eyeletSpec && `Eyelet: ${row.eyeletSpec}`,
+    row.lineNote && `Note: ${row.lineNote}`,
+  ].filter(Boolean)
+  return fields.join(' · ') || '—'
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -109,7 +132,7 @@ export default function ImportOrdersModal() {
         return
       }
 
-      setPreview({ rows: json.preview, totalParsed: json.totalParsed, piWarnings: json.piWarnings })
+      setPreview({ rows: json.preview, totalParsed: json.totalParsed, piWarnings: json.piWarnings, decisions: json.decisions ?? [] })
       setState('preview')
     } catch {
       setError('Lỗi kết nối mạng — không thể gửi file lên máy chủ.')
@@ -120,11 +143,8 @@ export default function ImportOrdersModal() {
   const handleConfirm = async () => {
     if (!preview) return
 
-    const validRows = preview.rows.filter((r) => r.isValid !== false)
-    const invalidCount = preview.rows.length - validRows.length
-
-    if (validRows.length === 0) {
-      setError('Không có dòng hợp lệ nào để import. Vui lòng kiểm tra lại các dòng bị lỗi trong file Excel.')
+    if (preview.rows.length === 0) {
+      setError('Không có dòng nào để import.')
       return
     }
 
@@ -135,7 +155,7 @@ export default function ImportOrdersModal() {
       const res = await fetch('/api/orders/import/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rows: validRows }),
+        body: JSON.stringify({ rows: preview.rows }),
       })
       const json = await res.json()
 
@@ -148,8 +168,8 @@ export default function ImportOrdersModal() {
       setResult({
         imported: json.imported,
         skipped: json.skipped,
-        invalidSkipped: invalidCount,
         totalRows: preview.rows.length,
+        summary: json.summary,
       })
       setState('success')
       router.refresh()
@@ -311,7 +331,7 @@ export default function ImportOrdersModal() {
                     <table className="w-full text-xs">
                       <thead className="sticky top-0 bg-surface-container border-b-[0.5px] border-outline-variant">
                         <tr>
-                          {['#', 'Trạng thái Validation', 'PI Number', 'Sub-line', 'Customer', 'Date', 'Width (m)', 'Length (m)', 'GSM', 'Color', 'FR', 'UV%'].map((h) => (
+                          {['#', 'Trạng thái Validation', 'PI Number', 'Sub-line', 'Customer', 'Date', 'Width (m)', 'Length (m)', 'GSM', 'Color', 'FR', 'UV%', 'Thông tin bổ sung'].map((h) => (
                             <th key={h} className="px-sm py-xs text-left text-label-sm font-inter font-medium text-secondary uppercase tracking-wide whitespace-nowrap">
                               {h}
                             </th>
@@ -321,11 +341,14 @@ export default function ImportOrdersModal() {
                       <tbody className="divide-y divide-[0.5px] divide-outline-variant">
                         {preview.rows.map((row, idx) => {
                           const isValidRow = row.isValid !== false
+                          const decision = preview.decisions[idx]
+                          const isConflict = decision?.status === 'conflict'
+                          const isIdentical = decision?.status === 'identical'
                           return (
                             <tr
                               key={idx}
                               className={
-                                !isValidRow
+                                !isValidRow || isConflict
                                   ? 'bg-rose-50/60 hover:bg-rose-100/50'
                                   : idx % 2 === 0
                                   ? 'bg-surface-container-lowest'
@@ -336,13 +359,21 @@ export default function ImportOrdersModal() {
 
                               {/* Validation Status Column */}
                               <td className="px-sm py-xs whitespace-nowrap">
-                                {isValidRow ? (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium border border-emerald-200 text-[11px]">
-                                    ✓ Hợp lệ
-                                  </span>
-                                ) : (
+                                {!isValidRow ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-semibold border border-rose-300 text-[11px]">
                                     ⚠ {row.validationErrors?.join(', ')}
+                                  </span>
+                                ) : isConflict ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold border border-amber-300 text-[11px]">
+                                    ⚠ Conflict: {decision.reasons.join(', ')}
+                                  </span>
+                                ) : isIdentical ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium border border-slate-200 text-[11px]">
+                                    ↺ Đã tồn tại / bỏ qua
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium border border-emerald-200 text-[11px]">
+                                    ✓ Hợp lệ
                                   </span>
                                 )}
                               </td>
@@ -352,7 +383,13 @@ export default function ImportOrdersModal() {
                               <td className="px-sm py-xs text-body-md font-noto text-on-surface whitespace-nowrap max-w-[140px] truncate">{row.customer || <span className="text-rose-500 italic">Trống</span>}</td>
                               <td className="px-sm py-xs font-mono text-type-mono text-on-surface-variant whitespace-nowrap tabular-nums">{formatDate(row.orderDate)}</td>
                               <td className="px-sm py-xs text-right font-mono text-type-mono text-on-surface tabular-nums">{row.widthM || <span className="text-rose-500 italic">0</span>}</td>
-                              <td className="px-sm py-xs text-right font-mono text-type-mono text-on-surface tabular-nums">{row.lengthM ? row.lengthM.toLocaleString() : <span className="text-rose-500 italic">0</span>}</td>
+                              <td className="px-sm py-xs text-right font-mono text-type-mono text-on-surface tabular-nums">
+                                {row.lengthM != null
+                                  ? row.lengthM.toLocaleString()
+                                  : row.orderType === 'meters'
+                                  ? <span className="text-rose-500 italic">0</span>
+                                  : <span className="text-outline">—</span>}
+                              </td>
                               <td className="px-sm py-xs text-right font-mono text-type-mono text-on-surface tabular-nums">{row.gsm || <span className="text-rose-500 italic">0</span>}</td>
                               <td className="px-sm py-xs text-body-md font-noto text-on-surface whitespace-nowrap">{row.color || <span className="text-rose-600 font-bold italic">Thiếu Màu</span>}</td>
                               <td className="px-sm py-xs text-center">
@@ -362,6 +399,9 @@ export default function ImportOrdersModal() {
                               </td>
                               <td className="px-sm py-xs font-mono text-type-mono text-on-surface-variant tabular-nums">
                                 {row.uvPct != null ? `${(row.uvPct * 100).toFixed(1)}%` : '—'}
+                              </td>
+                              <td className="px-sm py-xs text-secondary max-w-[420px]" title={formatAdditionalFields(row)}>
+                                {formatAdditionalFields(row)}
                               </td>
                             </tr>
                           )
@@ -402,14 +442,14 @@ export default function ImportOrdersModal() {
                     <p className="text-body-md font-noto text-secondary">
                       Đã import thành công <span className="text-[#15803d] font-bold">{result.imported}/{result.totalRows}</span> dòng đơn hàng hợp lệ.
                     </p>
-                    {result.invalidSkipped > 0 && (
+                    {result.summary.invalid > 0 && (
                       <p className="text-xs text-rose-600 font-medium">
-                        ⚠ {result.invalidSkipped} dòng bị bỏ qua do thiếu trường bắt buộc (Màu, GSM, Kích thước...)
+                        ⚠ {result.summary.invalid} dòng bị bỏ qua do thiếu trường bắt buộc (Màu, GSM, Kích thước...)
                       </p>
                     )}
                     {result.skipped > 0 && (
                       <p className="text-xs text-slate-500">
-                        · {result.skipped} dòng trùng lặp (PI + Sub-line) đã được giữ nguyên.
+                        · {result.summary.identical} dòng giống hệt được giữ nguyên; {result.summary.conflicted} dòng xung đột cần sửa ở chi tiết.
                       </p>
                     )}
                   </div>
@@ -445,7 +485,7 @@ export default function ImportOrdersModal() {
                     <button
                       id="btn-confirm-import"
                       onClick={handleConfirm}
-                      disabled={validRowsCount === 0}
+                      disabled={!preview || preview.rows.length === 0}
                       className="inline-flex items-center justify-center gap-sm bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
                     >
                       <span className="material-symbols-outlined text-[18px]">check</span>

@@ -4,7 +4,8 @@
 // 3-step modal: (1) file upload + date, (2) preview, (3) confirm → success.
 
 import { useState } from 'react'
-import type { ParsedMaterialRow } from '@/lib/excel/parseMaterialReport'
+import type { MaterialBlock, ParsedMaterialRow } from '@/lib/excel/parseMaterialReport'
+import type { StockDecision } from '@/types'
 
 interface Props {
   onImported: () => void
@@ -12,9 +13,7 @@ interface Props {
 }
 
 interface PreviewRow extends ParsedMaterialRow {
-  matchedMaterialId: string | null
-  matchedMaterialName: string | null
-  isNew: boolean
+  isNew?: boolean
 }
 
 interface PreviewResponse {
@@ -23,7 +22,14 @@ interface PreviewResponse {
   parsed: number
   matched: number
   unmatched: number
+  group: 'HDPE' | 'MB' | 'KOREA'
+  txDate: string
+  headerRow: number
+  expectedSnapshot: string
+  decisions: StockDecision[]
+  blocks?: MaterialBlock[]
   error?: string
+  code?: string
 }
 
 type Step = 'upload' | 'preview' | 'success'
@@ -38,6 +44,9 @@ export default function ImportHDPEModal({ onImported, onClose }: Props) {
   const [step, setStep]           = useState<Step>('upload')
   const [file, setFile]           = useState<File | null>(null)
   const [txDate, setTxDate]       = useState(todayISO())
+  const [headerRow, setHeaderRow] = useState<number | undefined>()
+  const [availableBlocks, setAvailableBlocks] = useState<MaterialBlock[]>([])
+  const [replaceKeys, setReplaceKeys] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError]         = useState<string | null>(null)
   const [preview, setPreview]     = useState<PreviewResponse | null>(null)
@@ -55,13 +64,18 @@ export default function ImportHDPEModal({ onImported, onClose }: Props) {
       const fd = new FormData()
       fd.append('file', file)
       fd.append('group', 'HDPE')
+      fd.append('txDate', txDate)
+      if (headerRow != null) fd.append('headerRow', String(headerRow))
       const res = await fetch('/api/materials/import-transactions', { method: 'POST', body: fd })
       const data = await res.json() as PreviewResponse
       if (!res.ok || !data.success) {
         setError(data.error ?? 'Không thể đọc file.')
+        if (data.code === 'BLOCK_REQUIRED') setAvailableBlocks(data.blocks ?? [])
         return
       }
       setPreview(data)
+      setReplaceKeys([])
+      setAvailableBlocks([])
       setStep('preview')
     } catch {
       setError('Lỗi mạng — không thể kết nối máy chủ.')
@@ -81,14 +95,15 @@ export default function ImportHDPEModal({ onImported, onClose }: Props) {
       const res = await fetch('/api/materials/import-transactions/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rows: preview.rows, txDate }),
+        body: JSON.stringify({ group: preview.group, txDate: preview.txDate, rows: preview.rows, expectedSnapshot: preview.expectedSnapshot, replaceKeys }),
       })
-      const data = await res.json() as { success: boolean; materialsUpdated?: number; transactionsCreated?: number; error?: string }
+      const data = await res.json() as { success: boolean; materialsUpdated?: number; transactionsCreated?: number; created?: number; replaced?: number; unchanged?: number; error?: string; code?: string }
       if (!res.ok || !data.success) {
         setError(data.error ?? 'Không thể lưu dữ liệu.')
+        if (res.status === 409) { setPreview(null); setStep('upload'); setReplaceKeys([]) }
         return
       }
-      setSuccessMsg(`Đã import ${data.transactionsCreated} giao dịch cho ${data.materialsUpdated} nguyên liệu.`)
+      setSuccessMsg(`Đã cập nhật ${data.materialsUpdated} nguyên liệu (${data.created ?? 0} mới, ${data.replaced ?? 0} thay thế, ${data.unchanged ?? 0} giữ nguyên). Tạo ${data.transactionsCreated} giao dịch.`)
       setStep('success')
       onImported()
     } catch {
@@ -100,6 +115,10 @@ export default function ImportHDPEModal({ onImported, onClose }: Props) {
 
   const totalOut = (row: PreviewRow) =>
     row.outUsing + row.outBroken + row.outTape + row.outReject
+  const decisions = preview?.decisions ?? []
+  const replaceDecisions = decisions.filter(decision => decision.status === 'replace')
+  const hasBlockingDecision = decisions.some(decision => decision.status === 'conflict' || decision.status === 'invalid')
+  const replacementsAcknowledged = replaceDecisions.every(decision => replaceKeys.includes(decision.materialKey))
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
@@ -143,7 +162,7 @@ export default function ImportHDPEModal({ onImported, onClose }: Props) {
                   id="import-report-file"
                   type="file"
                   accept=".xlsx"
-                  onChange={e => { setFile(e.target.files?.[0] ?? null); setError(null) }}
+                  onChange={e => { setFile(e.target.files?.[0] ?? null); setPreview(null); setAvailableBlocks([]); setHeaderRow(undefined); setReplaceKeys([]); setError(null) }}
                   className="w-full text-sm text-on-surface file:mr-3 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-on-primary hover:file:bg-primary/90 cursor-pointer"
                 />
                 {file && (
@@ -162,11 +181,20 @@ export default function ImportHDPEModal({ onImported, onClose }: Props) {
                   id="import-report-date"
                   type="date"
                   value={txDate}
-                  onChange={e => setTxDate(e.target.value)}
+                  onChange={e => { setTxDate(e.target.value); setPreview(null); setReplaceKeys([]); setError(null) }}
                   className={`${inputCls} max-w-[200px]`}
                 />
                 <p className="text-xs text-outline mt-1">Ngày này đại diện cho các giao dịch trong file.</p>
               </div>
+              {availableBlocks.length > 0 && (
+                <div>
+                  <label className="block text-xs font-medium text-secondary mb-1">Chọn block báo cáo</label>
+                  <select value={headerRow ?? ''} onChange={e => { setHeaderRow(e.target.value ? Number(e.target.value) : undefined); setPreview(null) }} className={inputCls}>
+                    <option value="">Chọn dòng header…</option>
+                    {availableBlocks.map(block => <option key={block.headerRow} value={block.headerRow}>{block.sheetName} — dòng {block.headerRow} đến {block.endRow}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
           )}
 
@@ -240,6 +268,17 @@ export default function ImportHDPEModal({ onImported, onClose }: Props) {
               <p className="text-xs text-secondary">
                 Tồn cuối (LAST STOCK) sẽ được set làm tồn hiện tại của mỗi nguyên liệu.
               </p>
+              <div className="space-y-2 text-xs">
+                {decisions.map(decision => (
+                  <div key={decision.materialKey} className="flex items-center justify-between rounded border border-outline-variant px-2 py-1">
+                    <span>{decision.materialKey} — {decision.status === 'new' ? 'Mới' : decision.status === 'identical' ? 'Giống dữ liệu hiện tại' : decision.status === 'replace' ? 'Cần thay thế' : decision.status === 'conflict' ? 'Xung đột' : 'Không hợp lệ'}</span>
+                    {decision.status === 'replace' && <label className="inline-flex items-center gap-1"><input type="checkbox" checked={replaceKeys.includes(decision.materialKey)} onChange={() => setReplaceKeys(current => current.includes(decision.materialKey) ? current.filter(key => key !== decision.materialKey) : [...current, decision.materialKey])} /> Xác nhận thay thế</label>}
+                  </div>
+                ))}
+              </div>
+              {replaceDecisions.length > 0 && <button type="button" onClick={() => setReplaceKeys(replaceDecisions.map(decision => decision.materialKey))} className="text-xs text-primary underline">Chọn tất cả bản ghi cần thay thế</button>}
+              <p className="text-xs text-secondary">Các dòng không có trong file không bị xóa khỏi tồn kho.</p>
+              {hasBlockingDecision && <p className="text-xs text-error">Có dòng xung đột hoặc không hợp lệ; cần sửa file trước khi xác nhận.</p>}
             </div>
           )}
 
@@ -279,7 +318,7 @@ export default function ImportHDPEModal({ onImported, onClose }: Props) {
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={isLoading}
+                disabled={isLoading || hasBlockingDecision || !replacementsAcknowledged}
                 className="inline-flex items-center gap-2 bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors"
               >
                 {isLoading

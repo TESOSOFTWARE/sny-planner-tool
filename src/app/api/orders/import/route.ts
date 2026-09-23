@@ -5,8 +5,9 @@
 // Does NOT write anything to the database.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { parseOrderList } from '@/lib/excel/parseOrderList'
+import { classifyOrderImport, parseOrderList } from '@/lib/excel/parseOrderList'
 import { prisma } from '@/lib/db'
+import { MAX_IMPORTED_ORDER_ROWS } from '@/lib/validations/order'
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 // 10 MB
 
@@ -76,72 +77,47 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // ── 5. Check PI Number customer conflicts & Duplicate subLineIndex ────────
-  const piWarnings: string[] = []
-
-  // Check 5a: Duplicate (piNumber, subLineIndex) in uploaded rows
-  const seenKeys = new Set<string>()
-  let duplicateCount = 0
-  for (const r of rows) {
-    if (r.piNumber) {
-      const key = `${r.piNumber.trim().toUpperCase()}#${r.subLineIndex}`
-      if (seenKeys.has(key)) {
-        duplicateCount++
-      } else {
-        seenKeys.add(key)
-      }
-    }
-  }
-
-  if (duplicateCount > 0) {
-    piWarnings.push(
-      `⚠ Phát hiện ${duplicateCount} dòng trùng số thứ tự (subLineIndex), có thể bị bỏ qua khi import.`
+  if (rows.length > MAX_IMPORTED_ORDER_ROWS) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: `File contains ${rows.length} rows. The maximum supported import is ${MAX_IMPORTED_ORDER_ROWS} rows.`,
+      },
+      { status: 422 },
     )
   }
 
-  // Check 5b: Customer name mismatch for existing PIs
-  const piCustomerMap = new Map<string, string>()
-  for (const r of rows) {
-    if (r.piNumber && r.customer) {
-      piCustomerMap.set(r.piNumber.trim().toUpperCase(), r.customer.trim())
-    }
+  // ── 5. Classify against the current DB state (preview only) ───────────────
+  const uniquePis = Array.from(new Set(
+    rows
+      .map((row) => row.piNumber.trim())
+      .filter((pi) => pi && pi !== 'CHƯA_CÓ_PI'),
+  ))
+  let decisions
+  try {
+    const existingOrders = uniquePis.length > 0
+      ? await prisma.productionOrder.findMany({
+          where: { piNumber: { in: uniquePis, mode: 'insensitive' } },
+        })
+      : []
+    decisions = classifyOrderImport(rows, existingOrders)
+  } catch (err) {
+    console.error('[POST /api/orders/import] DB classification error:', err)
+    return NextResponse.json({ success: false, error: 'Không thể kiểm tra dữ liệu đơn hàng hiện tại.' }, { status: 500 })
   }
 
-  const uniquePis = Array.from(piCustomerMap.keys())
-  if (uniquePis.length > 0) {
-    const existingOrders = await prisma.productionOrder.findMany({
-      where: {
-        piNumber: { in: uniquePis, mode: 'insensitive' },
-      },
-      select: { piNumber: true, customer: true },
-    })
+  const piWarnings = Array.from(new Set(
+    decisions
+      .filter((decision) => decision.status === 'conflict')
+      .flatMap((decision) => decision.reasons.map((reason) => `⚠ Dòng ${decision.rowIndex + 1} (${decision.piNumber} / NO ${decision.subLineIndex}): ${reason}`)),
+  ))
 
-    const existingPiMap = new Map<string, Set<string>>()
-    for (const o of existingOrders) {
-      const key = o.piNumber.trim().toUpperCase()
-      const set = existingPiMap.get(key) ?? new Set()
-      if (o.customer) set.add(o.customer.trim())
-      existingPiMap.set(key, set)
-    }
-
-    for (const [piUpper, fileCustomer] of Array.from(piCustomerMap.entries())) {
-      const dbCustomers = existingPiMap.get(piUpper)
-      if (dbCustomers && dbCustomers.size > 0) {
-        const dbCust = Array.from(dbCustomers)[0]
-        if (dbCust.toLowerCase() !== fileCustomer.toLowerCase()) {
-          piWarnings.push(
-            `⚠ PI Number [${piUpper}] đã tồn tại với khách hàng [${dbCust}] — file Excel đang nhập cho khách hàng [${fileCustomer}].`
-          )
-        }
-      }
-    }
-  }
-
-  // ── 6. Return first PREVIEW_LIMIT rows (no DB write) ─────────────────────
+  // ── 6. Return every parsed row and server decisions (no DB write) ─────────
   return NextResponse.json({
     success: true,
     totalParsed: rows.length,
     preview: rows,
     piWarnings,
+    decisions,
   })
 }

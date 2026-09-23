@@ -5,7 +5,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { parsePastedTextExtended, type ParsedRowResult } from '@/lib/excel/parsePastedText'
-import type { ParsedOrder } from '@/types'
+import type { OrderImportDecision, ParsedOrder } from '@/types'
 
 export default function BulkPastePage() {
   const router = useRouter()
@@ -13,7 +13,12 @@ export default function BulkPastePage() {
   const [results, setResults] = useState<ParsedRowResult[]>([])
   const [status, setStatus] = useState<'idle' | 'preview' | 'saving' | 'success' | 'error'>('idle')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [importResult, setImportResult] = useState<{ imported: number; skipped: number } | null>(null)
+  const [importResult, setImportResult] = useState<{
+    imported: number
+    skipped: number
+    summary: { identical: number; conflicted: number; invalid: number }
+    decisions: OrderImportDecision[]
+  } | null>(null)
 
   const handleParse = (e: React.FormEvent) => {
     e.preventDefault()
@@ -50,7 +55,7 @@ export default function BulkPastePage() {
         return
       }
 
-      setImportResult({ imported: json.imported, skipped: json.skipped })
+      setImportResult({ imported: json.imported, skipped: json.skipped, summary: json.summary, decisions: json.decisions ?? [] })
       setStatus('success')
       router.refresh()
     } catch {
@@ -363,8 +368,14 @@ export default function BulkPastePage() {
               <span className="font-semibold text-[#15803d] tabular-nums">{importResult.imported} rows</span>
             </div>
             <div className="flex items-center justify-between py-2">
-              <span className="text-secondary font-medium">Skipped Duplicates</span>
+              <span className="text-secondary font-medium">Skipped (identical / conflict / invalid)</span>
               <span className="font-semibold text-outline tabular-nums">{importResult.skipped} rows</span>
+            </div>
+            <div className="flex items-center justify-between py-2">
+              <span className="text-secondary font-medium">Breakdown</span>
+              <span className="font-semibold text-outline tabular-nums">
+                {importResult.summary.identical} / {importResult.summary.conflicted} / {importResult.summary.invalid}
+              </span>
             </div>
           </div>
 

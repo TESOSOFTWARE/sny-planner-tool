@@ -44,21 +44,21 @@ export function calculateOrderWeight(input: OrderWeightInput): OrderWeightResult
     input.pieceLength != null && input.pieceLength > 0
   ) {
     totalMeters = input.qty * Number(input.pieceLength)
-  } else if (input.lengthM != null && input.lengthM > 0) {
+  } else if (input.orderType === 'meters' && input.lengthM != null && input.lengthM > 0) {
     totalMeters = input.lengthM
   }
 
-  if (totalMeters == null || isNaN(totalMeters) || totalMeters <= 0) {
+  if (totalMeters == null || !Number.isFinite(totalMeters) || totalMeters <= 0 || totalMeters > 100_000) {
     return { totalMeters: null, qtySqm: null, totalWeightKgs: null, requiredYarnKg: null }
   }
 
-  if (input.widthM == null || isNaN(input.widthM) || input.widthM <= 0) {
+  if (input.widthM == null || !Number.isFinite(input.widthM) || input.widthM <= 0 || input.widthM > 20) {
     return { totalMeters, qtySqm: null, totalWeightKgs: null, requiredYarnKg: null }
   }
 
   const qtySqm = input.widthM * totalMeters
 
-  if (input.gsm == null || isNaN(input.gsm) || input.gsm <= 0) {
+  if (!Number.isFinite(qtySqm) || input.gsm == null || !Number.isFinite(input.gsm) || input.gsm <= 0 || input.gsm > 500) {
     return { totalMeters, qtySqm, totalWeightKgs: null, requiredYarnKg: null }
   }
 
@@ -68,6 +68,10 @@ export function calculateOrderWeight(input: OrderWeightInput): OrderWeightResult
   // 2. Nhu cầu nguyên liệu sợi nội bộ (requiredYarnKg) — dùng productionGsm nếu có, fallback gsm gốc
   const effectiveYarnGsm = (input.productionGsm != null && input.productionGsm > 0) ? input.productionGsm : input.gsm
   const requiredYarnKg = ((qtySqm * effectiveYarnGsm) / 1000) * 1.05
+
+  if (!Number.isFinite(totalWeightKgs) || !Number.isFinite(requiredYarnKg)) {
+    return { totalMeters, qtySqm, totalWeightKgs: null, requiredYarnKg: null }
+  }
 
   return { totalMeters, qtySqm, totalWeightKgs, requiredYarnKg }
 }

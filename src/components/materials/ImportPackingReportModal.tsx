@@ -4,6 +4,7 @@
 // 3-step modal: Upload Excel Statistical Report → Preview Dry-Run → Confirm Import to DB.
 
 import { useState } from 'react'
+import type { PackingDecision } from '@/types'
 
 interface Props {
   onImported: () => void
@@ -20,6 +21,8 @@ interface PreviewOutput {
   weightNight: number | null
   dataSource: string
   cellRef: string
+  isValid?: boolean
+  validationErrors?: string[]
 }
 
 interface PreviewResponse {
@@ -28,7 +31,10 @@ interface PreviewResponse {
   totalRowsParsed: number
   availableSheets: string[]
   outputs: PreviewOutput[]
+  expectedSnapshot: string
+  decisions: PackingDecision[]
   error?: string
+  code?: string
 }
 
 type Step = 'upload' | 'preview' | 'success'
@@ -39,6 +45,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<PreviewResponse | null>(null)
+  const [replaceDates, setReplaceDates] = useState<string[]>([])
   const [successMsg, setSuccessMsg] = useState('')
 
   // ── Step 1: Upload & Preview ───────────────────────────────────────────────
@@ -66,6 +73,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
       }
 
       setPreview(data)
+      setReplaceDates([])
       setStep('preview')
     } catch (err: any) {
       setError(err.message || 'Có lỗi xảy ra khi đọc file Excel')
@@ -88,15 +96,22 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
         body: JSON.stringify({
           outputs: preview.outputs,
           fileName: preview.fileName,
+          expectedSnapshot: preview.expectedSnapshot,
+          replaceDates,
         }),
       })
 
       const data = await res.json()
       if (!res.ok || !data.success) {
+        if (res.status === 409) {
+          setPreview(null)
+          setStep('upload')
+          setReplaceDates([])
+        }
         throw new Error(data.error || 'Lỗi khi lưu dữ liệu Đóng gói vào DB')
       }
 
-      setSuccessMsg(`Đã nhập thành công ${data.insertedCount} ngày sản lượng Đóng gói!`)
+      setSuccessMsg(`Đã tạo ${data.insertedCount} ngày, cập nhật ${data.updatedCount} ngày và giữ nguyên ${data.unchangedCount} ngày sản lượng Đóng gói.`)
       setStep('success')
       onImported()
     } catch (err: any) {
@@ -105,6 +120,9 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
       setIsLoading(false)
     }
   }
+
+  const replaceDecisions = preview?.decisions.filter(decision => decision.status === 'replace') ?? []
+  const replacementsAcknowledged = replaceDecisions.every(decision => replaceDates.includes(decision.date))
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -147,6 +165,8 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
                     const f = e.target.files?.[0]
                     if (f) {
                       setFile(f)
+                      setPreview(null)
+                      setReplaceDates([])
                       setError(null)
                     }
                   }}
@@ -211,11 +231,11 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
                       <tr key={idx} className="hover:bg-slate-50">
                         <td className="px-3 py-1.5 font-medium text-slate-800">{row.date}</td>
                         <td className="px-3 py-1.5 text-slate-600">{row.qtyDay ?? '-'}</td>
-                        <td className="px-3 py-1.5 text-slate-600">{row.totalMDay ? Number(row.totalMDay).toLocaleString() : '-'}</td>
-                        <td className="px-3 py-1.5 text-slate-600">{row.weightDay ? Number(row.weightDay).toLocaleString() : '-'}</td>
+                        <td className="px-3 py-1.5 text-slate-600">{row.totalMDay != null ? Number(row.totalMDay).toLocaleString() : '-'}</td>
+                        <td className="px-3 py-1.5 text-slate-600">{row.weightDay != null ? Number(row.weightDay).toLocaleString() : '-'}</td>
                         <td className="px-3 py-1.5 text-slate-600">{row.qtyNight ?? '-'}</td>
-                        <td className="px-3 py-1.5 text-slate-600">{row.totalMNight ? Number(row.totalMNight).toLocaleString() : '-'}</td>
-                        <td className="px-3 py-1.5 text-slate-600">{row.weightNight ? Number(row.weightNight).toLocaleString() : '-'}</td>
+                        <td className="px-3 py-1.5 text-slate-600">{row.totalMNight != null ? Number(row.totalMNight).toLocaleString() : '-'}</td>
+                        <td className="px-3 py-1.5 text-slate-600">{row.weightNight != null ? Number(row.weightNight).toLocaleString() : '-'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -226,6 +246,16 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
                   ...và {preview.outputs.length - 10} ngày khác
                 </div>
               )}
+              <div className="space-y-2 text-xs">
+                {preview.decisions.map(decision => (
+                  <div key={decision.date} className="flex items-center justify-between rounded border border-slate-200 px-2 py-1">
+                    <span>{decision.date} — {decision.status === 'new' ? 'Mới' : decision.status === 'identical' ? 'Giống dữ liệu hiện tại' : 'Cần thay thế'}</span>
+                    {decision.status === 'replace' && <label className="inline-flex items-center gap-1"><input type="checkbox" checked={replaceDates.includes(decision.date)} onChange={() => setReplaceDates(current => current.includes(decision.date) ? current.filter(date => date !== decision.date) : [...current, decision.date])} /> Xác nhận thay thế</label>}
+                  </div>
+                ))}
+              </div>
+              {replaceDecisions.length > 0 && <button type="button" onClick={() => setReplaceDates(replaceDecisions.map(decision => decision.date))} className="text-xs text-blue-700 underline">Chọn tất cả ngày cần thay thế</button>}
+              <p className="text-xs text-slate-500">Các ngày không có trong file không bị xóa.</p>
             </div>
           )}
 
@@ -268,7 +298,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
             <>
               <button
                 type="button"
-                onClick={() => setStep('upload')}
+                onClick={() => { setStep('upload'); setPreview(null); setReplaceDates([]) }}
                 disabled={isLoading}
                 className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-xl"
               >
@@ -277,7 +307,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
               <button
                 type="button"
                 onClick={handleConfirm}
-                disabled={isLoading}
+                disabled={isLoading || !replacementsAcknowledged}
                 className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl flex items-center gap-2"
               >
                 {isLoading && <span className="animate-spin">⏳</span>}

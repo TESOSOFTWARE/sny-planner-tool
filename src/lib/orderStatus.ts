@@ -7,7 +7,7 @@ export function calcOrderStatus(
 ): OrderStatus {
   if (!assignments || assignments.length === 0) return 'PENDING'
 
-  // today = ngày hiện tại theo UTC+7
+  // today = ngày hiện tại theo UTC+7 
   const now = new Date()
   const todayUTC7 = new Date(now.getTime() + 7 * 60 * 60 * 1000)
   todayUTC7.setUTCHours(0, 0, 0, 0)

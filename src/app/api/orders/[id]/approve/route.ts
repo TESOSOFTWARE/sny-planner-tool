@@ -1,120 +1,121 @@
 // src/app/api/orders/[id]/approve/route.ts
 // POST /api/orders/[id]/approve
-// Validates a draft order and all sub-lines under the same PI against multiLineOrderSchema.
-// If missing required fields, blocks approval and returns list of missing field names.
-// If valid, recalculates weights and sets isDraft = false.
+// Validates every sub-line in the PI as an approved order before changing any
+// draft flag or placeholder assignment.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
+import { approvedOrderStateSchema } from '@/lib/validations/order'
+import type { ParsedOrder } from '@/types'
+
+function dateOnly(value: Date | null): string | null {
+  return value ? value.toISOString().slice(0, 10) : null
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (value == null) return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function stateFor(line: Awaited<ReturnType<typeof prisma.productionOrder.findUniqueOrThrow>>): ParsedOrder {
+  return {
+    piNumber: line.piNumber,
+    subLineIndex: line.subLineIndex,
+    customer: line.customer,
+    orderDate: line.orderDate.toISOString().slice(0, 10),
+    widthM: line.widthM as number,
+    lengthM: line.lengthM,
+    gsm: line.gsm as number,
+    productionGsm: line.productionGsm,
+    color: line.color as string,
+    orderType: line.orderType as ParsedOrder['orderType'],
+    qty: line.qty,
+    rollLength: numberOrNull(line.rollLength),
+    pieceLength: numberOrNull(line.pieceLength),
+    uvPct: numberOrNull(line.uvPct),
+    frFlag: line.frFlag,
+    frPct: numberOrNull(line.frPct),
+    description: line.description,
+    remark: line.remark,
+    mbCode: line.mbCode,
+    meshType: line.meshType,
+    needleCount: line.needleCount,
+    beamCount: line.beamCount,
+    lineNote: line.lineNote,
+    requiresPacking: line.requiresPacking,
+    deliveryDate: dateOnly(line.deliveryDate),
+    containerSize: line.containerSize,
+    hasEyelet: line.hasEyelet,
+    eyeletColor: line.eyeletColor,
+    eyeletLines: line.eyeletLines,
+    eyeletSpec: line.eyeletSpec,
+  }
+}
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: { id: string } },
 ) {
-  const { id } = params
-
   try {
-    const targetOrder = await prisma.productionOrder.findUnique({
-      where: { id },
-    })
+    const result = await prisma.$transaction(async (tx) => {
+      const target = await tx.productionOrder.findUnique({ where: { id: params.id } })
+      if (!target) return { notFound: true as const }
+      if (!target.isDraft) return { alreadyApproved: true as const }
 
-    if (!targetOrder) {
-      return NextResponse.json({ success: false, error: 'Đơn hàng không tồn tại.' }, { status: 404 })
-    }
-
-    if (!targetOrder.isDraft) {
-      return NextResponse.json({ success: true, message: 'Đơn hàng đã được duyệt trước đó.' })
-    }
-
-    // Fetch all sub-lines of the same PI Number to validate and approve together
-    const piSubLines = await prisma.productionOrder.findMany({
-      where: { piNumber: targetOrder.piNumber },
-      orderBy: { subLineIndex: 'asc' },
-    })
-
-    const missingFieldsSet = new Set<string>()
-
-    // Check required fields per sub-line
-    piSubLines.forEach((line, i) => {
-      const idxLabel = piSubLines.length > 1 ? ` (Dòng ${i + 1})` : ''
-
-      if (!line.color) missingFieldsSet.add(`Màu sắc${idxLabel}`)
-      if (line.widthM == null || line.widthM <= 0) missingFieldsSet.add(`Khổ (m)${idxLabel}`)
-      if (line.gsm == null || line.gsm <= 0) missingFieldsSet.add(`GSM${idxLabel}`)
-
-      if (line.orderType === 'meters') {
-        if (line.lengthM == null || line.lengthM <= 0) missingFieldsSet.add(`Chiều dài (m)${idxLabel}`)
-      } else if (line.orderType === 'rolls') {
-        if (line.qty == null || line.qty <= 0) missingFieldsSet.add(`Số cuộn${idxLabel}`)
-        if (line.rollLength == null || Number(line.rollLength) <= 0) missingFieldsSet.add(`Mét/cuộn${idxLabel}`)
-      } else if (line.orderType === 'pieces') {
-        if (line.qty == null || line.qty <= 0) missingFieldsSet.add(`Số tấm${idxLabel}`)
-        if (line.pieceLength == null || Number(line.pieceLength) <= 0) missingFieldsSet.add(`Chiều dài tấm (m)${idxLabel}`)
-      }
-    })
-
-    if (missingFieldsSet.size > 0) {
-      const missingFields = Array.from(missingFieldsSet)
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Chưa thể duyệt đơn nháp do thiếu thông tin: ${missingFields.join(', ')}`,
-          missingFields,
-        },
-        { status: 422 }
-      )
-    }
-
-    const subLineIds = piSubLines.map((l) => l.id)
-
-    // All validation passed! Recalculate weights, update isDraft = false for all sub-lines,
-    // AND convert all linked MachineAssignments from isPlaceholder = true -> false
-    await prisma.$transaction([
-      ...piSubLines.map((line) => {
-        const orderType = line.orderType ?? 'meters'
-        const w = line.widthM!
-        const g = line.gsm!
-
-        let effectiveLengthM = line.lengthM ?? 0
-        if (orderType === 'rolls' && line.qty && line.rollLength) {
-          effectiveLengthM = line.qty * Number(line.rollLength)
-        } else if (orderType === 'pieces' && line.qty && line.pieceLength) {
-          effectiveLengthM = line.qty * Number(line.pieceLength)
+      const lines = await tx.productionOrder.findMany({
+        where: { piNumber: target.piNumber },
+        orderBy: { subLineIndex: 'asc' },
+      })
+      const missingFields = new Set<string>()
+      const validated = lines.map((line, index) => {
+        const parsed = approvedOrderStateSchema.safeParse(stateFor(line))
+        if (!parsed.success) {
+          const label = lines.length > 1 ? ` (Dòng ${index + 1})` : ''
+          parsed.error.issues.forEach((issue) => missingFields.add(`${String(issue.path.join('.'))}${label}: ${issue.message}`))
+          return null
         }
+        return parsed.data
+      })
+      if (missingFields.size > 0) {
+        return { invalid: Array.from(missingFields) }
+      }
 
-        const { qtySqm, totalWeightKgs, requiredYarnKg } = calculateOrderWeight({
-          orderType,
-          widthM: w,
-          lengthM: effectiveLengthM,
-          gsm: g,
-          productionGsm: line.productionGsm ?? null,
-          qty: line.qty ?? null,
-          rollLength: line.rollLength ? Number(line.rollLength) : null,
-          pieceLength: line.pieceLength ? Number(line.pieceLength) : null,
+      const subLineIds = lines.map((line) => line.id)
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index]
+        const data = validated[index]
+        if (!data) return { invalid: ['Dòng không hợp lệ'] }
+        const calculation = calculateOrderWeight({
+          orderType: data.orderType ?? 'meters',
+          widthM: data.widthM ?? null,
+          lengthM: data.lengthM ?? null,
+          gsm: data.gsm ?? null,
+          productionGsm: data.productionGsm ?? null,
+          qty: data.qty ?? null,
+          rollLength: data.rollLength ?? null,
+          pieceLength: data.pieceLength ?? null,
         })
-
-        return prisma.productionOrder.update({
+        await tx.productionOrder.update({
           where: { id: line.id },
           data: {
             isDraft: false,
-            lengthM: effectiveLengthM,
-            qtySqm,
-            totalWeightKgs,
-            requiredYarnKg,
+            lengthM: calculation.totalMeters,
+            qtySqm: calculation.qtySqm,
+            totalWeightKgs: calculation.totalWeightKgs,
+            requiredYarnKg: calculation.requiredYarnKg,
           },
         })
-      }),
-      prisma.machineAssignment.updateMany({
-        where: { orderId: { in: subLineIds } },
-        data: { isPlaceholder: false },
-      }),
-    ])
+      }
+      await tx.machineAssignment.updateMany({ where: { orderId: { in: subLineIds } }, data: { isPlaceholder: false } })
+      return { count: lines.length, piNumber: target.piNumber }
+    }, { timeout: 30_000, maxWait: 5_000 })
 
-    return NextResponse.json({
-      success: true,
-      message: `Đã duyệt thành công ${piSubLines.length} dòng hàng của PI [${targetOrder.piNumber}].`,
-    })
+    if ('notFound' in result && result.notFound) return NextResponse.json({ success: false, error: 'Đơn hàng không tồn tại.' }, { status: 404 })
+    if ('alreadyApproved' in result && result.alreadyApproved) return NextResponse.json({ success: true, message: 'Đơn hàng đã được duyệt trước đó.' })
+    if (result.invalid) return NextResponse.json({ success: false, error: `Chưa thể duyệt đơn nháp do thiếu hoặc sai thông tin: ${result.invalid.join(', ')}`, missingFields: result.invalid }, { status: 422 })
+    return NextResponse.json({ success: true, message: `Đã duyệt thành công ${result.count} dòng hàng của PI [${result.piNumber}].` })
   } catch (err) {
     console.error('[POST /api/orders/[id]/approve]', err)
     return NextResponse.json({ success: false, error: 'Lỗi server khi duyệt đơn nháp.' }, { status: 500 })

@@ -3,232 +3,204 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
-import { updateOrderSchema } from '@/lib/validations/order'
+import type { ParsedOrder } from '@/types'
+import {
+  approvedOrderStateSchema,
+  draftOrderStateSchema,
+  updateOrderSchema,
+} from '@/lib/validations/order'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
 
 type RouteContext = { params: { id: string } }
 
-// ── Helper: extract & validate id ─────────────────────────────────────────
+function getId(ctx: RouteContext): string { return ctx.params.id }
 
-function getId(ctx: RouteContext): string {
-  return ctx.params.id
+function isoDate(value: Date | null | undefined): string | null {
+  return value ? value.toISOString().slice(0, 10) : null
 }
 
-// ── GET /api/orders/[id] ───────────────────────────────────────────────────
+function numberOrNull(value: unknown): number | null {
+  if (value == null) return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
 
-export async function GET(
-  _req: NextRequest,
-  context: RouteContext,
-) {
-  const id = getId(context)
-
-  try {
-    const order = await prisma.productionOrder.findUnique({ 
-      where: { id },
-      include: { assignments: { select: { startDate: true, endDate: true } } },
-    })
-
-    if (!order) {
-      return NextResponse.json(
-        { success: false, error: 'Order not found.' },
-        { status: 404 },
-      )
-    }
-
-    return NextResponse.json({ success: true, order })
-  } catch (err) {
-    console.error(`[GET /api/orders/${id}] Error:`, err)
-    return NextResponse.json(
-      { success: false, error: 'Server error fetching order.' },
-      { status: 500 },
-    )
+function orderState(order: Awaited<ReturnType<typeof prisma.productionOrder.findUniqueOrThrow>>, overrides: Record<string, unknown> = {}): ParsedOrder {
+  return {
+    piNumber: String(overrides.piNumber ?? order.piNumber),
+    subLineIndex: Number(overrides.subLineIndex ?? order.subLineIndex),
+    customer: String(overrides.customer ?? order.customer),
+    orderDate: String(overrides.orderDate ?? isoDate(order.orderDate)),
+    widthM: (overrides.widthM !== undefined ? overrides.widthM : order.widthM) as number,
+    lengthM: (overrides.lengthM !== undefined ? overrides.lengthM : order.lengthM) as number | null,
+    gsm: (overrides.gsm !== undefined ? overrides.gsm : order.gsm) as number,
+    color: (overrides.color !== undefined ? overrides.color : order.color) as string,
+    productionGsm: (overrides.productionGsm !== undefined ? overrides.productionGsm : order.productionGsm) as number | null,
+    orderType: String(overrides.orderType ?? order.orderType) as ParsedOrder['orderType'],
+    qty: (overrides.qty !== undefined ? overrides.qty : order.qty) as number | null,
+    rollLength: numberOrNull(overrides.rollLength !== undefined ? overrides.rollLength : order.rollLength),
+    pieceLength: numberOrNull(overrides.pieceLength !== undefined ? overrides.pieceLength : order.pieceLength),
+    uvPct: numberOrNull(overrides.uvPct !== undefined ? overrides.uvPct : order.uvPct),
+    frFlag: (overrides.frFlag !== undefined ? overrides.frFlag : order.frFlag) === true,
+    frPct: numberOrNull(overrides.frPct !== undefined ? overrides.frPct : order.frPct),
+    description: (overrides.description !== undefined ? overrides.description : order.description) as string | null,
+    remark: (overrides.remark !== undefined ? overrides.remark : order.remark) as string | null,
+    mbCode: (overrides.mbCode !== undefined ? overrides.mbCode : order.mbCode) as string | null,
+    meshType: (overrides.meshType !== undefined ? overrides.meshType : order.meshType) as string | null,
+    needleCount: (overrides.needleCount !== undefined ? overrides.needleCount : order.needleCount) as number | null,
+    beamCount: (overrides.beamCount !== undefined ? overrides.beamCount : order.beamCount) as number | null,
+    lineNote: (overrides.lineNote !== undefined ? overrides.lineNote : order.lineNote) as string | null,
+    requiresPacking: (overrides.requiresPacking !== undefined ? overrides.requiresPacking : order.requiresPacking) === true,
+    deliveryDate: overrides.deliveryDate !== undefined
+      ? (overrides.deliveryDate ? String(overrides.deliveryDate) : null)
+      : isoDate(order.deliveryDate),
+    containerSize: (overrides.containerSize !== undefined ? overrides.containerSize : order.containerSize) as string | null,
+    hasEyelet: (overrides.hasEyelet !== undefined ? overrides.hasEyelet : order.hasEyelet) === true,
+    eyeletColor: (overrides.eyeletColor !== undefined ? overrides.eyeletColor : order.eyeletColor) as string | null,
+    eyeletLines: (overrides.eyeletLines !== undefined ? overrides.eyeletLines : order.eyeletLines) as number | null,
+    eyeletSpec: (overrides.eyeletSpec !== undefined ? overrides.eyeletSpec : order.eyeletSpec) as string | null,
   }
 }
 
-// ── PATCH /api/orders/[id] ─────────────────────────────────────────────────
+function isStaleTimestamp(expected: string | undefined, actual: Date): boolean {
+  return expected != null && new Date(expected).getTime() !== actual.getTime()
+}
 
-export async function PATCH(
-  req: NextRequest,
-  context: RouteContext,
-) {
+export async function GET(_req: NextRequest, context: RouteContext) {
   const id = getId(context)
+  try {
+    const order = await prisma.productionOrder.findUnique({
+      where: { id },
+      include: { assignments: { select: { startDate: true, endDate: true } } },
+    })
+    if (!order) return NextResponse.json({ success: false, error: 'Order not found.' }, { status: 404 })
+    return NextResponse.json({ success: true, order })
+  } catch (err) {
+    console.error(`[GET /api/orders/${id}] Error:`, err)
+    return NextResponse.json({ success: false, error: 'Server error fetching order.' }, { status: 500 })
+  }
+}
 
-  // 1. Parse body
+export async function PATCH(req: NextRequest, context: RouteContext) {
+  const id = getId(context)
   let body: unknown
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json(
-      { success: false, error: 'Invalid JSON in request body.' },
-      { status: 400 },
-    )
+    return NextResponse.json({ success: false, error: 'Invalid JSON in request body.' }, { status: 400 })
   }
-
-  // 2. Server-side Zod validation
   const parsed = updateOrderSchema.safeParse(body)
   if (!parsed.success) {
-    const messages = parsed.error.issues
-      .map((e) => `${String(e.path.join('.'))}: ${e.message}`)
-      .join('; ')
-    return NextResponse.json(
-      { success: false, error: `Validation failed — ${messages}` },
-      { status: 422 },
-    )
+    const messages = parsed.error.issues.map((issue) => `${String(issue.path.join('.'))}: ${issue.message}`).join('; ')
+    return NextResponse.json({ success: false, error: `Validation failed — ${messages}` }, { status: 422 })
   }
-
   const data = parsed.data
 
-  // 3. Build the update payload explicitly so null values are preserved
-  //    (clearing optional fields) and dates are converted correctly.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const updateData: Record<string, any> = {}
-
-  if (data.piNumber !== undefined)     updateData.piNumber = data.piNumber
-  if (data.subLineIndex !== undefined) updateData.subLineIndex = data.subLineIndex
-  if (data.customer !== undefined)     updateData.customer = data.customer
-  if ('customerId' in data)            updateData.customerId = data.customerId
-  if (data.orderDate !== undefined)    updateData.orderDate = new Date(data.orderDate)
-  if (data.widthM !== undefined)       updateData.widthM = data.widthM
-  if (data.lengthM !== undefined)      updateData.lengthM = data.lengthM
-  if (data.gsm !== undefined)          updateData.gsm = data.gsm
-  if ('productionGsm' in data)         updateData.productionGsm = data.productionGsm
-  if (data.color !== undefined)        updateData.color = data.color
-  // Optional nullable fields — undefined = not sent (skip), null = clear value
-  if ('qty' in data)         updateData.qty = data.qty
-  if ('uvPct' in data)       updateData.uvPct = data.uvPct
-  if ('frPct' in data) {
-    updateData.frPct = data.frPct
-    updateData.frFlag = data.frPct != null ? data.frPct > 0 : false
-  } else if (data.frFlag !== undefined) {
-    updateData.frFlag = data.frFlag
-  }
-  if ('description' in data) updateData.description = data.description
-  if ('remark' in data)      updateData.remark = data.remark
-  if ('lineNote' in data)    updateData.lineNote = data.lineNote
-  if (data.requiresPacking !== undefined) updateData.requiresPacking = data.requiresPacking
-  if ('deliveryDate' in data) updateData.deliveryDate = data.deliveryDate ? new Date(data.deliveryDate) : null
-  if ('containerSize' in data) updateData.containerSize = data.containerSize
-
-  // Technical specs
-  if ('meshType' in data)    updateData.meshType    = data.meshType
-  if ('needleCount' in data) updateData.needleCount = data.needleCount
-  if ('beamCount' in data)   updateData.beamCount   = data.beamCount
-  // Mã Masterbatch màu
-  if ('mbCode' in data)      updateData.mbCode      = data.mbCode
-  // Kiểu đơn hàng
-  if (data.orderType !== undefined) updateData.orderType = data.orderType
-  if ('rollLength' in data)  updateData.rollLength  = data.rollLength
-  if ('pieceLength' in data) updateData.pieceLength = data.pieceLength
-  // Eyelet
-  if (data.hasEyelet !== undefined) updateData.hasEyelet = data.hasEyelet
-  if ('eyeletColor' in data)  updateData.eyeletColor  = data.eyeletColor
-  if ('eyeletLines' in data)  updateData.eyeletLines  = data.eyeletLines
-  if ('eyeletSpec' in data)   updateData.eyeletSpec   = data.eyeletSpec
-
-  // 4. Recalculate weight if any relevant field changed
-  const weightFields = ['widthM', 'lengthM', 'gsm', 'productionGsm', 'qty', 'rollLength', 'pieceLength', 'orderType']
-  const weightFieldChanged = weightFields.some(f => f in updateData || f in data)
-
-  if (weightFieldChanged) {
-    // Fetch current values so we can fill in whichever fields weren't sent in this patch
-    const current = await prisma.productionOrder.findUnique({
-      where: { id },
-      select: { widthM: true, lengthM: true, gsm: true, productionGsm: true, qty: true, rollLength: true, pieceLength: true, orderType: true },
-    })
-    if (current) {
-      const { totalMeters, qtySqm, totalWeightKgs, requiredYarnKg } = calculateOrderWeight({
-        orderType:     (updateData.orderType   ?? current.orderType)   as string,
-        widthM:        (updateData.widthM      ?? current.widthM)      as number,
-        lengthM:       (updateData.lengthM     ?? current.lengthM)     as number,
-        gsm:           (updateData.gsm         ?? current.gsm)         as number,
-        productionGsm: (updateData.productionGsm !== undefined ? updateData.productionGsm : current.productionGsm) as number | null,
-        qty:           (updateData.qty         ?? current.qty)         as number | null,
-        rollLength:    (updateData.rollLength !== undefined ? updateData.rollLength : current.rollLength != null ? Number(current.rollLength) : null) as number | null,
-        pieceLength:   (updateData.pieceLength !== undefined ? updateData.pieceLength : current.pieceLength != null ? Number(current.pieceLength) : null) as number | null,
-      })
-      updateData.qtySqm         = qtySqm
-      updateData.totalWeightKgs = totalWeightKgs
-      updateData.requiredYarnKg = requiredYarnKg
-      const effectiveOrderType = (updateData.orderType ?? current.orderType) as string
-      if (totalMeters != null && effectiveOrderType !== 'meters') {
-        updateData.lengthM = totalMeters
-      }
-    }
-  }
-
-  // 5. Update in DB
   try {
-    const order = await prisma.productionOrder.update({
-      where: { id },
-      data: updateData,
-    })
+    const result = await prisma.$transaction(async (tx) => {
+      const current = await tx.productionOrder.findUnique({ where: { id } })
+      if (!current) return { notFound: true as const }
+      if (isStaleTimestamp(data.expectedUpdatedAt, current.updatedAt)) return { stale: true as const }
 
-    return NextResponse.json({ success: true, order })
+      const overrides: Record<string, unknown> = {}
+      for (const field of [
+        'piNumber', 'subLineIndex', 'customer', 'orderDate', 'widthM', 'lengthM', 'gsm',
+        'productionGsm', 'color', 'qty', 'uvPct', 'frFlag', 'frPct', 'description', 'remark',
+        'lineNote', 'requiresPacking', 'deliveryDate', 'containerSize', 'meshType', 'needleCount',
+        'beamCount', 'mbCode', 'orderType', 'rollLength', 'pieceLength', 'hasEyelet',
+        'eyeletColor', 'eyeletLines', 'eyeletSpec',
+      ]) {
+        if (field in data) overrides[field] = (data as Record<string, unknown>)[field]
+      }
+      if ('orderDate' in overrides && overrides.orderDate) overrides.orderDate = String(overrides.orderDate)
+
+      const state = orderState(current, overrides)
+      const finalResult = current.isDraft
+        ? draftOrderStateSchema.safeParse(state)
+        : approvedOrderStateSchema.safeParse(state)
+      if (!finalResult.success) {
+        const messages = finalResult.error.issues.map((issue) => `${String(issue.path.join('.'))}: ${issue.message}`).join('; ')
+        return { invalid: messages }
+      }
+
+      const validated = finalResult.data
+      const calculation = calculateOrderWeight({
+        orderType: validated.orderType ?? 'meters',
+        widthM: validated.widthM ?? null,
+        lengthM: validated.lengthM ?? null,
+        gsm: validated.gsm ?? null,
+        productionGsm: validated.productionGsm ?? null,
+        qty: validated.qty ?? null,
+        rollLength: validated.rollLength ?? null,
+        pieceLength: validated.pieceLength ?? null,
+      })
+      const updateData: Record<string, unknown> = {
+        piNumber: validated.piNumber,
+        subLineIndex: validated.subLineIndex,
+        customer: validated.customer,
+        orderDate: new Date(`${validated.orderDate}T00:00:00.000Z`),
+        widthM: validated.widthM ?? null,
+        lengthM: calculation.totalMeters,
+        gsm: validated.gsm ?? null,
+        productionGsm: validated.productionGsm ?? null,
+        color: validated.color ?? null,
+        qty: validated.qty ?? null,
+        uvPct: validated.uvPct ?? null,
+        frFlag: validated.frFlag ?? false,
+        frPct: validated.frPct ?? null,
+        description: validated.description ?? null,
+        remark: validated.remark ?? null,
+        lineNote: validated.lineNote ?? null,
+        requiresPacking: validated.requiresPacking ?? false,
+        deliveryDate: validated.deliveryDate ? new Date(`${validated.deliveryDate}T00:00:00.000Z`) : null,
+        containerSize: validated.containerSize ?? null,
+        meshType: validated.meshType ?? null,
+        needleCount: validated.needleCount ?? null,
+        beamCount: validated.beamCount ?? null,
+        mbCode: validated.mbCode ?? null,
+        orderType: validated.orderType ?? 'meters',
+        rollLength: validated.rollLength ?? null,
+        pieceLength: validated.pieceLength ?? null,
+        hasEyelet: validated.hasEyelet ?? false,
+        eyeletColor: validated.eyeletColor ?? null,
+        eyeletLines: validated.eyeletLines ?? null,
+        eyeletSpec: validated.eyeletSpec ?? null,
+        qtySqm: calculation.qtySqm,
+        totalWeightKgs: calculation.totalWeightKgs,
+        requiredYarnKg: calculation.requiredYarnKg,
+      }
+      const updatedCount = await tx.productionOrder.updateMany({ where: { id, updatedAt: current.updatedAt }, data: updateData })
+      if (updatedCount.count !== 1) return { stale: true as const }
+      const order = await tx.productionOrder.findUnique({ where: { id } })
+      return { order }
+    }, { timeout: 30_000, maxWait: 5_000 })
+
+    if ('notFound' in result && result.notFound) return NextResponse.json({ success: false, error: 'Order not found.' }, { status: 404 })
+    if ('stale' in result && result.stale) return NextResponse.json({ success: false, error: 'Đơn hàng đã được thay đổi. Vui lòng tải lại trước khi lưu.', code: 'STALE_PREVIEW' }, { status: 409 })
+    if ('invalid' in result) return NextResponse.json({ success: false, error: `Không thể lưu đơn hàng: ${result.invalid}` }, { status: 422 })
+    return NextResponse.json({ success: true, order: result.order })
   } catch (err: unknown) {
-    // P2025 = record not found
-    if (
-      err !== null &&
-      typeof err === 'object' &&
-      'code' in err &&
-      (err as { code: string }).code === 'P2025'
-    ) {
-      return NextResponse.json(
-        { success: false, error: 'Order not found.' },
-        { status: 404 },
-      )
+    if (err !== null && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2025') {
+      return NextResponse.json({ success: false, error: 'Order not found.' }, { status: 404 })
     }
-    // P2002 = unique constraint (piNumber + subLineIndex clash)
-    if (
-      err !== null &&
-      typeof err === 'object' &&
-      'code' in err &&
-      (err as { code: string }).code === 'P2002'
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'That PI Number and sub-line combination already exists on another order.',
-        },
-        { status: 409 },
-      )
+    if (err !== null && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2002') {
+      return NextResponse.json({ success: false, error: 'That PI Number and sub-line combination already exists on another order.' }, { status: 409 })
     }
-
     console.error(`[PATCH /api/orders/${id}] Unexpected error:`, err)
-    return NextResponse.json(
-      { success: false, error: 'An unexpected server error occurred.' },
-      { status: 500 },
-    )
+    return NextResponse.json({ success: false, error: 'An unexpected server error occurred.' }, { status: 500 })
   }
 }
 
-// ── DELETE /api/orders/[id] ────────────────────────────────────────────────
-
-export async function DELETE(
-  _req: NextRequest,
-  context: RouteContext,
-) {
+export async function DELETE(_req: NextRequest, context: RouteContext) {
   const id = getId(context)
-
   try {
     await prisma.productionOrder.delete({ where: { id } })
     return NextResponse.json({ success: true })
   } catch (err: unknown) {
-    if (
-      err !== null &&
-      typeof err === 'object' &&
-      'code' in err &&
-      (err as { code: string }).code === 'P2025'
-    ) {
-      return NextResponse.json(
-        { success: false, error: 'Order not found.' },
-        { status: 404 },
-      )
+    if (err !== null && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2025') {
+      return NextResponse.json({ success: false, error: 'Order not found.' }, { status: 404 })
     }
-
     console.error(`[DELETE /api/orders/${id}] Unexpected error:`, err)
-    return NextResponse.json(
-      { success: false, error: 'An unexpected server error occurred.' },
-      { status: 500 },
-    )
+    return NextResponse.json({ success: false, error: 'An unexpected server error occurred.' }, { status: 500 })
   }
 }

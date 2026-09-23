@@ -246,7 +246,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
     try {
       const res = await fetch(`/api/orders/${currentOrder.id}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
+        body: JSON.stringify({ ...values, expectedUpdatedAt: currentOrder.updatedAt }),
       })
       const json = await res.json()
       if (!res.ok || !json.success) { setSaveError(json.error ?? 'An unknown error occurred.'); return }
@@ -542,7 +542,13 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
               Optional details
             </p>
             <dl className="grid grid-cols-1 sm:grid-cols-2 gap-y-lg gap-x-xl">
-              {currentOrder.qty != null && <ViewField label="Quantity (rolls)" value={currentOrder.qty} mono />}
+              {currentOrder.qty != null && (
+                <ViewField
+                  label={currentOrder.orderType === 'pieces' ? 'Quantity (pieces)' : 'Quantity (rolls)'}
+                  value={currentOrder.qty}
+                  mono
+                />
+              )}
               {currentOrder.uvPct != null && (
                 <ViewField label="UV %" value={`${parseFloat(currentOrder.uvPct).toFixed(2)}%`} mono />
               )}
@@ -727,10 +733,10 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
             <input id="edit-containerSize" type="text" className={inputCls(false, !!errors.containerSize)} {...register('containerSize')} />
           </FormField>
           <FormField label="Width (m)"   required error={errors.widthM?.message}>
-            <input id="edit-widthM" type="number" min={0.1} max={20} step={0.1} className={inputCls(true, !!errors.widthM)} {...register('widthM', { valueAsNumber: true })} />
+            <input id="edit-widthM" type="number" min={0.1} max={20} step={0.1} className={inputCls(true, !!errors.widthM)} {...register('widthM', { setValueAs: (v: string | number) => (v === '' || v == null || Number.isNaN(Number(v))) ? null : Number(v) })} />
           </FormField>
           <FormField label="Length (m)"  required={editOrderType === 'meters'} error={errors.lengthM?.message}>
-            <input id="edit-lengthM" type="number" min={1} max={100000} step={1} className={inputCls(true, !!errors.lengthM)} {...register('lengthM', { valueAsNumber: true })} />
+            <input id="edit-lengthM" type="number" min={1} max={100000} step={1} className={inputCls(true, !!errors.lengthM)} {...register('lengthM', { setValueAs: (v: string | number) => (v === '' || v == null || Number.isNaN(Number(v))) ? null : Number(v) })} />
           </FormField>
           <FormField label="Kiểu đơn" error={errors.orderType?.message}>
             <select id="edit-orderType" className={inputCls(false, false)} {...register('orderType')}>
@@ -739,6 +745,22 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
               <option value="pieces">Gia công tấm (qty × chiều dài tấm)</option>
             </select>
           </FormField>
+          {(editOrderType === 'rolls' || editOrderType === 'pieces') && (
+            <FormField
+              label={editOrderType === 'rolls' ? 'Số cuộn' : 'Số tấm'}
+              error={errors.qty?.message}
+              hint={editOrderType === 'rolls' ? 'Số cuộn trong đơn' : 'Số tấm trong đơn'}
+            >
+              <input
+                id="edit-qty"
+                type="number"
+                min={1}
+                step={1}
+                className={inputCls(true, !!errors.qty)}
+                {...register('qty', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })}
+              />
+            </FormField>
+          )}
           {editOrderType === 'rolls' && (
             <FormField label="Mét/cuộn" error={errors.rollLength?.message} hint="Số mét mỗi cuộn">
               <input id="edit-rollLength" type="number" min={0.1} step={0.01} className={inputCls(true, !!errors.rollLength)}
@@ -766,7 +788,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
             </FormField>
           )}
           <FormField label="GSM (đơn hàng)" required error={errors.gsm?.message}>
-            <input id="edit-gsm" type="number" min={1} max={500} step={1} className={inputCls(true, !!errors.gsm)} {...register('gsm', { valueAsNumber: true })} />
+            <input id="edit-gsm" type="number" min={1} max={500} step={1} className={inputCls(true, !!errors.gsm)} {...register('gsm', { setValueAs: (v: string | number) => (v === '' || v == null || Number.isNaN(Number(v))) ? null : Number(v) })} />
           </FormField>
           <FormField label="GSM sản xuất (thực tế)" error={errors.productionGsm?.message} hint="Để trống nếu = GSM đơn">
             <input id="edit-productionGsm" type="number" min={1} max={500} step={1} className={inputCls(true, !!errors.productionGsm)} {...register('productionGsm', { setValueAs: (v: string | number) => (v === '' || isNaN(Number(v)) ? null : Number(v)) })} />
@@ -792,9 +814,11 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
           Optional fields
         </h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-[24px] gap-y-lg bg-surface-container-low border-[0.5px] border-outline-variant rounded-lg p-lg">
-          <FormField label="Quantity (rolls)" error={errors.qty?.message}>
-            <input id="edit-qty" type="number" min={1} step={1} className={inputCls(true, !!errors.qty)} {...register('qty', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
-          </FormField>
+          {editOrderType === 'meters' && (
+            <FormField label="Quantity" error={errors.qty?.message} hint="Không dùng để tính tổng mét">
+              <input id="edit-qty-meters" type="number" min={1} step={1} className={inputCls(true, !!errors.qty)} {...register('qty', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
+            </FormField>
+          )}
           <FormField label="UV %" error={errors.uvPct?.message}>
             <input id="edit-uvPct" type="number" min={0} max={100} step={0.01} className={inputCls(true, !!errors.uvPct)} {...register('uvPct', { valueAsNumber: true })} />
           </FormField>

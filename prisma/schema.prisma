@@ -137,6 +137,8 @@ model Material {
   color        String?  // Dùng chủ yếu cho nhóm MB
   brand        String?  // Hãng sản xuất (cho nhóm MB)
   currentStock Decimal  @db.Decimal(10, 2)  // kg hiện có
+  stockReportDate DateTime? @db.Date
+  stockReportDirty Boolean @default(false)
   minThreshold Decimal? @db.Decimal(10, 2)  // ngưỡng tối thiểu cảnh báo — null = chưa đặt ngưỡng
   unit         String   @default("kg")
   note         String?
@@ -144,8 +146,26 @@ model Material {
   updatedAt    DateTime @updatedAt
 
   transactions MaterialTransaction[]
+  reportSnapshots MaterialReportSnapshot[]
 
   @@map("materials")
+}
+
+model MaterialReportSnapshot {
+  id           String   @id @default(cuid())
+  materialId   String
+  material     Material @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  reportDate   DateTime @db.Date
+  payload      Json
+  contentHash  String
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  transactions MaterialTransaction[]
+
+  @@unique([materialId, reportDate])
+  @@map("material_report_snapshots")
 }
 
 model MachineAssignment {
@@ -193,12 +213,16 @@ model MaterialTransaction {
   mbPct      Decimal? @db.Decimal(5, 2)    // % MB trên 1 tấn nhựa (chỉ dùng cho loại MB)
   orderId    String?                        // link đơn hàng nếu có (optional)
   note       String?
+  reportSnapshotId String?
+  reportSnapshot MaterialReportSnapshot? @relation(fields: [reportSnapshotId], references: [id], onDelete: Restrict)
 
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   @@index([materialId])
   @@index([txDate])
+  @@index([reportSnapshotId])
+  @@index([materialId, txDate])
   @@map("material_transactions")
 }
 
@@ -408,4 +432,3 @@ model PackingDailyOutput {
   @@map("packing_daily_outputs")
   @@index([date])
 }
-
