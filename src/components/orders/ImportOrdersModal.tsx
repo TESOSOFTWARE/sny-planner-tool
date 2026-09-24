@@ -383,9 +383,9 @@ export default function ImportOrdersModal() {
                               <td className="px-sm py-xs text-body-md font-noto text-on-surface whitespace-nowrap max-w-[140px] truncate">{row.customer || <span className="text-rose-500 italic">Trống</span>}</td>
                               <td className="px-sm py-xs font-mono text-type-mono text-on-surface-variant whitespace-nowrap tabular-nums">{formatDate(row.orderDate)}</td>
                               <td className="px-sm py-xs text-right font-mono text-type-mono text-on-surface tabular-nums">{row.widthM || <span className="text-rose-500 italic">0</span>}</td>
-                              <td className="px-sm py-xs text-right font-mono text-type-mono text-on-surface tabular-nums">
+                              <td className="px-sm py-xs text-right font-mono text-type-mono text-on-surface tabular-nums" suppressHydrationWarning>
                                 {row.lengthM != null
-                                  ? row.lengthM.toLocaleString()
+                                  ? row.lengthM.toLocaleString('vi-VN')
                                   : row.orderType === 'meters'
                                   ? <span className="text-rose-500 italic">0</span>
                                   : <span className="text-outline">—</span>}
@@ -398,7 +398,7 @@ export default function ImportOrdersModal() {
                                   : <span className="text-outline">—</span>}
                               </td>
                               <td className="px-sm py-xs font-mono text-type-mono text-on-surface-variant tabular-nums">
-                                {row.uvPct != null ? `${(row.uvPct * 100).toFixed(1)}%` : '—'}
+                                {row.uvPct != null ? `${Number(row.uvPct).toFixed(1)}%` : '—'}
                               </td>
                               <td className="px-sm py-xs text-secondary max-w-[420px]" title={formatAdditionalFields(row)}>
                                 {formatAdditionalFields(row)}

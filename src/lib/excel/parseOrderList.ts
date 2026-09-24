@@ -21,6 +21,33 @@ function safeNum(v: unknown): number | null {
   return isNaN(n) ? null : n
 }
 
+export function normalizeUvPct(v: unknown): number | null {
+  if (v == null) return null
+  if (v instanceof Date) return null
+  if (typeof v === 'string') {
+    const trimmed = v.trim()
+    if (!trimmed) return null
+    if (trimmed.endsWith('%')) {
+      const num = parseFloat(trimmed.replace('%', '').trim())
+      return isNaN(num) ? null : Math.max(0, Math.min(100, num))
+    }
+    const num = parseFloat(trimmed)
+    if (isNaN(num)) return null
+    if (num > 0 && num <= 1) {
+      return Math.round(num * 10000) / 100
+    }
+    return Math.max(0, Math.min(100, num))
+  }
+  if (typeof v === 'number') {
+    if (isNaN(v)) return null
+    if (v > 0 && v <= 1) {
+      return Math.round(v * 10000) / 100
+    }
+    return Math.max(0, Math.min(100, v))
+  }
+  return null
+}
+
 function safeInt(v: unknown): number | null {
   const n = safeNum(v)
   return n == null ? null : n
@@ -205,7 +232,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
     }
 
     const qty = safeInt(get(qtyColIdx))
-    const uvPct = safeNum(get(uvColIdx))
+    const uvPct = normalizeUvPct(get(uvColIdx))
     const frFlag = safeBool(get(frColIdx))
     const frPct = safeNum(get(frPctColIdx))
     const description = safeStr(get(descColIdx))
@@ -406,9 +433,17 @@ function effectiveLength(row: ParsedOrder | ProductionOrder): number | null {
   return normalizedNumber(row.lengthM)
 }
 
+function extractCustomerName(row: ParsedOrder | ProductionOrder): string | null {
+  if (!row) return null
+  const raw = (row as any).customer
+  if (typeof raw === 'string') return raw
+  if (raw && typeof raw === 'object' && typeof raw.name === 'string') return raw.name
+  return null
+}
+
 function comparisonValues(row: ParsedOrder | ProductionOrder): Record<ImportComparisonField, unknown> {
   return {
-    customer: normalizedText(row.customer, true),
+    customer: normalizedText(extractCustomerName(row), true),
     orderDate: normalizedDate(row.orderDate),
     widthM: normalizedNumber(row.widthM),
     lengthM: effectiveLength(row),

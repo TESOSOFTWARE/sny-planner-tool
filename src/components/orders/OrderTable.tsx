@@ -244,8 +244,8 @@ export default function OrderTable({ orders }: OrderTableProps) {
                       </td>
 
                       {/* Length */}
-                      <td className="px-md py-sm text-right text-type-mono font-mono text-on-surface tabular-nums">
-                        {order.lengthM != null ? Number(order.lengthM).toLocaleString() : <span className="text-outline italic">—</span>}
+                      <td className="px-md py-sm text-right text-type-mono font-mono text-on-surface tabular-nums" suppressHydrationWarning>
+                        {order.lengthM != null ? Number(order.lengthM).toLocaleString('vi-VN') : <span className="text-outline italic">—</span>}
                       </td>
 
                       {/* GSM */}

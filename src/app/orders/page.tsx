@@ -26,8 +26,8 @@ function KpiCard({ label, value, icon }: { label: string; value: number; icon: s
         </span>
         <span className="material-symbols-outlined text-[20px] text-outline">{icon}</span>
       </div>
-      <p className="text-headline-lg font-inter font-semibold text-on-surface tabular-nums">
-        {value.toLocaleString()}
+      <p className="text-headline-lg font-inter font-semibold text-on-surface tabular-nums" suppressHydrationWarning>
+        {value.toLocaleString('vi-VN')}
       </p>
     </div>
   )

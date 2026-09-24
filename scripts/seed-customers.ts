@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client'
+import { findCustomerMatch } from '../src/lib/customers/matching'
 
 const prisma = new PrismaClient()
 
@@ -37,16 +38,25 @@ async function main() {
   console.log(`Tìm thấy ${customerNames.length} khách hàng độc nhất (không phân biệt hoa thường):`)
   customerNames.forEach(name => console.log(`- ${name}`))
 
-  // 2. Tạo hoặc tìm khách hàng
+  // 2. Tạo hoặc tìm khách hàng bằng matching module an toàn
   console.log('\nBắt đầu cập nhật...')
   
+  const allExistingCustomers = await prisma.customer.findMany()
+
   let createdCount = 0
   let linkedCount = 0
   for (const name of customerNames) {
     const trimmed = name.trim()
-    const customer = await prisma.customer.findFirst({
-      where: { name: { equals: trimmed, mode: 'insensitive' } },
-    })
+    const match = findCustomerMatch(trimmed, allExistingCustomers)
+
+    let customer: { id: string; name: string } | null = null
+
+    if (match.status === 'MATCHED') {
+      customer = match.customer
+    } else if (match.status === 'AMBIGUOUS') {
+      console.warn(`[!] Trùng tên mơ hồ (${trimmed}): ${match.reason} -> Bỏ qua, yêu cầu xử lý thủ công!`)
+      continue
+    }
 
     const unlinkedWhere = {
       customer: { equals: trimmed, mode: 'insensitive' as const },

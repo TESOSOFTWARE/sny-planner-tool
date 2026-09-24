@@ -265,7 +265,7 @@ export default function BulkPastePage() {
                             )}
                           </td>
                           <td className="px-md py-sm font-mono text-type-mono text-on-surface-variant tabular-nums">
-                            {o.uvPct != null ? `${(o.uvPct * 100).toFixed(1)}%` : '—'}
+                            {o.uvPct != null ? `${Number(o.uvPct).toFixed(1)}%` : '—'}
                           </td>
                           <td className="px-md py-sm text-right font-mono text-type-mono text-on-surface tabular-nums">
                             {o.qty != null ? o.qty : '—'}

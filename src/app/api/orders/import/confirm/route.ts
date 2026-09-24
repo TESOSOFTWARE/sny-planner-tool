@@ -10,6 +10,7 @@ import type { OrderImportDecision, OrderImportSummary, ParsedOrder } from '@/typ
 import { prisma } from '@/lib/db'
 import { classifyOrderImport } from '@/lib/excel/parseOrderList'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
+import { findCustomerMatch } from '@/lib/customers/matching'
 import { MAX_IMPORTED_ORDER_ROWS } from '@/lib/validations/order'
 
 const importEnvelopeSchema = z.object({
@@ -142,21 +143,27 @@ export async function POST(req: NextRequest) {
           .map((row) => String(row.customer ?? '').trim())
           .filter(Boolean),
       ))
-      const customers = customerNames.length > 0
-        ? await tx.customer.findMany({ where: { name: { in: customerNames, mode: 'insensitive' } }, select: { id: true, name: true } })
-        : []
-      const customerByName = new Map<string, string>()
-      const ambiguousNames = new Set<string>()
-      for (const customer of customers) {
-        const key = normalizedName(customer.name)
-        if (customerByName.has(key)) ambiguousNames.add(key)
-        else customerByName.set(key, customer.id)
+      const allCustomers = await tx.customer.findMany({ select: { id: true, name: true } })
+      const resolvedCustomerByName = new Map<string, string>()
+      const ambiguousCustomerReasons = new Map<string, string>()
+
+      for (const name of customerNames) {
+        const match = findCustomerMatch(name, allCustomers)
+        if (match.status === 'MATCHED' && match.customer) {
+          resolvedCustomerByName.set(name, match.customer.id)
+        } else if (match.status === 'AMBIGUOUS') {
+          ambiguousCustomerReasons.set(
+            name,
+            match.reason || 'Có nhiều khách hàng trùng tên sau khi chuẩn hóa; không tự chọn bản ghi',
+          )
+        }
       }
+
       rows.forEach((row, index) => {
-        const key = normalizedName(String(row.customer ?? ''))
-        if (ambiguousNames.has(key) && decisions[index].status !== 'invalid') {
+        const name = String(row.customer ?? '').trim()
+        if (ambiguousCustomerReasons.has(name) && decisions[index].status !== 'invalid') {
           decisions[index].status = 'conflict'
-          decisions[index].reasons.push('Có nhiều khách hàng trùng tên sau khi chuẩn hóa; không tự chọn bản ghi')
+          decisions[index].reasons.push(ambiguousCustomerReasons.get(name)!)
         }
       })
 
@@ -165,16 +172,18 @@ export async function POST(req: NextRequest) {
         .filter((index) => index >= 0)
       for (const index of acceptedIndexes) {
         const row = rows[index]
-        const key = normalizedName(String(row.customer ?? ''))
-        if (!customerByName.has(key)) {
-          const customer = await tx.customer.create({ data: { name: String(row.customer).trim() } })
-          customerByName.set(key, customer.id)
+        const name = String(row.customer ?? '').trim()
+        if (!resolvedCustomerByName.has(name) && name) {
+          const created = await tx.customer.create({ data: { name } })
+          resolvedCustomerByName.set(name, created.id)
+          allCustomers.push(created)
         }
       }
 
       const createData = acceptedIndexes.map((index) => {
         const row = rows[index]
-        const customerId = customerByName.get(normalizedName(String(row.customer ?? ''))) ?? null
+        const name = String(row.customer ?? '').trim()
+        const customerId = resolvedCustomerByName.get(name) ?? null
         return buildCreateData(row, customerId)
       })
       if (createData.length > 0) await tx.productionOrder.createMany({ data: createData })

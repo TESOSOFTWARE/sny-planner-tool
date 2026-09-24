@@ -98,7 +98,7 @@ export interface ParsedOrder {
   qty: number | null
   rollLength?: number | null
   pieceLength?: number | null
-  uvPct: number | null     // stored as-is (0.02 = 2%)
+  uvPct: number | null     // percentage 0-100 (e.g. 2.0 = 2%)
   frFlag: boolean
   frPct?: number | null
   description: string | null

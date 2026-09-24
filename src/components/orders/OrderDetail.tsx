@@ -65,7 +65,7 @@ function ViewField({ label, value, mono }: ViewFieldProps) {
   return (
     <div className="flex flex-col gap-xs">
       <dt className="text-label-sm font-inter font-medium text-secondary uppercase tracking-wider">{label}</dt>
-      <dd className={mono ? 'text-type-mono font-mono text-on-surface' : 'text-body-md font-noto text-on-surface'}>
+      <dd className={mono ? 'text-type-mono font-mono text-on-surface' : 'text-body-md font-noto text-on-surface'} suppressHydrationWarning>
         {value ?? <span className="text-outline italic">—</span>}
       </dd>
     </div>
@@ -163,7 +163,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
   useEffect(() => { fetchMachineRows() }, [fetchMachineRows])
   useEffect(() => { fetchProgress() }, [fetchProgress])
 
-  const { register, handleSubmit, reset, watch, formState: { errors, isSubmitting } } =
+  const { register, handleSubmit, reset, watch, setValue, formState: { errors, isSubmitting } } =
     useForm<UpdateOrderInput, unknown, UpdateOrderOutput>({
       resolver: zodResolver(updateOrderSchema),
     })
@@ -178,12 +178,29 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
   const editLengthM      = watch('lengthM')
   const editGsm          = watch('gsm')
 
+  // Live sync lengthM when orderType is rolls or pieces (Read-only Derived)
+  useEffect(() => {
+    if (editOrderType === 'rolls') {
+      const q = Number(editQty)
+      const r = Number(editRollLength)
+      if (q > 0 && r > 0) {
+        setValue('lengthM', q * r, { shouldValidate: true })
+      }
+    } else if (editOrderType === 'pieces') {
+      const q = Number(editQty)
+      const p = Number(editPieceLength)
+      if (q > 0 && p > 0) {
+        setValue('lengthM', q * p, { shouldValidate: true })
+      }
+    }
+  }, [editOrderType, editQty, editRollLength, editPieceLength, setValue])
+
   const editEstimatedTotal = (() => {
     if (editOrderType === 'rolls' && editQty && editRollLength) {
-      return (Number(editQty) * Number(editRollLength)).toLocaleString()
+      return (Number(editQty) * Number(editRollLength)).toLocaleString('vi-VN')
     }
     if (editOrderType === 'pieces' && editQty && editPieceLength) {
-      return (Number(editQty) * Number(editPieceLength)).toLocaleString()
+      return (Number(editQty) * Number(editPieceLength)).toLocaleString('vi-VN')
     }
     return null
   })()
@@ -366,7 +383,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
                   <span className="material-symbols-outlined text-[16px] text-secondary">precision_manufacturing</span>
                   <span className="font-semibold">{row.machineId}</span>
                   {row.allocatedMeters && (
-                    <span className="text-secondary">— {Number(row.allocatedMeters).toLocaleString()}m</span>
+                    <span className="text-secondary" suppressHydrationWarning>— {Number(row.allocatedMeters).toLocaleString('vi-VN')}m</span>
                   )}
                   <span className="text-outline ml-auto text-label-sm">
                     {new Date(row.startDate).toLocaleDateString('en-GB', { day:'2-digit', month:'2-digit' })}
@@ -462,7 +479,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
             <ViewField label="Container size" value={currentOrder.containerSize} />
           )}
           <ViewField label="Width (m)"    value={currentOrder.widthM != null ? Number(currentOrder.widthM).toFixed(1) : null} mono />
-          <ViewField label="Length (m)"   value={currentOrder.lengthM != null ? Number(currentOrder.lengthM).toLocaleString() : null} mono />
+          <ViewField label="Length (m)"   value={currentOrder.lengthM != null ? Number(currentOrder.lengthM).toLocaleString('vi-VN') : null} mono />
           <ViewField label="GSM (đơn hàng)" value={currentOrder.gsm ?? null} mono />
           <ViewField
             label="GSM sản xuất thực tế"
@@ -506,7 +523,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
             'Theo tổng mét'
           } />
           {currentOrder.rollLength != null && (
-            <ViewField label="Mét/cuộn" value={`${parseFloat(currentOrder.rollLength).toLocaleString()} m/cuộn`} mono />
+            <ViewField label="Mét/cuộn" value={`${parseFloat(currentOrder.rollLength).toLocaleString('vi-VN')} m/cuộn`} mono />
           )}
           {currentOrder.pieceLength != null && (
             <ViewField label="Chiều dài tấm" value={`${parseFloat(currentOrder.pieceLength)} m`} mono />
@@ -735,8 +752,36 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
           <FormField label="Width (m)"   required error={errors.widthM?.message}>
             <input id="edit-widthM" type="number" min={0.1} max={20} step={0.1} className={inputCls(true, !!errors.widthM)} {...register('widthM', { setValueAs: (v: string | number) => (v === '' || v == null || Number.isNaN(Number(v))) ? null : Number(v) })} />
           </FormField>
-          <FormField label="Length (m)"  required={editOrderType === 'meters'} error={errors.lengthM?.message}>
-            <input id="edit-lengthM" type="number" min={1} max={100000} step={1} className={inputCls(true, !!errors.lengthM)} {...register('lengthM', { setValueAs: (v: string | number) => (v === '' || v == null || Number.isNaN(Number(v))) ? null : Number(v) })} />
+          <FormField
+            label="Length (m)"
+            required={editOrderType === 'meters'}
+            error={errors.lengthM?.message}
+            hint={
+              editOrderType === 'rolls'
+                ? 'Tự động tính: Số cuộn × Mét/cuộn (Read-only)'
+                : editOrderType === 'pieces'
+                ? 'Tự động tính: Số tấm × Chiều dài tấm (Read-only)'
+                : undefined
+            }
+          >
+            <input
+              id="edit-lengthM"
+              type="number"
+              min={1}
+              max={100000}
+              step={1}
+              readOnly={editOrderType === 'rolls' || editOrderType === 'pieces'}
+              tabIndex={editOrderType === 'rolls' || editOrderType === 'pieces' ? -1 : undefined}
+              className={`${inputCls(true, !!errors.lengthM)} ${
+                editOrderType === 'rolls' || editOrderType === 'pieces'
+                  ? 'bg-surface-container-low text-on-surface-variant cursor-not-allowed opacity-90'
+                  : ''
+              }`}
+              {...register('lengthM', {
+                setValueAs: (v: string | number) =>
+                  v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v),
+              })}
+            />
           </FormField>
           <FormField label="Kiểu đơn" error={errors.orderType?.message}>
             <select id="edit-orderType" className={inputCls(false, false)} {...register('orderType')}>
