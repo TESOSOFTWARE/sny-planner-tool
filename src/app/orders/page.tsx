@@ -38,12 +38,15 @@ function KpiCard({ label, value, icon }: { label: string; value: number; icon: s
 export default async function OrdersPage() {
   let orders: SerializedProductionOrder[] = []
   let fetchError: string | null = null
+  let totalCustomers = 0
 
   try {
     const raw = await prisma.productionOrder.findMany({
       orderBy: { orderDate: 'desc' },
       include: { assignments: { select: { startDate: true, endDate: true } } },
     })
+
+    totalCustomers = await prisma.customer.count()
 
     orders = raw.map((o) => ({
       ...o,
@@ -75,7 +78,6 @@ export default async function OrdersPage() {
     const d = new Date(o.orderDate)
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
   }).length
-  const totalCustomers = new Set(orders.map((o) => o.customer)).size
 
   return (
     <div className="max-w-[1440px] mx-auto px-container-margin py-xl">

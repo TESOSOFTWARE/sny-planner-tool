@@ -95,14 +95,23 @@ export async function POST(request: Request) {
       );
     }
 
-    // Fetch order to check if draft (for isPlaceholder flag)
+    // Fetch order to check lifecycle and placeholder
     const targetOrder = await prisma.productionOrder.findUnique({
       where: { id: orderId },
-      select: { isDraft: true, piNumber: true },
+      select: { isDraft: true, isPlaceholder: true, lifecycleStatus: true, piNumber: true },
     });
 
     if (!targetOrder) {
       return NextResponse.json({ message: "Order not found" }, { status: 404 });
+    }
+
+    // AC-03: Block assignment for pure DRAFT orders
+    const isOrderDraft = targetOrder.lifecycleStatus === 'DRAFT' || (targetOrder.isDraft && targetOrder.lifecycleStatus !== 'PLACEHOLDER' && !targetOrder.isPlaceholder);
+    if (isOrderDraft) {
+      return NextResponse.json(
+        { message: "Không thể xếp lịch máy dệt cho đơn hàng ở trạng thái Bản Nháp (Draft). Vui lòng hoàn thiện thông số hoặc chuyển sang Giữ Chỗ (Placeholder) trước khi xếp lịch." },
+        { status: 422 }
+      );
     }
 
     // Overlap check (applies equally to draft placeholders and official assignments)
@@ -122,14 +131,16 @@ export async function POST(request: Request) {
       );
     }
 
-    // Insert with isPlaceholder = true if order is draft
+    // AC-04: Set isPlaceholder = true for PLACEHOLDER orders (dashed border on 40 loom grid)
+    const isPlaceholder = targetOrder.lifecycleStatus === 'PLACEHOLDER' || targetOrder.isPlaceholder;
+
     const assignment = await prisma.machineAssignment.create({
       data: {
         machineId,
         orderId,
         startDate: start,
         endDate: end,
-        isPlaceholder: targetOrder.isDraft,
+        isPlaceholder,
         ...(allocatedMeters != null && { allocatedMeters }),
         ...(estimatedDailyOutput != null && { estimatedDailyOutput }),
       },

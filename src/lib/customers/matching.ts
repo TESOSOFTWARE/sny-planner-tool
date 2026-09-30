@@ -2,7 +2,7 @@
 // Standardized Customer Matching Module for SNY Planner.
 // Ensures accurate customer reconciliation without arbitrary findFirst picks.
 
-export type CustomerMatchStatus = 'MATCHED' | 'AMBIGUOUS' | 'UNMATCHED'
+export type CustomerMatchStatus = 'MATCHED' | 'NEEDS_REVIEW' | 'AMBIGUOUS' | 'UNMATCHED'
 
 export interface CustomerCandidate {
   id: string
@@ -12,6 +12,8 @@ export interface CustomerCandidate {
 export interface CustomerMatchResult {
   status: CustomerMatchStatus
   customer: CustomerCandidate | null
+  /** Gợi ý gộp khi status là NEEDS_REVIEW (khớp sau khi xóa hậu tố pháp nhân). */
+  suggested?: CustomerCandidate | null
   reason?: string
 }
 
@@ -44,21 +46,14 @@ export function cleanCustomerName(raw: string | null | undefined): string {
 }
 
 /**
- * Standard known aliases for SNY legacy factory customers
- */
-const KNOWN_ALIASES: Record<string, string> = {
-  gromax: 'gromax',
-  sedco: 'sedco',
-  tarpswin: 'tarpswin',
-  interway: 'interway',
-}
-
-/**
  * Finds an exact or safe alias match for a customer from a candidate list.
  * Rules:
- * 1. Exactly 1 match -> MATCHED.
- * 2. 2 or more matches -> AMBIGUOUS (returns null customer, raises warning; never arbitrarily picks one).
- * 3. 0 matches -> UNMATCHED (allows caller to create a new customer if row is valid).
+ * 1. Exactly 1 normalized match (trim + collapse whitespace + case-insensitive) -> MATCHED.
+ * 2. Exactly 1 match only after stripping corporate suffixes (Co., Ltd, Corp, Inc...)
+ *    -> NEEDS_REVIEW with `suggested` set. The caller must ask a human to merge
+ *    or create new; the engine never auto-merges on suffix-stripped names.
+ * 3. 2 or more matches at any tier -> AMBIGUOUS (returns null customer, raises warning).
+ * 4. 0 matches -> UNMATCHED (caller may create a new customer if row is valid).
  */
 export function findCustomerMatch(
   queryName: string | null | undefined,
@@ -85,7 +80,9 @@ export function findCustomerMatch(
     }
   }
 
-  // 2. Cleaned core name match (strips Co., Ltd, Corp, Inc)
+  // 2. Cleaned core name match (strips Co., Ltd, Corp, Inc).
+  // Suffix-stripped matches are NEVER auto-merged: they need human review
+  // (e.g. "LOW" vs "LOWS" or two distinct companies sharing a core name).
   const cleanQuery = cleanCustomerName(queryName)
   if (cleanQuery) {
     const cleanMatches = existingCustomers.filter(
@@ -93,7 +90,12 @@ export function findCustomerMatch(
     )
 
     if (cleanMatches.length === 1) {
-      return { status: 'MATCHED', customer: cleanMatches[0] }
+      return {
+        status: 'NEEDS_REVIEW',
+        customer: null,
+        suggested: cleanMatches[0],
+        reason: `Tên "${queryName}" gần giống khách hiện có "${cleanMatches[0].name}" (khác hậu tố pháp nhân) — cần planner xác nhận gộp hay tạo mới`,
+      }
     }
     if (cleanMatches.length > 1) {
       return {
@@ -102,27 +104,91 @@ export function findCustomerMatch(
         reason: `Tên khách hàng "${queryName}" khớp với nhiều bản ghi khách hàng sau khi chuẩn hóa: ${cleanMatches.map((c) => c.name).join(', ')}`,
       }
     }
-
-    // 3. Known alias dictionary check
-    const aliasKey = KNOWN_ALIASES[cleanQuery]
-    if (aliasKey) {
-      const aliasMatches = existingCustomers.filter((c) => {
-        const cClean = cleanCustomerName(c.name)
-        return cClean === aliasKey || KNOWN_ALIASES[cClean] === aliasKey
-      })
-
-      if (aliasMatches.length === 1) {
-        return { status: 'MATCHED', customer: aliasMatches[0] }
-      }
-      if (aliasMatches.length > 1) {
-        return {
-          status: 'AMBIGUOUS',
-          customer: null,
-          reason: `Khách hàng "${queryName}" trùng với nhiều khách hàng mang alias "${aliasKey}"`,
-        }
-      }
-    }
   }
 
   return { status: 'UNMATCHED', customer: null }
+}
+
+// ── P0-12: planner override resolution (shared by bulk + import confirm) ──
+// Pure helper: same rule as import/confirm — override MERGE:<id> wins,
+// NEEDS_REVIEW without explicit decision becomes a conflict, AMBIGUOUS
+// never auto-picks. Returns planner-facing review lists so the UI can
+// show radios BEFORE anything is written.
+
+export interface CustomerOverrideInput {
+  rowName: string
+  /** `MERGE:<customerId>` reuses an existing customer; 'NEW' forces creation. */
+  decision: string
+}
+
+export interface CustomerReviewItem {
+  name: string
+  suggestedId: string
+  suggestedName: string
+  reason: string
+}
+
+export interface CustomerAmbiguousItem {
+  name: string
+  reason: string
+}
+
+export interface CustomerResolutionResult {
+  /** name -> customerId, ready to link */
+  resolved: Map<string, string>
+  /** name -> reason, rows using these names must be blocked */
+  ambiguous: Map<string, string>
+  /** NEEDS_REVIEW without override — UI must ask */
+  reviews: CustomerReviewItem[]
+  /** AMBIGUOUS without override — UI shows as unresolvable here */
+  blockedAmbiguous: CustomerAmbiguousItem[]
+}
+
+export function resolveCustomerNames(
+  names: string[],
+  existingCustomers: CustomerCandidate[],
+  overrides: CustomerOverrideInput[],
+): CustomerResolutionResult {
+  const resolved = new Map<string, string>()
+  const ambiguous = new Map<string, string>()
+  const reviews: CustomerReviewItem[] = []
+  const blockedAmbiguous: CustomerAmbiguousItem[] = []
+  const customerIdSet = new Set(existingCustomers.map((c) => c.id))
+  const overrideByName = new Map<string, string>()
+  for (const o of overrides) {
+    overrideByName.set(String(o.rowName ?? '').trim(), String(o.decision ?? ''))
+  }
+
+  for (const name of Array.from(new Set(names))) {
+    const override = overrideByName.get(name)
+    if (override && override !== 'NEW') {
+      const mergeId = override.slice('MERGE:'.length)
+      if (customerIdSet.has(mergeId)) {
+        resolved.set(name, mergeId)
+      } else {
+        ambiguous.set(
+          name,
+          `Lựa chọn gộp khách hàng "${name}" trỏ tới bản ghi không tồn tại — vui lòng xem trước lại.`,
+        )
+      }
+      continue
+    }
+    const match = findCustomerMatch(name, existingCustomers)
+    if (match.status === 'MATCHED' && match.customer) {
+      resolved.set(name, match.customer.id)
+    } else if (match.status === 'AMBIGUOUS') {
+      const reason = match.reason || 'Có nhiều khách hàng trùng tên sau khi chuẩn hóa; không tự chọn bản ghi'
+      ambiguous.set(name, reason)
+      blockedAmbiguous.push({ name, reason })
+    } else if (match.status === 'NEEDS_REVIEW' && override !== 'NEW') {
+      const reason = match.reason || `Tên "${name}" cần planner xác nhận gộp hay tạo mới`
+      ambiguous.set(name, reason)
+      if (match.suggested) {
+        reviews.push({ name, suggestedId: match.suggested.id, suggestedName: match.suggested.name, reason })
+      }
+    }
+    // UNMATCHED and explicit NEW fall through: caller creates the customer.
+  }
+
+  return { resolved, ambiguous, reviews, blockedAmbiguous }
 }

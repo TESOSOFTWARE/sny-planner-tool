@@ -62,12 +62,18 @@ export async function PATCH(
     if (orderId && orderId !== existing.orderId) {
       const targetOrder = await prisma.productionOrder.findUnique({
         where: { id: orderId },
-        select: { isDraft: true },
+        select: { isDraft: true, lifecycleStatus: true, isPlaceholder: true },
       });
       if (!targetOrder) {
         return NextResponse.json({ message: "Order not found" }, { status: 404 });
       }
-      isPlaceholder = targetOrder.isDraft;
+      if (targetOrder.lifecycleStatus === 'DRAFT') {
+        return NextResponse.json(
+          { message: "Không thể chuyển lịch sang đơn hàng ở trạng thái Bản Nháp (Draft)." },
+          { status: 422 }
+        );
+      }
+      isPlaceholder = targetOrder.lifecycleStatus === 'PLACEHOLDER' || targetOrder.isPlaceholder;
     }
 
     // Overlap check on target machine and date range, excluding current assignment

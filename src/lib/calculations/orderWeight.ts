@@ -11,6 +11,11 @@ export interface OrderWeightInput {
   qty?: number | null
   rollLength?: number | null
   pieceLength?: number | null
+  // Dual-GSM cho hàng gia công tráng màng ngoài
+  isLaminated?: boolean | null
+  rawFabricGsm?: number | null
+  coatingGsm?: number | null
+  finishedGsm?: number | null
 }
 
 export interface OrderWeightResult {
@@ -58,15 +63,24 @@ export function calculateOrderWeight(input: OrderWeightInput): OrderWeightResult
 
   const qtySqm = input.widthM * totalMeters
 
-  if (!Number.isFinite(qtySqm) || input.gsm == null || !Number.isFinite(input.gsm) || input.gsm <= 0 || input.gsm > 500) {
+  // Xác định GSM thương mại & GSM dệt mộc
+  const commercialGsm = (input.isLaminated && input.finishedGsm && input.finishedGsm > 0)
+    ? input.finishedGsm
+    : input.gsm
+
+  if (!Number.isFinite(qtySqm) || commercialGsm == null || !Number.isFinite(commercialGsm) || commercialGsm <= 0 || commercialGsm > 500) {
     return { totalMeters, qtySqm, totalWeightKgs: null, requiredYarnKg: null }
   }
 
-  // 1. Trọng lượng hiển thị đơn hàng (totalWeightKgs) — dùng gsm đơn hàng gốc
-  const totalWeightKgs = (qtySqm * input.gsm) / 1000
+  // 1. Trọng lượng hiển thị đơn hàng (totalWeightKgs) — dùng commercialGsm (thành phẩm giao khách)
+  const totalWeightKgs = (qtySqm * commercialGsm) / 1000
 
-  // 2. Nhu cầu nguyên liệu sợi nội bộ (requiredYarnKg) — dùng productionGsm nếu có, fallback gsm gốc
-  const effectiveYarnGsm = (input.productionGsm != null && input.productionGsm > 0) ? input.productionGsm : input.gsm
+  // 2. Nhu cầu nguyên liệu sợi nội bộ (requiredYarnKg):
+  // Nếu là đơn tráng màng ngoài → dùng rawFabricGsm (dệt mộc 325) để tính kg sợi mộc
+  // Nếu không → dùng productionGsm nếu có, fallback commercialGsm
+  const effectiveYarnGsm = (input.isLaminated && input.rawFabricGsm && input.rawFabricGsm > 0)
+    ? input.rawFabricGsm
+    : ((input.productionGsm != null && input.productionGsm > 0) ? input.productionGsm : commercialGsm)
   const requiredYarnKg = ((qtySqm * effectiveYarnGsm) / 1000) * 1.05
 
   if (!Number.isFinite(totalWeightKgs) || !Number.isFinite(requiredYarnKg)) {

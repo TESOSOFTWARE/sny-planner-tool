@@ -211,7 +211,7 @@ export default function SchedulePage() {
                               {isPlaceholder && <span className="material-symbols-outlined text-[11px] leading-none shrink-0" style={{ color: colorStyle.textHex }}>push_pin</span>}
                               <span>{assignment.order.piNumber}</span>
                               {cellAssignments.length > 1 && <span className="text-[9px] font-bold px-1 rounded bg-white/60">+{cellAssignments.length - 1}</span>}
-                              {isPlaceholder && <span className="text-[9px] font-bold px-1 py-0.2 rounded border border-amber-500/60 bg-amber-200/90 text-amber-950 shrink-0">Nháp</span>}
+                              {isPlaceholder && <span className="text-[9px] font-bold px-1 py-0.2 rounded border border-amber-500/60 bg-amber-200/90 text-amber-950 shrink-0">Giữ chỗ</span>}
                             </span>
                           ) : null}
                         </div>

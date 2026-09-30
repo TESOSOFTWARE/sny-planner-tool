@@ -8,6 +8,7 @@ import {
   approvedOrderStateSchema,
   draftOrderStateSchema,
   updateOrderSchema,
+  resolveLifecycle,
 } from '@/lib/validations/order'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
 
@@ -59,6 +60,29 @@ function orderState(order: Awaited<ReturnType<typeof prisma.productionOrder.find
     eyeletColor: (overrides.eyeletColor !== undefined ? overrides.eyeletColor : order.eyeletColor) as string | null,
     eyeletLines: (overrides.eyeletLines !== undefined ? overrides.eyeletLines : order.eyeletLines) as number | null,
     eyeletSpec: (overrides.eyeletSpec !== undefined ? overrides.eyeletSpec : order.eyeletSpec) as string | null,
+    // V4.1 (mục 5): field vắng mặt = giữ giá trị cũ, không reset về default.
+    colorVersion: (overrides.colorVersion !== undefined ? overrides.colorVersion : order.colorVersion) as string | null,
+    primaryPackingType: String(overrides.primaryPackingType ?? order.primaryPackingType) as ParsedOrder['primaryPackingType'],
+    hasPaperCore: (overrides.hasPaperCore !== undefined ? overrides.hasPaperCore : order.hasPaperCore) === true,
+    isHalfFolded: (overrides.isHalfFolded !== undefined ? overrides.isHalfFolded : order.isHalfFolded) === true,
+    outerWrapping: (overrides.outerWrapping !== undefined ? overrides.outerWrapping : order.outerWrapping) as ParsedOrder['outerWrapping'],
+    piecesPerCarton: numberOrNull(overrides.piecesPerCarton !== undefined ? overrides.piecesPerCarton : order.piecesPerCarton),
+    piecesPerBale: numberOrNull(overrides.piecesPerBale !== undefined ? overrides.piecesPerBale : order.piecesPerBale),
+    boxDimensions: (overrides.boxDimensions !== undefined ? overrides.boxDimensions : order.boxDimensions) as string | null,
+    onPallet: (overrides.onPallet !== undefined ? overrides.onPallet : order.onPallet) === true,
+    secondaryPackingType: String(overrides.secondaryPackingType ?? order.secondaryPackingType) as ParsedOrder['secondaryPackingType'],
+    palletDimensions: (overrides.palletDimensions !== undefined ? overrides.palletDimensions : order.palletDimensions) as string | null,
+    itemsPerPallet: numberOrNull(overrides.itemsPerPallet !== undefined ? overrides.itemsPerPallet : order.itemsPerPallet),
+    packingNote: (overrides.packingNote !== undefined ? overrides.packingNote : order.packingNote) as string | null,
+    isLaminated: (overrides.isLaminated !== undefined ? overrides.isLaminated : order.isLaminated) === true,
+    rawFabricGsm: numberOrNull(overrides.rawFabricGsm !== undefined ? overrides.rawFabricGsm : order.rawFabricGsm),
+    coatingGsm: numberOrNull(overrides.coatingGsm !== undefined ? overrides.coatingGsm : order.coatingGsm),
+    finishedGsm: numberOrNull(overrides.finishedGsm !== undefined ? overrides.finishedGsm : order.finishedGsm),
+    toleranceQtyPct: (overrides.toleranceQtyPct !== undefined ? overrides.toleranceQtyPct : order.toleranceQtyPct) as number | null,
+    toleranceSpecPct: (overrides.toleranceSpecPct !== undefined ? overrides.toleranceSpecPct : order.toleranceSpecPct) as number | null,
+    // P0-3: lifecycle — vắng mặt = giữ giá trị cũ (partial update)
+    lifecycleStatus: ((overrides.lifecycleStatus !== undefined ? overrides.lifecycleStatus : order.lifecycleStatus) || undefined) as ParsedOrder['lifecycleStatus'],
+    isPlaceholder: (overrides.isPlaceholder !== undefined ? overrides.isPlaceholder : order.isPlaceholder) === true,
   }
 }
 
@@ -109,13 +133,22 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
         'lineNote', 'requiresPacking', 'deliveryDate', 'containerSize', 'meshType', 'needleCount',
         'beamCount', 'mbCode', 'orderType', 'rollLength', 'pieceLength', 'hasEyelet',
         'eyeletColor', 'eyeletLines', 'eyeletSpec',
+        // V4.1 (mục 5) — OrderDetail đơn lẻ gửi đủ, field thiếu = giữ cũ (merge ở orderState)
+        'colorVersion', 'primaryPackingType', 'hasPaperCore', 'isHalfFolded',
+        'outerWrapping', 'piecesPerCarton', 'piecesPerBale', 'boxDimensions', 'onPallet',
+        'secondaryPackingType', 'palletDimensions', 'itemsPerPallet', 'packingNote',
+        'isLaminated', 'rawFabricGsm', 'coatingGsm', 'finishedGsm',
+        'toleranceQtyPct', 'toleranceSpecPct',
+        // P0-3: lifecycle phải được ghi khi sửa đơn lẻ
+        'lifecycleStatus', 'isPlaceholder',
       ]) {
         if (field in data) overrides[field] = (data as Record<string, unknown>)[field]
       }
       if ('orderDate' in overrides && overrides.orderDate) overrides.orderDate = String(overrides.orderDate)
 
       const state = orderState(current, overrides)
-      const finalResult = current.isDraft
+      const targetLifecycle = (state.lifecycleStatus as string) || (current.isDraft ? 'DRAFT' : 'APPROVED')
+      const finalResult = targetLifecycle === 'DRAFT'
         ? draftOrderStateSchema.safeParse(state)
         : approvedOrderStateSchema.safeParse(state)
       if (!finalResult.success) {
@@ -133,6 +166,12 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
         qty: validated.qty ?? null,
         rollLength: validated.rollLength ?? null,
         pieceLength: validated.pieceLength ?? null,
+        // V4.1 (mục 5): đơn tráng màng phải tính theo GSM thành phẩm/mộc,
+        // nếu không cân sẽ bị tính lại sai mỗi lần sửa đơn lẻ.
+        isLaminated: validated.isLaminated ?? false,
+        rawFabricGsm: validated.rawFabricGsm ?? null,
+        coatingGsm: validated.coatingGsm ?? null,
+        finishedGsm: validated.finishedGsm ?? null,
       })
       const updateData: Record<string, unknown> = {
         piNumber: validated.piNumber,
@@ -165,6 +204,32 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
         eyeletColor: validated.eyeletColor ?? null,
         eyeletLines: validated.eyeletLines ?? null,
         eyeletSpec: validated.eyeletSpec ?? null,
+        // V4.1 (mục 5): persist các field OrderDetail gửi lên; merge ở
+        // orderState() đã giữ giá trị cũ cho field vắng mặt nên ?? ở đây
+        // chỉ là lưới an toàn, không reset dữ liệu đã lưu.
+        colorVersion: validated.colorVersion ?? null,
+        primaryPackingType: validated.primaryPackingType ?? 'ROLL',
+        hasPaperCore: validated.hasPaperCore ?? false,
+        isHalfFolded: validated.isHalfFolded ?? false,
+        outerWrapping: validated.outerWrapping ?? 'POLYBAG',
+        piecesPerCarton: validated.piecesPerCarton ?? null,
+        piecesPerBale: validated.piecesPerBale ?? null,
+        boxDimensions: validated.boxDimensions ?? null,
+        onPallet: validated.onPallet ?? false,
+        secondaryPackingType: validated.secondaryPackingType ?? 'NONE',
+        palletDimensions: validated.palletDimensions ?? null,
+        itemsPerPallet: validated.itemsPerPallet ?? null,
+        packingNote: validated.packingNote ?? null,
+        isLaminated: validated.isLaminated ?? false,
+        rawFabricGsm: validated.rawFabricGsm ?? null,
+        coatingGsm: validated.coatingGsm ?? null,
+        finishedGsm: validated.finishedGsm ?? null,
+        toleranceQtyPct: validated.toleranceQtyPct ?? null,
+        toleranceSpecPct: validated.toleranceSpecPct ?? null,
+        // P0-3: ghi lifecycle khi sửa đơn lẻ
+        isDraft: (validated.lifecycleStatus ?? current.lifecycleStatus ?? 'APPROVED') === 'DRAFT',
+        lifecycleStatus: validated.lifecycleStatus ?? current.lifecycleStatus ?? 'APPROVED',
+        isPlaceholder: validated.isPlaceholder ?? current.isPlaceholder ?? false,
         qtySqm: calculation.qtySqm,
         totalWeightKgs: calculation.totalWeightKgs,
         requiredYarnKg: calculation.requiredYarnKg,

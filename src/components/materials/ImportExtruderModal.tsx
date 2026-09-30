@@ -157,7 +157,7 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
                 <p className="font-medium text-on-surface mb-2">Yêu cầu file:</p>
                 <p>• File .xlsx từ SNY có sheet tên <strong>EXTRUDER</strong></p>
                 <p>• Ngày báo cáo trong 5 dòng đầu</p>
-                <p>• Mỗi block máy bắt đầu bằng "1st EXTRUDER MACHINE", "2nd..."</p>
+                <p>• Mỗi block máy bắt đầu bằng &quot;1st EXTRUDER MACHINE&quot;, &quot;2nd...&quot;</p>
                 <p>• Dòng TOTAL cuối mỗi block sẽ bị bỏ qua</p>
               </div>
             </div>

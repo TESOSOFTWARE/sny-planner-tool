@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { createOrderSchema } from '@/lib/validations/order'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
+import { resolveLifecycle } from '@/lib/validations/order'
 
 export async function POST(req: NextRequest) {
   // ── 1. Parse body ──────────────────────────────────────────────────────────
@@ -31,6 +32,12 @@ export async function POST(req: NextRequest) {
   }
 
   const data = parsed.data
+
+  // P0-3: ghi lifecycleStatus + isPlaceholder thay vì để DB default('APPROVED') thắng
+  const lifecycle = resolveLifecycle({
+    lifecycleStatus: data.lifecycleStatus,
+    isPlaceholder: data.isPlaceholder,
+  })
 
   // ── 3. Calculate weight (Case A formula) ──────────────────────────────────
   const { qtySqm, totalWeightKgs, requiredYarnKg } = calculateOrderWeight({
@@ -68,6 +75,8 @@ export async function POST(req: NextRequest) {
         ...(data.remark && { remark: data.remark }),
         ...(data.lineNote != null && { lineNote: data.lineNote }),
         requiresPacking: data.requiresPacking ?? false,
+        lifecycleStatus: lifecycle.lifecycleStatus,
+        isPlaceholder: lifecycle.isPlaceholder,
         ...(data.deliveryDate && { deliveryDate: new Date(data.deliveryDate) }),
         ...(data.containerSize != null && { containerSize: data.containerSize }),
         // Technical specs

@@ -67,6 +67,10 @@ export default async function OrderDetailPage({ params }: Props) {
     throw err
   }
 
+  if (!order) {
+    redirect('/orders')
+  }
+
   return (
     <div className="max-w-[800px] mx-auto px-container-margin py-xl">
 
@@ -88,7 +92,7 @@ export default async function OrderDetailPage({ params }: Props) {
       </nav>
 
       {/* Page header */}
-      <div className="flex items-start justify-between mb-lg">
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-lg">
         <div className="flex flex-col gap-sm">
           <div className="flex items-center gap-sm">
             <h1 className="text-headline-lg font-inter font-semibold text-primary font-mono">
@@ -102,6 +106,14 @@ export default async function OrderDetailPage({ params }: Props) {
           </div>
           <p className="text-body-md font-noto text-secondary">{order.customer}</p>
         </div>
+
+        <Link
+          href={`/orders/pi/${encodeURIComponent(order.piNumber)}`}
+          className="px-4 py-2 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all shadow-sm"
+        >
+          <span className="material-symbols-outlined text-[18px]">table_rows</span>
+          Chỉnh sửa Toàn bộ PI (Master-Detail)
+        </Link>
       </div>
 
       {/* Detail card */}

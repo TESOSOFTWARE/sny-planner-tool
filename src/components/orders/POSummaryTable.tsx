@@ -29,6 +29,7 @@ interface PIGroup {
   totalRequiredYarnKg: number | null
   status: OrderStatus
   hasDraft: boolean
+  hasLaminated: boolean // Đ4: PI có đơn tráng màng → tổng PO theo GSM thành phẩm, sợi theo GSM mộc
 }
 
 interface Props {
@@ -74,6 +75,7 @@ function groupOrders(orders: SerializedProductionOrder[]): PIGroup[] {
     }
 
     const hasDraft = subLines.some(s => s.isDraft)
+    const hasLaminated = subLines.some(s => s.isLaminated)
     const allAssignments = subLines.flatMap(s => s.assignments || [])
     const status = calcOrderStatus(allAssignments)
     
@@ -83,7 +85,7 @@ function groupOrders(orders: SerializedProductionOrder[]): PIGroup[] {
     const remark = subLines[0].remark
     const customerId = subLines[0].customerId || null
 
-    groups.push({ piNumber, customers, customerId, orderDate, deliveryDate, containerSize, description, remark, subLines, totalQtySqm, totalWeightKgs, totalRequiredYarnKg, status, hasDraft })
+    groups.push({ piNumber, customers, customerId, orderDate, deliveryDate, containerSize, description, remark, subLines, totalQtySqm, totalWeightKgs, totalRequiredYarnKg, status, hasDraft, hasLaminated })
   }
 
   // Sort groups by most recent orderDate descending
@@ -423,6 +425,12 @@ export default function POSummaryTable({ orders }: Props) {
                   {group.totalWeightKgs != null && (
                     <span className="text-xs font-mono font-semibold text-on-surface shrink-0 hidden sm:inline">
                       {fmt(group.totalWeightKgs)} kg
+                    </span>
+                  )}
+                  {/* Đ4: PI có đơn laminate — 2 tổng khác cơ sở, ghi rõ để khỏi cầm nhầm */}
+                  {group.hasLaminated && (
+                    <span className="text-[11px] font-inter text-secondary shrink-0 hidden sm:inline">
+                      (gồm hàng tráng màng: PO theo GSM thành phẩm · sợi theo GSM mộc)
                     </span>
                   )}
 

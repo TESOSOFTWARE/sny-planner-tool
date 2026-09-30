@@ -32,8 +32,10 @@ function formatOrderLabel(o: Order): string {
   const widthStr = o.widthM != null ? `${Number(o.widthM).toFixed(1)}m` : '—'
   const colorStr = o.color ?? '—'
   const gsmStr = o.gsm != null ? `${o.gsm}gsm` : '—'
-  const draftPrefix = o.isDraft ? '📌 [Nháp] ' : ''
-  const base = `${draftPrefix}${o.piNumber} · Dòng ${o.subLineIndex + 1} — ${widthStr} · ${colorStr} · ${gsmStr}`
+  const isDraft = o.lifecycleStatus === 'DRAFT' || (o.isDraft && o.lifecycleStatus !== 'PLACEHOLDER' && !o.isPlaceholder)
+  const isPlaceholder = o.lifecycleStatus === 'PLACEHOLDER' || o.isPlaceholder
+  const tag = isDraft ? '⛔ [NHÁP - CHẶN DỆT] ' : isPlaceholder ? '⏳ [GIỮ CHỖ TẠM] ' : ''
+  const base = `${tag}${o.piNumber} · Dòng ${o.subLineIndex + 1} — ${widthStr} · ${colorStr} · ${gsmStr}`
   return o.meshType ? `${base} · ${o.meshType}` : base
 }
 
@@ -60,12 +62,43 @@ function DetailRow({
 
 /** Detail card shown after selecting a sub-line in the dropdown. */
 function SubLineDetailPanel({ o }: { o: Order }) {
+  const isDraft = o.lifecycleStatus === 'DRAFT' || (o.isDraft && o.lifecycleStatus !== 'PLACEHOLDER' && !o.isPlaceholder)
+  const isPlaceholder = o.lifecycleStatus === 'PLACEHOLDER' || o.isPlaceholder
+
   return (
-    <div className="rounded-lg bg-surface-container-low border-[0.5px] border-outline-variant px-3 py-2 mt-2">
-      <p className="text-label-sm font-inter font-semibold text-primary mb-1.5">
-        {o.piNumber} · Dòng {o.subLineIndex + 1}
-      </p>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+    <div className="rounded-lg bg-surface-container-low border-[0.5px] border-outline-variant px-3 py-2 mt-2 space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-label-sm font-inter font-semibold text-primary">
+          {o.piNumber} · Dòng {o.subLineIndex + 1}
+        </p>
+        {isDraft ? (
+          <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-error/15 text-error border border-error/30 uppercase">
+            Bản nháp (Chặn dệt)
+          </span>
+        ) : isPlaceholder ? (
+          <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/15 text-amber-600 border border-amber-500/30 uppercase">
+            Giữ chỗ tạm (Viền nét đứt)
+          </span>
+        ) : (
+          <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-500/15 text-emerald-600 border border-emerald-500/30 uppercase">
+            Chính thức
+          </span>
+        )}
+      </div>
+
+      {isDraft && (
+        <div className="p-2 rounded bg-error/10 border border-error/20 text-error text-xs font-medium">
+          ⛔ Đơn hàng đang ở trạng thái Bản Nháp. Không thể xếp máy dệt. Vui lòng mở trang Đơn hàng để hoàn thiện hoặc chuyển thành Đơn Giữ Chỗ.
+        </div>
+      )}
+
+      {isPlaceholder && (
+        <div className="p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-700 text-xs font-medium">
+          ⏳ Đơn hàng Giữ chỗ tạm: Sẽ được hiển thị với viền vàng nét đứt trên sơ đồ 40 máy dệt.
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 pt-1">
         <DetailRow label="Khách"      value={o.customer} />
         <DetailRow label="Chiều rộng" value={o.widthM != null ? `${Number(o.widthM).toFixed(1)} m` : '—'} mono />
         <DetailRow label="GSM"        value={o.gsm != null ? String(o.gsm) : '—'} mono />
@@ -110,10 +143,19 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
 
   // Derived: the full Order object for the currently-selected id
   const selectedOrder = orders.find(o => o.id === selectedOrderId) ?? null
+  const isSelectedDraft = Boolean(
+    selectedOrder && (selectedOrder.lifecycleStatus === 'DRAFT' || (selectedOrder.isDraft && selectedOrder.lifecycleStatus !== 'PLACEHOLDER' && !selectedOrder.isPlaceholder))
+  )
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+
+    if (isSelectedDraft) {
+      setError('Hệ thống chặn không cho phép xếp lịch cho Đơn Nháp (Draft).')
+      return
+    }
+
     setIsLoading(true)
 
     try {
@@ -288,10 +330,10 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
             </button>
             <button
               type="submit"
-              disabled={isLoading}
+              disabled={isLoading || !selectedOrderId || isSelectedDraft}
               className="inline-flex items-center justify-center gap-sm bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors"
             >
-              {isLoading ? 'Đang lưu...' : 'Xếp máy'}
+              {isLoading ? 'Đang lưu...' : isSelectedDraft ? 'Đơn Nháp (Bị Chặn)' : 'Xếp máy'}
             </button>
           </div>
         </form>

@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { classifyOrderImport, parseOrderList } from '@/lib/excel/parseOrderList'
+import { findCustomerMatch } from '@/lib/customers/matching'
 import { prisma } from '@/lib/db'
 import { MAX_IMPORTED_ORDER_ROWS } from '@/lib/validations/order'
 
@@ -112,12 +113,74 @@ export async function POST(req: NextRequest) {
       .flatMap((decision) => decision.reasons.map((reason) => `⚠ Dòng ${decision.rowIndex + 1} (${decision.piNumber} / NO ${decision.subLineIndex}): ${reason}`)),
   ))
 
+  // ── 5b. Classify customer names against existing customers (preview only) ──
+  // Read-only: same matching engine as confirm, but surfaces NEEDS_REVIEW /
+  // UNMATCHED to the planner BEFORE anything is written.
+  const customerNames = Array.from(new Set(
+    rows.map((row) => String(row.customer ?? '').trim()).filter(Boolean),
+  ))
+  let customerWarnings: string[] = []
+  let customerReviews: { name: string; suggestedId: string; suggestedName: string; reason: string }[] = []
+  let customerNew: string[] = []
+  let customerAmbiguous: { name: string; reason: string }[] = []
+  try {
+    const allCustomers = await prisma.customer.findMany({ select: { id: true, name: true } })
+    const seenReview = new Set<string>()
+    const seenNew = new Set<string>()
+    const seenAmbiguous = new Set<string>()
+    for (const name of customerNames) {
+      const match = findCustomerMatch(name, allCustomers)
+      if (match.status === 'NEEDS_REVIEW' && match.suggested && !seenReview.has(name)) {
+        seenReview.add(name)
+        customerReviews.push({
+          name,
+          suggestedId: match.suggested.id,
+          suggestedName: match.suggested.name,
+          reason: match.reason ?? 'Tên gần giống khách hiện có — cần xác nhận gộp hay tạo mới',
+        })
+        customerWarnings.push(`⚠ Khách hàng "${name}" gần giống "${match.suggested.name}" — chọn gộp hay tạo mới ở cột Customer trước khi xác nhận.`)
+      } else if (match.status === 'AMBIGUOUS' && !seenAmbiguous.has(name)) {
+        // B1: surface AMBIGUOUS in preview. The engine never auto-picks when
+        // several customers share one normalized name — same rule as confirm.
+        seenAmbiguous.add(name)
+        customerAmbiguous.push({
+          name,
+          reason: match.reason ?? `Tên khách hàng "${name}" trùng với nhiều bản ghi — cần dọn danh sách khách`,
+        })
+      } else if (match.status === 'UNMATCHED' && !seenNew.has(name)) {
+        seenNew.add(name)
+        customerNew.push(name)
+      }
+    }
+    customerWarnings = Array.from(new Set(customerWarnings))
+  } catch (err) {
+    console.error('[POST /api/orders/import] customer classification error:', err)
+    return NextResponse.json({ success: false, error: 'Không thể kiểm tra danh mục khách hàng hiện tại.' }, { status: 500 })
+  }
+
+  // B1: block AMBIGUOUS rows in preview exactly like confirm does.
+  // No auto-pick, no silent drop — the planner sees them before confirming.
+  if (customerAmbiguous.length > 0) {
+    const blockedNames = new Set(customerAmbiguous.map((c) => c.name))
+    decisions.forEach((decision, index) => {
+      const key = String(rows[index].customer ?? '').trim()
+      if (blockedNames.has(key) && decision.status !== 'invalid') {
+        decision.status = 'conflict'
+        decision.reasons.push('Tên khách hàng trùng với nhiều bản ghi trong hệ thống; không tự chọn bản ghi')
+      }
+    })
+  }
+
   // ── 6. Return every parsed row and server decisions (no DB write) ─────────
   return NextResponse.json({
     success: true,
     totalParsed: rows.length,
     preview: rows,
     piWarnings,
+    customerWarnings,
+    customerReviews,
+    customerNew,
+    customerAmbiguous,
     decisions,
   })
 }

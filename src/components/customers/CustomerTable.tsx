@@ -24,6 +24,7 @@ export default function CustomerTable({ initialCustomers }: { initialCustomers: 
   const [search, setSearch] = useState('')
   const [editingCustomer, setEditingCustomer] = useState<SerializedCustomer | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const fetchCustomers = async () => {
     try {
@@ -34,16 +35,17 @@ export default function CustomerTable({ initialCustomers }: { initialCustomers: 
 
   const handleDelete = async (id: string) => {
     if (!confirm('Bạn có chắc chắn muốn xóa khách hàng này?')) return
+    setDeleteError(null)
     try {
       const res = await fetch(`/api/customers/${id}`, { method: 'DELETE' })
       const json = await res.json()
       if (!res.ok || !json.success) {
-        alert(json.error || 'Lỗi khi xóa')
+        setDeleteError(json.error || 'Lỗi khi xóa')
         return
       }
       await fetchCustomers()
     } catch (err) {
-      alert('Lỗi mạng')
+      setDeleteError('Lỗi mạng — vui lòng thử lại')
     }
   }
 
@@ -79,6 +81,12 @@ export default function CustomerTable({ initialCustomers }: { initialCustomers: 
           className="w-full h-10 pl-9 pr-3 rounded-lg border-[0.5px] border-outline-variant bg-surface focus:border-primary focus:outline-none text-sm font-inter text-on-surface placeholder:text-outline transition-colors"
         />
       </div>
+
+      {deleteError && (
+        <div role="alert" className="px-md py-sm bg-error-container text-on-error-container rounded text-sm font-noto">
+          {deleteError}
+        </div>
+      )}
 
       <div className="bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-xl overflow-hidden">
         <div className="overflow-x-auto">

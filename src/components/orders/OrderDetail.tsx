@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import {
@@ -94,6 +95,8 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [showAssignModal, setShowAssignModal] = useState(false)
+  // V4.1 view: gọn mặc định — chỉ mở rộng toàn bộ khi planner bấm "Hiện tất cả"
+  const [showAllV41, setShowAllV41] = useState(false)
 
   // Draft approval state (Sprint F1)
   const [isApproving, setIsApproving] = useState(false)
@@ -117,7 +120,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
         return
       }
 
-      setCurrentOrder((prev) => ({ ...prev, isDraft: false }))
+      setCurrentOrder((prev) => ({ ...prev, isDraft: false, lifecycleStatus: 'APPROVED' }))
       router.refresh()
     } catch {
       setApproveError({ message: 'Lỗi kết nối mạng khi duyệt đơn nháp.' })
@@ -177,6 +180,12 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
   const editWidthM       = watch('widthM')
   const editLengthM      = watch('lengthM')
   const editGsm          = watch('gsm')
+  // V4.1 — watch để render điều kiện trong edit mode
+  const editPrimaryPackingType = watch('primaryPackingType')
+  const editOnPallet     = watch('onPallet')
+  const editIsLaminated  = watch('isLaminated')
+  const editRawFabricGsm = watch('rawFabricGsm')
+  const editFinishedGsm  = watch('finishedGsm')
 
   // Live sync lengthM when orderType is rolls or pieces (Read-only Derived)
   useEffect(() => {
@@ -219,51 +228,35 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
       qty: editQty ? Number(editQty) : null,
       rollLength: editRollLength ? Number(editRollLength) : null,
       pieceLength: editPieceLength ? Number(editPieceLength) : null,
+      // V4.1: đơn tráng màng ước tính theo GSM thành phẩm, không dùng GSM đơn
+      isLaminated: editIsLaminated ?? false,
+      rawFabricGsm: editRawFabricGsm ? Number(editRawFabricGsm) : null,
+      finishedGsm: editFinishedGsm ? Number(editFinishedGsm) : null,
     })
     return (totalWeightKgs != null && totalWeightKgs > 0) ? totalWeightKgs.toLocaleString('vi-VN', { maximumFractionDigits: 1 }) : null
   })()
 
   const enterEdit = () => {
-    setSaveError(null)
-    reset({
-      piNumber: currentOrder.piNumber, subLineIndex: currentOrder.subLineIndex,
-      customer: currentOrder.customer, orderDate: toDateInputValue(currentOrder.orderDate),
-      widthM: currentOrder.widthM ?? undefined, lengthM: currentOrder.lengthM ?? undefined, gsm: currentOrder.gsm ?? undefined,
-      productionGsm: currentOrder.productionGsm ?? undefined,
-      color: currentOrder.color ?? undefined, qty: currentOrder.qty ?? undefined,
-      mbCode: currentOrder.mbCode ?? undefined,
-      uvPct: currentOrder.uvPct != null ? parseFloat(currentOrder.uvPct) : null,
-      frFlag: currentOrder.frFlag,
-      frPct: currentOrder.frPct != null ? parseFloat(currentOrder.frPct) : null,
-      requiresPacking: currentOrder.requiresPacking,
-      lineNote: currentOrder.lineNote ?? '',
-      deliveryDate: currentOrder.deliveryDate ? toDateInputValue(currentOrder.deliveryDate) : undefined,
-      containerSize: currentOrder.containerSize ?? '',
-      description: currentOrder.description ?? '', remark: currentOrder.remark ?? '',
-      meshType: currentOrder.meshType ?? '',
-      needleCount: currentOrder.needleCount ?? undefined,
-      beamCount: currentOrder.beamCount ?? undefined,
-      // Kiểu đơn hàng
-      orderType: (currentOrder.orderType as 'meters' | 'rolls' | 'pieces') ?? 'meters',
-      rollLength: currentOrder.rollLength != null ? parseFloat(currentOrder.rollLength) : null,
-      pieceLength: currentOrder.pieceLength != null ? parseFloat(currentOrder.pieceLength) : null,
-      // Eyelet
-      hasEyelet: currentOrder.hasEyelet,
-      eyeletColor: currentOrder.eyeletColor ?? undefined,
-      eyeletLines: (currentOrder as { eyeletLines?: number | null }).eyeletLines ?? undefined,
-      eyeletSpec:  (currentOrder as { eyeletSpec?: string | null }).eyeletSpec  ?? undefined,
-    })
-    setMode('edit')
+    router.push(`/orders/pi/${encodeURIComponent(currentOrder.piNumber)}?line=${currentOrder.subLineIndex}`)
   }
+
 
   const cancelEdit = () => { setSaveError(null); setMode('view') }
 
   const onSave = async (values: UpdateOrderOutput) => {
     setSaveError(null)
     try {
+      // Lõi giấy / Gấp đôi chỉ hợp lệ với ROLL. Ẩn checkbox ở UI chưa đủ —
+      // phải chốt lại ở payload để đổi ROLL → BALE không lưu giá trị cũ.
+      const isRoll = values.primaryPackingType === 'ROLL'
       const res = await fetch(`/api/orders/${currentOrder.id}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...values, expectedUpdatedAt: currentOrder.updatedAt }),
+        body: JSON.stringify({
+          ...values,
+          hasPaperCore: isRoll ? values.hasPaperCore : false,
+          isHalfFolded: isRoll ? values.isHalfFolded : false,
+          expectedUpdatedAt: currentOrder.updatedAt,
+        }),
       })
       const json = await res.json()
       if (!res.ok || !json.success) { setSaveError(json.error ?? 'An unknown error occurred.'); return }
@@ -299,7 +292,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
               <span className="material-symbols-outlined text-[22px] text-[#D97706] shrink-0 mt-0.5">edit_note</span>
               <div>
                 <p className="font-bold text-sm text-[#B45309]">ĐƠN NHÁP — Thông tin đơn hàng chưa đầy đủ</p>
-                <p className="mt-0.5 text-secondary">Đơn nháp chưa thể gán vào Lịch sản xuất. Kiểm tra, bổ sung đủ thông số và bấm "Duyệt đơn nháp".</p>
+                <p className="mt-0.5 text-secondary">Đơn nháp chưa thể gán vào Lịch sản xuất. Kiểm tra, bổ sung đủ thông số và bấm &quot;Duyệt đơn nháp&quot;.</p>
               </div>
             </div>
             <button
@@ -354,13 +347,13 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
           >
             <span className="material-symbols-outlined text-[18px]">delete</span>Delete
           </button>
-          <button
+          <Link
             id="btn-edit-order"
-            onClick={enterEdit}
-            className="inline-flex items-center justify-center gap-sm border border-primary bg-transparent hover:bg-surface-container text-primary text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors"
+            href={`/orders/pi/${encodeURIComponent(currentOrder.piNumber)}?line=${currentOrder.subLineIndex}`}
+            className="inline-flex items-center justify-center gap-sm bg-primary hover:bg-primary/90 text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors shadow-xs"
           >
-            <span className="material-symbols-outlined text-[18px]">edit</span>Edit
-          </button>
+            <span className="material-symbols-outlined text-[18px]">edit_note</span>Sửa đơn (Master-Detail)
+          </Link>
           <button
             id="btn-assign-machine"
             onClick={() => setShowAssignModal(true)}
@@ -484,16 +477,22 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
           <ViewField
             label="GSM sản xuất thực tế"
             value={
-              currentOrder.productionGsm != null
-                ? `${currentOrder.productionGsm} gsm`
-                : '— (giống GSM đơn)'
+              // Đ1: đơn laminate dệt theo GSM mộc, không bao giờ "giống GSM đơn"
+              currentOrder.isLaminated && currentOrder.rawFabricGsm != null
+                ? `${currentOrder.rawFabricGsm} gsm (vải mộc)`
+                : currentOrder.productionGsm != null
+                  ? `${currentOrder.productionGsm} gsm`
+                  : '— (giống GSM đơn)'
             }
             mono
           />
           <ViewField label="Color"        value={currentOrder.color ?? null}                    />
           {currentOrder.totalWeightKgs != null && (
             <ViewField
-              label="Trọng lượng PO (kg)"
+              // Đ3: ghi rõ cơ sở — đơn laminate tính theo GSM thành phẩm
+              label={currentOrder.isLaminated && currentOrder.finishedGsm != null
+                ? `Trọng lượng PO (kg, theo ${currentOrder.finishedGsm}gsm thành phẩm)`
+                : 'Trọng lượng PO (kg)'}
               value={parseFloat(currentOrder.totalWeightKgs).toLocaleString('vi-VN', { maximumFractionDigits: 1 })}
               mono
             />
@@ -503,12 +502,27 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
             value={
               !currentOrder.isDraft && currentOrder.requiredYarnKg != null
                 ? `${parseFloat(currentOrder.requiredYarnKg).toLocaleString('vi-VN', { maximumFractionDigits: 1 })}${
-                    currentOrder.productionGsm != null ? ` (theo ${currentOrder.productionGsm}gsm)` : ''
+                    // Đ2: hậu tố soi gương công thức orderWeight — laminate dùng raw,
+                    // thường dùng productionGsm ?? gsm; thiếu cả hai thì không ghi hậu tố
+                    (() => {
+                      const basis = currentOrder.isLaminated && currentOrder.rawFabricGsm != null && currentOrder.rawFabricGsm > 0
+                        ? currentOrder.rawFabricGsm
+                        : (currentOrder.productionGsm != null && currentOrder.productionGsm > 0
+                            ? currentOrder.productionGsm
+                            : null)
+                      return basis != null ? ` (theo ${basis}gsm)` : ''
+                    })()
                   }`
                 : null
             }
             mono
           />
+          {/* Đ6: laminate thiếu số → công thức rơi về GSM đơn im lặng */}
+          {currentOrder.isLaminated && (currentOrder.finishedGsm == null || currentOrder.rawFabricGsm == null) && (
+            <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium sm:col-span-2">
+              ⚠️ Đơn tráng màng thiếu GSM mộc/thành phẩm — số PO/sợi đang tính tạm theo GSM đơn.
+            </p>
+          )}
           {currentOrder.qtySqm != null && (
             <ViewField
               label="Diện tích (m²)"
@@ -549,9 +563,132 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
           )}
         </dl>
 
+        {/* ── V4.1: Đóng gói / Tráng màng / Màu-FR ───────────────────────────
+            Gọn mặc định: chỉ hiện khối có dữ liệu, thứ tự bám cột template
+            Excel để đối chiếu 1-1. Toggle "Hiện tất cả" để kiểm parity. */}
+        {(() => {
+          const o = currentOrder
+          const packingTouched =
+            o.primaryPackingType !== 'ROLL' || o.isHalfFolded ||
+            (o.outerWrapping != null && o.outerWrapping !== 'POLYBAG') ||
+            o.piecesPerCarton != null || o.piecesPerBale != null ||
+            o.onPallet || o.secondaryPackingType !== 'NONE' || o.palletDimensions != null ||
+            o.itemsPerPallet != null || o.packingNote != null
+          const lamTouched =
+            !!o.isLaminated || o.rawFabricGsm != null || o.coatingGsm != null || o.finishedGsm != null
+          const colorTouched =
+            (o.colorVersion != null && o.colorVersion !== 'STD')
+          if (!packingTouched && !lamTouched && !colorTouched && !showAllV41) return null
+          const packingLabel =
+            o.primaryPackingType === 'CARTON' ? 'Thùng carton (CARTON)' :
+            o.primaryPackingType === 'BALE' ? 'Kiện nén (BALE)' : 'Cuộn (ROLL)'
+          const wrapLabel =
+            o.outerWrapping === 'TARPAULIN' ? 'Bạt (tarpaulin)' :
+            o.outerWrapping === 'NONE' ? 'Không bọc' : 'Túi PE (polybag)'
+          const palletLabel =
+            o.secondaryPackingType === 'WOOD_PALLET' ? 'Pallet gỗ' :
+            o.secondaryPackingType === 'IRON_PALLET' ? 'Pallet sắt' :
+            o.secondaryPackingType === 'PLASTIC_PALLET' ? 'Pallet nhựa' : 'Không pallet'
+          return (
+            <div className="border-t-[0.5px] border-outline-variant pt-lg">
+              <div className="flex items-center justify-between mb-md">
+                <p className="text-label-sm font-inter font-medium text-secondary uppercase tracking-widest">
+                  Đóng gói & tráng màng
+                </p>
+                <button
+                  type="button"
+                  id="btn-toggle-v41"
+                  onClick={() => setShowAllV41((v) => !v)}
+                  className="text-label-sm font-inter text-primary hover:underline cursor-pointer"
+                >
+                  {showAllV41 ? 'Thu gọn' : 'Hiện tất cả'}
+                </button>
+              </div>
+              {(packingTouched || showAllV41) && (
+                <>
+                  <p className="text-label-sm font-inter font-semibold text-primary uppercase tracking-widest mb-md">
+                    Đóng gói
+                  </p>
+                  <dl className="grid grid-cols-1 sm:grid-cols-2 gap-y-lg gap-x-xl mb-lg">
+                    <ViewField label="Kiểu đóng gói" value={packingLabel} />
+                    <ViewField label="Bọc ngoài" value={wrapLabel} />
+                    <ViewField label="Lõi giấy" value={o.hasPaperCore ? 'Có' : 'Không'} />
+                    {(o.isHalfFolded || showAllV41) && (
+                      <ViewField label="Gấp đôi" value={o.isHalfFolded ? 'Có' : 'Không'} />
+                    )}
+                    {o.primaryPackingType === 'CARTON' && o.piecesPerCarton != null && (
+                      <ViewField label="Số tấm/thùng" value={o.piecesPerCarton} mono />
+                    )}
+                    {o.primaryPackingType === 'BALE' && o.piecesPerBale != null && (
+                      <ViewField label="Số tấm/kiện" value={o.piecesPerBale} mono />
+                    )}
+                    {(o.onPallet || showAllV41) && (
+                      <ViewField label="Pallet" value={o.onPallet ? palletLabel : 'Không'} />
+                    )}
+                    {(o.palletDimensions || showAllV41) && (
+                      <ViewField label="Kích thước pallet" value={o.palletDimensions} mono />
+                    )}
+                    {o.itemsPerPallet != null && (
+                      <ViewField label="SL/pallet" value={o.itemsPerPallet} mono />
+                    )}
+                    {o.packingNote && (
+                      <div className="sm:col-span-2"><ViewField label="Ghi chú đóng gói" value={o.packingNote} /></div>
+                    )}
+                  </dl>
+                </>
+              )}
+              {(lamTouched || showAllV41) && (
+                <>
+                  <p className="text-label-sm font-inter font-semibold text-primary uppercase tracking-widest mb-md">
+                    Tráng màng & dung sai
+                  </p>
+                  <dl className="grid grid-cols-1 sm:grid-cols-2 gap-y-lg gap-x-xl mb-lg">
+                    <ViewField label="Tráng màng ngoài" value={o.isLaminated ? 'Có' : 'Không'} />
+                    {o.rawFabricGsm != null && (
+                      <ViewField label="GSM mộc" value={o.rawFabricGsm} mono />
+                    )}
+                    {o.coatingGsm != null && (
+                      <ViewField label="GSM màng tráng" value={o.coatingGsm} mono />
+                    )}
+                    {o.finishedGsm != null && (
+                      <ViewField label="GSM thành phẩm" value={o.finishedGsm} mono />
+                    )}
+                    {(o.toleranceQtyPct != null || showAllV41) && (
+                      <ViewField
+                        label="Dung sai số lượng (±%)"
+                        value={o.toleranceQtyPct != null ? `±${o.toleranceQtyPct}%` : null}
+                        mono
+                      />
+                    )}
+                    {(o.toleranceSpecPct != null || showAllV41) && (
+                      <ViewField
+                        label="Dung sai rộng/dài/nặng (±%)"
+                        value={o.toleranceSpecPct != null ? `±${o.toleranceSpecPct}%` : null}
+                        mono
+                      />
+                    )}
+                  </dl>
+                </>
+              )}
+              {(colorTouched || showAllV41) && (
+                <>
+                  <p className="text-label-sm font-inter font-semibold text-primary uppercase tracking-widest mb-md">
+                    Màu & chống cháy
+                  </p>
+                  <dl className="grid grid-cols-1 sm:grid-cols-2 gap-y-lg gap-x-xl">
+                    {(o.colorVersion || showAllV41) && (
+                      <ViewField label="Phiên bản màu" value={o.colorVersion} />
+                    )}
+                  </dl>
+                </>
+              )}
+            </div>
+          )
+        })()}
+
         {/* Optional fields */}
         {(currentOrder.qty != null || currentOrder.uvPct != null || currentOrder.frFlag || currentOrder.frPct != null ||
-          currentOrder.requiresPacking || currentOrder.lineNote ||
+          currentOrder.lineNote ||
           currentOrder.description || currentOrder.remark ||
           currentOrder.meshType || currentOrder.needleCount != null || currentOrder.beamCount != null) && (
           <div className="border-t-[0.5px] border-outline-variant pt-lg">
@@ -576,11 +713,6 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
                     ? <span className="text-[#92400e] font-medium font-inter text-label-md">Có (legacy)</span>
                     : <span className="text-outline font-inter text-label-md">—</span>
               } />
-              {currentOrder.requiresPacking && (
-                <ViewField label="Đóng gói" value={
-                  <span className="text-primary font-medium font-inter text-label-md">Có</span>
-                } />
-              )}
               {currentOrder.lineNote && (
                 <div className="sm:col-span-2"><ViewField label="Ghi chú dòng" value={currentOrder.lineNote} /></div>
               )}
@@ -870,14 +1002,8 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
           <FormField label="FR %" error={errors.frPct?.message}>
             <input id="edit-frPct" type="number" min={0} max={100} step={0.01} className={inputCls(true, !!errors.frPct)} {...register('frPct', { valueAsNumber: true })} />
           </FormField>
-          <div className="flex flex-col justify-end pb-2">
-            <label className="flex items-center gap-xs cursor-pointer group w-fit">
-              <input type="checkbox" className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer" {...register('requiresPacking')} />
-              <span className="text-body-md font-noto text-on-surface group-hover:text-primary transition-colors select-none">
-                Cần đóng gói
-              </span>
-            </label>
-          </div>
+          {/* Checkbox "Cần đóng gói" — ẨN theo feedback KH (R1): dùng Kiểu đóng gói ROLL/BALE/CARTON thay thế.
+              Không register field này nữa nên PUT giữ nguyên giá trị cũ trong DB (backward-compat, xem api/orders/[id] fallback). */}
           <div className="sm:col-span-2">
             <FormField label="Ghi chú dòng" error={errors.lineNote?.message}>
               <input id="edit-lineNote" type="text" className={inputCls(false, !!errors.lineNote)} {...register('lineNote')} />
@@ -969,6 +1095,120 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
               className={inputCls(true, !!errors.beamCount)}
               {...register('beamCount', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })}
             />
+          </FormField>
+
+          {/* ── V4.1: Đóng gói / Tráng màng / Màu-FR ─────────────────── */}
+          <div className="sm:col-span-2">
+            <p className="text-label-sm font-inter font-semibold text-primary uppercase tracking-widest mb-md">
+              Đóng gói & tráng màng (V4.1)
+            </p>
+          </div>
+          <FormField label="Kiểu đóng gói" error={errors.primaryPackingType?.message}>
+            <select id="edit-primaryPackingType" className={inputCls(false, false)} {...register('primaryPackingType')}>
+              <option value="ROLL">Cuộn (ROLL)</option>
+              <option value="BALE">Kiện nén (BALE)</option>
+              <option value="CARTON">Thùng carton (CARTON)</option>
+            </select>
+          </FormField>
+          <FormField label="Bọc ngoài" error={errors.outerWrapping?.message}>
+            <select id="edit-outerWrapping" className={inputCls(false, false)} {...register('outerWrapping')}>
+              <option value="POLYBAG">Túi PE (polybag)</option>
+              <option value="TARPAULIN">Bạt (tarpaulin)</option>
+              <option value="NONE">Không bọc</option>
+            </select>
+          </FormField>
+          <div className="sm:col-span-2 flex flex-wrap items-center gap-x-lg gap-y-sm">
+            {/* Lõi giấy / Gấp đôi chỉ có nghĩa với đơn đóng theo cuộn. */}
+            {editPrimaryPackingType === 'ROLL' && (
+              <>
+                <span className="inline-flex items-center gap-sm">
+                  <input id="edit-hasPaperCore" type="checkbox" className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer" {...register('hasPaperCore')} />
+                  <label htmlFor="edit-hasPaperCore" className="text-body-md font-noto text-on-surface cursor-pointer select-none">Lõi giấy</label>
+                </span>
+                <span className="inline-flex items-center gap-sm">
+                  <input id="edit-isHalfFolded" type="checkbox" className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer" {...register('isHalfFolded')} />
+                  <label htmlFor="edit-isHalfFolded" className="text-body-md font-noto text-on-surface cursor-pointer select-none">Gấp đôi</label>
+                </span>
+              </>
+            )}
+            <span className="inline-flex items-center gap-sm">
+              <input id="edit-onPallet" type="checkbox" className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer" {...register('onPallet')} />
+              <label htmlFor="edit-onPallet" className="text-body-md font-noto text-on-surface cursor-pointer select-none">Đóng trên pallet</label>
+            </span>
+          </div>
+          {editPrimaryPackingType === 'CARTON' && (
+            <FormField label="Số tấm/thùng" error={errors.piecesPerCarton?.message}>
+              <input id="edit-piecesPerCarton" type="number" min={1} step={1} className={inputCls(true, !!errors.piecesPerCarton)}
+                {...register('piecesPerCarton', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
+            </FormField>
+          )}
+          {editPrimaryPackingType === 'BALE' && (
+            <FormField label="Số tấm/kiện" error={errors.piecesPerBale?.message}>
+              <input id="edit-piecesPerBale" type="number" min={1} step={1} className={inputCls(true, !!errors.piecesPerBale)}
+                {...register('piecesPerBale', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
+            </FormField>
+          )}
+          <FormField label="Loại pallet" error={errors.secondaryPackingType?.message}>
+            <select id="edit-secondaryPackingType" className={inputCls(false, false)} {...register('secondaryPackingType')}>
+              <option value="NONE">Không pallet</option>
+              <option value="WOOD_PALLET">Pallet gỗ</option>
+              <option value="IRON_PALLET">Pallet sắt</option>
+              <option value="PLASTIC_PALLET">Pallet nhựa</option>
+            </select>
+          </FormField>
+          {editOnPallet && (
+            <FormField label="Kích thước pallet" error={errors.palletDimensions?.message}>
+              <input id="edit-palletDimensions" type="text" placeholder="e.g. 1100x1100x150mm"
+                className={inputCls(false, !!errors.palletDimensions)}
+                {...register('palletDimensions', { setValueAs: (v: string) => (v === '' ? null : v) })} />
+            </FormField>
+          )}
+          <FormField label="SL/pallet" error={errors.itemsPerPallet?.message}>
+            <input id="edit-itemsPerPallet" type="number" min={1} step={1} className={inputCls(true, !!errors.itemsPerPallet)}
+              {...register('itemsPerPallet', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
+          </FormField>
+          <div className="sm:col-span-2">
+            <FormField label="Ghi chú đóng gói" error={errors.packingNote?.message}>
+              <input id="edit-packingNote" type="text" className={inputCls(false, !!errors.packingNote)}
+                {...register('packingNote', { setValueAs: (v: string) => (v === '' ? null : v) })} />
+            </FormField>
+          </div>
+          <div className="sm:col-span-2 flex items-center gap-sm">
+            <input id="edit-isLaminated" type="checkbox" className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer" {...register('isLaminated')} />
+            <label htmlFor="edit-isLaminated" className="text-body-md font-noto text-on-surface cursor-pointer select-none">
+              Hàng tráng màng ngoài
+            </label>
+          </div>
+          {editIsLaminated && (
+            <>
+              <FormField label="GSM mộc" error={errors.rawFabricGsm?.message} hint="Vải mộc dệt xưởng (vd 325)">
+                <input id="edit-rawFabricGsm" type="number" min={1} step={1} className={inputCls(true, !!errors.rawFabricGsm)}
+                  {...register('rawFabricGsm', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
+              </FormField>
+              <FormField label="GSM màng tráng" error={errors.coatingGsm?.message} hint="Màng tráng ngoài (vd 105)">
+                <input id="edit-coatingGsm" type="number" min={1} step={1} className={inputCls(true, !!errors.coatingGsm)}
+                  {...register('coatingGsm', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
+              </FormField>
+              <FormField label="GSM thành phẩm" error={errors.finishedGsm?.message} hint="Giao khách (vd 430)">
+                <input id="edit-finishedGsm" type="number" min={1} step={1} className={inputCls(true, !!errors.finishedGsm)}
+                  {...register('finishedGsm', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
+              </FormField>
+            </>
+          )}
+          <FormField label="Dung sai số lượng (±%)" error={errors.toleranceQtyPct?.message}>
+            <input id="edit-toleranceQtyPct" type="number" min={0.1} step={0.1} className={inputCls(true, !!errors.toleranceQtyPct)}
+              {...register('toleranceQtyPct', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
+          </FormField>
+          <FormField label="Dung sai rộng/dài/nặng (±%)" error={errors.toleranceSpecPct?.message}>
+            <input id="edit-toleranceSpecPct" type="number" min={0.1} step={0.1} className={inputCls(true, !!errors.toleranceSpecPct)}
+              {...register('toleranceSpecPct', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
+          </FormField>
+          <FormField label="Phiên bản màu" error={errors.colorVersion?.message}>
+            <select id="edit-colorVersion" className={inputCls(false, !!errors.colorVersion)} {...register('colorVersion', { setValueAs: (v: string) => (v === '' ? null : v) })}>
+              <option value="STD">Tiêu chuẩn (STD)</option>
+              <option value="Version A">Desert Sand A (MF 0.22 UV 4%)</option>
+              <option value="Version B">Desert Sand B (MB Arirang Beige)</option>
+            </select>
           </FormField>
         </div>
       </section>

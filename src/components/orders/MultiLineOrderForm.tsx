@@ -43,6 +43,26 @@ interface LineItem {
   beamCount: string   // per-line (was shared)
   eyeletLines: string // new
   eyeletSpec: string  // new
+  // V4.1 parity with Excel template (G3) — same fields as PiMasterDetailEditor
+  primaryPackingType: 'ROLL' | 'BALE' | 'CARTON'
+  outerWrapping: string
+  hasPaperCore: boolean
+  isHalfFolded: boolean
+  piecesPerCarton: string
+  piecesPerBale: string
+  boxDimensions: string
+  onPallet: boolean
+  secondaryPackingType: string
+  palletDimensions: string
+  itemsPerPallet: string
+  packingNote: string
+  isLaminated: boolean
+  rawFabricGsm: string
+  coatingGsm: string
+  finishedGsm: string
+  toleranceQtyPct: string
+  toleranceSpecPct: string
+  colorVersion: string
 }
 
 // ── Styling helpers ───────────────────────────────────────────────────────────
@@ -89,6 +109,11 @@ function calcLine(line: LineItem) {
   const rollLength  = line.rollLength  ? parseFloat(line.rollLength)  : null
   const pieceLength = line.pieceLength ? parseFloat(line.pieceLength) : null
   const lengthM     = line.lengthM     ? parseFloat(line.lengthM)     : 0
+  // G3: preview phản ánh tráng màng — ước tính theo GSM thành phẩm như OrderDetail
+  const isLaminated = line.isLaminated
+  const rawFabricGsm = line.rawFabricGsm ? parseInt(line.rawFabricGsm) : null
+  const coatingGsm   = line.coatingGsm   ? parseInt(line.coatingGsm)   : null
+  const finishedGsm  = line.finishedGsm  ? parseInt(line.finishedGsm)  : null
 
   const result = calculateOrderWeight({
     orderType: line.orderType,
@@ -99,6 +124,10 @@ function calcLine(line: LineItem) {
     qty,
     rollLength,
     pieceLength,
+    isLaminated,
+    rawFabricGsm,
+    coatingGsm,
+    finishedGsm,
   })
 
   if (result.totalMeters == null || result.totalMeters <= 0) return null
@@ -133,6 +162,26 @@ function newLine(): LineItem {
     beamCount: '',
     eyeletLines: '',
     eyeletSpec: '',
+    primaryPackingType: 'ROLL',
+    outerWrapping: 'POLYBAG',
+    // G1: lõi giấy chỉ đúng với ROLL — default false để không gán dữ liệu ảo cho BALE/CARTON
+    hasPaperCore: false,
+    isHalfFolded: false,
+    piecesPerCarton: '',
+    piecesPerBale: '',
+    boxDimensions: '',
+    onPallet: false,
+    secondaryPackingType: 'NONE',
+    palletDimensions: '',
+    itemsPerPallet: '',
+    packingNote: '',
+    isLaminated: false,
+    rawFabricGsm: '',
+    coatingGsm: '',
+    finishedGsm: '',
+    toleranceQtyPct: '10',
+    toleranceSpecPct: '5',
+    colorVersion: 'STD',
   }
 }
 
@@ -160,7 +209,9 @@ export default function MultiLineOrderForm() {
   const [containerSize,setContainerSize]= useState('')
   const [description, setDescription] = useState('')
   const [remark,      setRemark]      = useState('')
-  const [isDraft,     setIsDraft]     = useState(false)
+  // P0: Canonical lifecycle status is the single source of truth
+  const [lifecycleStatus, setLifecycleStatus] = useState<'DRAFT' | 'PLACEHOLDER' | 'APPROVED'>('APPROVED')
+  const isDraftMode = lifecycleStatus === 'DRAFT'
 
   // ── Lines (now include gsm, meshType, needleCount, beamCount per line) ──────
   const [lines, setLines] = useState<LineItem[]>([newLine()])
@@ -310,7 +361,7 @@ export default function MultiLineOrderForm() {
     if (!piNumber.trim()) errs.piNumber = 'PI Number là bắt buộc'
     if (!customer.trim()) errs.customer = 'Khách hàng là bắt buộc'
 
-    if (isDraft) {
+    if (isDraftMode) {
       setFieldErrors(errs)
       return Object.keys(errs).length === 0
     }
@@ -331,6 +382,32 @@ export default function MultiLineOrderForm() {
         if (!line.frPct || isNaN(fr) || fr <= 0) {
           errs[`${p}.frPct`] = 'FR% phải lớn hơn 0 khi chọn chống cháy (FR)'
         }
+      }
+
+      // G3 parity with template/import validation
+      if (line.primaryPackingType === 'CARTON') {
+        const v = parseInt(line.piecesPerCarton)
+        if (!line.piecesPerCarton || isNaN(v) || v <= 0) errs[`${p}.piecesPerCarton`] = 'Thiếu số tấm/thùng khi chọn đóng thùng Carton (piecesPerCarton > 0)'
+      }
+      if (line.primaryPackingType === 'BALE') {
+        const v = parseInt(line.piecesPerBale)
+        if (!line.piecesPerBale || isNaN(v) || v <= 0) errs[`${p}.piecesPerBale`] = 'Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)'
+      }
+      if (line.onPallet && !line.palletDimensions.trim()) {
+        errs[`${p}.palletDimensions`] = 'Thiếu kích thước Pallet khi chọn đóng trên Pallet'
+      }
+      if (line.onPallet && (line.secondaryPackingType === 'NONE' || !line.secondaryPackingType.trim())) {
+        errs[`${p}.secondaryPackingType`] = 'Chưa chọn loại Pallet (Gỗ/Nhựa/Sắt) khi đóng trên Pallet'
+      }
+      if (line.isLaminated) {
+        const raw = parseInt(line.rawFabricGsm)
+        const fin = parseInt(line.finishedGsm)
+        if (!line.rawFabricGsm || isNaN(raw) || raw <= 0 || !line.finishedGsm || isNaN(fin) || fin <= 0) {
+          errs[`${p}.rawFabricGsm`] = 'Hàng tráng màng ngoài bắt buộc có GSM dệt mộc và GSM thành phẩm'
+        }
+      }
+      if (line.color.trim().toUpperCase().includes('DESERT SAND') && line.colorVersion !== 'Version A' && line.colorVersion !== 'Version B') {
+        errs[`${p}.colorVersion`] = 'Màu Desert Sand bắt buộc chọn Version A hoặc Version B'
       }
 
       if (line.orderType === 'meters') {
@@ -372,7 +449,9 @@ export default function MultiLineOrderForm() {
       containerSize: containerSize.trim() || undefined,
       description: description.trim() || undefined,
       remark:      remark.trim()      || undefined,
-      isDraft,
+      isDraft: isDraftMode,
+      lifecycleStatus,
+      isPlaceholder: lifecycleStatus === 'PLACEHOLDER',
       // Per-line fields (gsm, meshType, needleCount, beamCount now inside each line)
       lines: lines.map((line) => ({
         color:     line.color.trim() || undefined,
@@ -404,6 +483,27 @@ export default function MultiLineOrderForm() {
         beamCount:   line.beamCount          ? parseInt(line.beamCount)     : undefined,
         eyeletLines: line.eyeletLines        ? parseInt(line.eyeletLines)   : undefined,
         eyeletSpec:  line.eyeletSpec.trim()  || undefined,
+        // G3 V4.1 parity — same mapping as PI PUT route
+        colorVersion: line.colorVersion.trim() || undefined,
+        primaryPackingType: line.primaryPackingType,
+        // Lõi giấy chỉ có nghĩa với ROLL — BALE/CARTON luôn false.
+        hasPaperCore: line.primaryPackingType === 'ROLL' && line.hasPaperCore,
+        isHalfFolded: line.isHalfFolded,
+        outerWrapping: line.outerWrapping || undefined,
+        piecesPerCarton: line.piecesPerCarton ? parseInt(line.piecesPerCarton) : undefined,
+        piecesPerBale: line.piecesPerBale ? parseInt(line.piecesPerBale) : undefined,
+        boxDimensions: line.boxDimensions.trim() || undefined,
+        onPallet: line.onPallet,
+        secondaryPackingType: line.secondaryPackingType || undefined,
+        palletDimensions: line.palletDimensions.trim() || undefined,
+        itemsPerPallet: line.itemsPerPallet ? parseInt(line.itemsPerPallet) : undefined,
+        packingNote: line.packingNote.trim() || undefined,
+        isLaminated: line.isLaminated,
+        rawFabricGsm: line.rawFabricGsm ? parseInt(line.rawFabricGsm) : undefined,
+        coatingGsm: line.coatingGsm ? parseInt(line.coatingGsm) : undefined,
+        finishedGsm: line.finishedGsm ? parseInt(line.finishedGsm) : undefined,
+        toleranceQtyPct: line.toleranceQtyPct ? parseFloat(line.toleranceQtyPct) : undefined,
+        toleranceSpecPct: line.toleranceSpecPct ? parseFloat(line.toleranceSpecPct) : undefined,
       })),
     }
 
@@ -442,21 +542,27 @@ export default function MultiLineOrderForm() {
 
       {/* ── Shared fields card ─────────────────────────────────────────────── */}
       <section className="bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-xl p-6 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <p className="text-xs font-inter font-semibold text-secondary uppercase tracking-widest">
-            Thông tin chung — áp dụng cho tất cả dòng hàng
-          </p>
-          <label htmlFor="ml-isDraft" className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#FFF8E7] border border-[#F59E0B]/40 text-[#92400E] text-xs font-medium cursor-pointer hover:bg-[#FEF3C7] transition-colors select-none">
-            <input
-              id="ml-isDraft"
-              type="checkbox"
-              checked={isDraft}
-              onChange={(e) => setIsDraft(e.target.checked)}
-              className="w-4 h-4 text-[#D97706] rounded border-[#F59E0B] focus:ring-[#D97706] cursor-pointer"
-            />
-            <span>Đây là đơn nháp (lưu tạm khi thông tin chưa đầy đủ)</span>
-          </label>
-        </div>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <p className="text-xs font-inter font-semibold text-secondary uppercase tracking-widest">
+              Thông tin chung — áp dụng cho tất cả dòng hàng
+            </p>
+            <div className="flex items-center gap-3">
+              {/* P0: Single source of truth — canonical lifecycle dropdown */}
+              <label htmlFor="ml-lifecycle" className="inline-flex items-center gap-2 text-xs font-semibold text-secondary">
+                Tình trạng đơn *
+                <select
+                  id="ml-lifecycle"
+                  value={lifecycleStatus}
+                  onChange={(e) => setLifecycleStatus(e.target.value as 'DRAFT' | 'PLACEHOLDER' | 'APPROVED')}
+                  className="px-3 py-1.5 rounded-lg bg-surface-container-low border border-outline-variant text-xs font-semibold text-on-surface focus:ring-1 focus:ring-primary/40 cursor-pointer shadow-xs"
+                >
+                  <option value="APPROVED">Đã chốt — sản xuất</option>
+                  <option value="PLACEHOLDER">Giữ chỗ máy — được xếp lịch</option>
+                  <option value="DRAFT">Đơn nháp — chưa xếp lịch được</option>
+                </select>
+              </label>
+            </div>
+          </div>
 
         {/* PI Warning Banner */}
         {piWarning && (
@@ -598,7 +704,7 @@ export default function MultiLineOrderForm() {
             Dòng hàng ({lines.length})
           </p>
           <p className="text-xs text-secondary font-inter">
-            Sub-line sẽ được đánh số tự động bắt đầu từ 0
+            Số thứ tự tự động theo mã PI
           </p>
         </div>
 
@@ -630,8 +736,11 @@ export default function MultiLineOrderForm() {
                 </button>
               </div>
 
-              {/* Required fields grid — Row 1 & Row 2 per Spec 1.1 */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-3">
+              {/* Section 1: Thông số Dệt & Quy cách Đơn hàng */}
+              <div className="mb-2 text-xs font-semibold text-primary uppercase tracking-wider">
+                1. Thông số Dệt & Quy cách Đơn hàng
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
 
                 {/* ROW 1: Màu (Color) */}
                 <div className="relative">
@@ -642,7 +751,12 @@ export default function MultiLineOrderForm() {
                     placeholder="e.g. BLACK"
                     value={line.color}
                     onChange={(e) => {
-                      updateLine(line.id, { color: e.target.value })
+                      const val = e.target.value
+                      const patch: Partial<LineItem> = { color: val }
+                      if (!val.toUpperCase().includes('DESERT')) {
+                        patch.colorVersion = 'STD'
+                      }
+                      updateLine(line.id, patch)
                       setActiveColorDropdownLineId(line.id)
                     }}
                     onFocus={() => setActiveColorDropdownLineId(line.id)}
@@ -665,12 +779,14 @@ export default function MultiLineOrderForm() {
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={() => {
                               const patch: Partial<LineItem> = { color: preset.color }
+                              if (!preset.color.toUpperCase().includes('DESERT')) {
+                                patch.colorVersion = 'STD'
+                              }
                               if (!line.mbCode.trim() && preset.mbCode) patch.mbCode = preset.mbCode
                               if (!line.needleCount && preset.wale) patch.needleCount = String(preset.wale)
                               if (preset.eyeletLines) {
                                 patch.hasEyelet = true
-                                if (!line.eyeletLines) patch.eyeletLines = String(preset.eyeletLines)
-                                if (!line.eyeletColor.trim() && preset.eyeletColor) patch.eyeletColor = preset.eyeletColor
+                                patch.eyeletLines = String(preset.eyeletLines)
                               }
                               updateLine(line.id, patch)
                               setActiveColorDropdownLineId(null)
@@ -761,7 +877,20 @@ export default function MultiLineOrderForm() {
                   <select
                     id={`ml-line-${line.id}-orderType`}
                     value={line.orderType}
-                    onChange={(e) => updateLine(line.id, { orderType: e.target.value as OrderType })}
+                    onChange={(e) => {
+                      const newType = e.target.value as OrderType
+                      const patch: Partial<LineItem> = { orderType: newType }
+                      if (newType === 'pieces') {
+                        if (line.primaryPackingType === 'ROLL') {
+                          patch.primaryPackingType = 'CARTON'
+                        }
+                      } else if (newType === 'rolls') {
+                        if (line.primaryPackingType !== 'ROLL') {
+                          patch.primaryPackingType = 'ROLL'
+                        }
+                      }
+                      updateLine(line.id, patch)
+                    }}
                     className={inputCls()}
                   >
                     <option value="rolls">Theo cuộn</option>
@@ -770,7 +899,7 @@ export default function MultiLineOrderForm() {
                   </select>
                 </div>
 
-                {/* ROW 2: GSM */}
+                {/* ROW 2: GSM (đơn hàng) */}
                 <div>
                   <Label required>GSM (đơn hàng)</Label>
                   <input
@@ -802,7 +931,7 @@ export default function MultiLineOrderForm() {
                   )}
                 </div>
 
-                {/* ROW 2: Qty (Số cuộn / Số tấm) */}
+                {/* ROW 2: Qty (Số cuộn / Số tấm / Tổng mét) */}
                 {line.orderType === 'rolls' && (
                   <div>
                     <Label required>Số cuộn</Label>
@@ -835,66 +964,24 @@ export default function MultiLineOrderForm() {
                     )}
                   </div>
                 )}
-                {line.orderType === 'meters' && <div></div>}
+                {line.orderType === 'meters' && (
+                  <div>
+                    <Label required>Tổng mét</Label>
+                    <input
+                      id={`ml-line-${line.id}-qty-meters`}
+                      type="number" min={1} step={1}
+                      placeholder="e.g. 30000"
+                      value={line.qty}
+                      onChange={(e) => updateLine(line.id, { qty: e.target.value })}
+                      className={monoInputCls(!!fieldErrors[`${p}.qty`])}
+                    />
+                    {fieldErrors[`${p}.qty`] && (
+                      <p className="text-xs text-error mt-1">{fieldErrors[`${p}.qty`]}</p>
+                    )}
+                  </div>
+                )}
 
-              </div>
-
-              {/* Technical specs + optional fields */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 pt-2 border-t-[0.5px] border-outline-variant/50">
-
-                {/* Mesh Type */}
-                <div>
-                  <Label>Loại lưới</Label>
-                  <input
-                    id={`ml-line-${line.id}-meshType`}
-                    type="text"
-                    placeholder="e.g. Hex, Diamond..."
-                    value={line.meshType}
-                    onChange={(e) => updateLine(line.id, { meshType: e.target.value })}
-                    className={inputCls()}
-                  />
-                </div>
-
-                {/* Needle Count */}
-                <div>
-                  <Label>Số kim</Label>
-                  <input
-                    id={`ml-line-${line.id}-needleCount`}
-                    type="number" min={1} step={1}
-                    placeholder="e.g. 192"
-                    value={line.needleCount}
-                    onChange={(e) => updateLine(line.id, { needleCount: e.target.value })}
-                    className={monoInputCls()}
-                  />
-                </div>
-
-                {/* Beam Count */}
-                <div>
-                  <Label>Số dàn</Label>
-                  <input
-                    id={`ml-line-${line.id}-beamCount`}
-                    type="number" min={1} step={1}
-                    placeholder="e.g. 2"
-                    value={line.beamCount}
-                    onChange={(e) => updateLine(line.id, { beamCount: e.target.value })}
-                    className={monoInputCls()}
-                  />
-                </div>
-
-                {/* UV% */}
-                <div>
-                  <Label>UV %</Label>
-                  <input
-                    id={`ml-line-${line.id}-uvPct`}
-                    type="number" min={0} max={100} step={0.01}
-                    placeholder="e.g. 2.5"
-                    value={line.uvPct}
-                    onChange={(e) => updateLine(line.id, { uvPct: e.target.value })}
-                    className={monoInputCls()}
-                  />
-                </div>
-
-                {/* MB Code */}
+                {/* ROW 2: Mã màu (MB Code) */}
                 <div>
                   <Label>Mã màu (MB Code)</Label>
                   <input
@@ -907,9 +994,151 @@ export default function MultiLineOrderForm() {
                   />
                 </div>
 
-                {/* FR Flag Checkbox */}
-                <div className="flex flex-col justify-end pb-1">
-                  <div className="flex items-center gap-2 py-2">
+                {/* ROW 3: Loại lưới */}
+                <div>
+                  <Label>Loại lưới</Label>
+                  <input
+                    id={`ml-line-${line.id}-meshType`}
+                    type="text"
+                    placeholder="e.g. Hex, Diamond..."
+                    value={line.meshType}
+                    onChange={(e) => updateLine(line.id, { meshType: e.target.value })}
+                    className={inputCls()}
+                  />
+                </div>
+
+                {/* ROW 3: Số kim */}
+                <div>
+                  <Label>Số kim</Label>
+                  <input
+                    id={`ml-line-${line.id}-needleCount`}
+                    type="number" min={1} step={1}
+                    placeholder="e.g. 192"
+                    value={line.needleCount}
+                    onChange={(e) => updateLine(line.id, { needleCount: e.target.value })}
+                    className={monoInputCls()}
+                  />
+                </div>
+
+                {/* ROW 3: UV % */}
+                <div>
+                  <Label>UV %</Label>
+                  <input
+                    id={`ml-line-${line.id}-uvPct`}
+                    type="number" min={0} max={100} step={0.01}
+                    placeholder="e.g. 2.5"
+                    value={line.uvPct}
+                    onChange={(e) => updateLine(line.id, { uvPct: e.target.value })}
+                    className={monoInputCls()}
+                  />
+                </div>
+
+                {/* ROW 3: Phiên bản màu (Chỉ hiển thị khi màu là Desert Sand) */}
+                {line.color.toUpperCase().includes('DESERT') && (
+                  <div>
+                    <Label>Phiên bản màu (Desert Sand)</Label>
+                    <select
+                      id={`ml-line-${line.id}-colorVersion`}
+                      value={line.colorVersion}
+                      onChange={(e) => updateLine(line.id, { colorVersion: e.target.value })}
+                      className={inputCls(!!fieldErrors[`${p}.colorVersion`])}
+                    >
+                      <option value="STD">STD (thường)</option>
+                      <option value="Version A">Version A (MB Korea)</option>
+                      <option value="Version B">Version B (MB Arirang)</option>
+                    </select>
+                    {fieldErrors[`${p}.colorVersion`] && (
+                      <p className="text-xs text-error mt-1">{fieldErrors[`${p}.colorVersion`]}</p>
+                    )}
+                  </div>
+                )}
+
+              </div>
+
+              {/* Backward-compat hidden input */}
+              <input type="hidden" id={`ml-line-${line.id}-requiresPacking`} value={line.requiresPacking ? 'true' : 'false'} readOnly />
+
+              {/* ── Section 2: Tráng màng ngoài & Gia công Đặc thù (Lamination & Finishing) ── */}
+              <div className="mt-4 bg-surface-variant/15 border border-outline-variant/40 rounded-lg p-3 space-y-3">
+                <div className="text-xs font-semibold text-primary uppercase tracking-wider">
+                  2. Tráng màng ngoài & Gia công Đặc thù
+                </div>
+
+                {/* Khối Tráng màng ngoài Dual-GSM (R7) */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      id={`ml-line-${line.id}-isLaminated`}
+                      type="checkbox"
+                      checked={line.isLaminated}
+                      onChange={(e) => updateLine(line.id, { isLaminated: e.target.checked })}
+                      className="w-4 h-4 rounded border-outline-variant text-primary cursor-pointer"
+                    />
+                    <label htmlFor={`ml-line-${line.id}-isLaminated`} className="text-sm font-medium text-on-surface cursor-pointer select-none">
+                      Hàng tráng màng ngoài (lệnh dệt GSM mộc, PI chốt GSM thành phẩm)
+                    </label>
+                  </div>
+
+                  {line.isLaminated && (
+                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 space-y-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <Label required>GSM mộc (Lệnh dệt)</Label>
+                          <input
+                            id={`ml-line-${line.id}-rawFabricGsm`}
+                            type="number" min={1} step={1} placeholder="e.g. 325"
+                            value={line.rawFabricGsm}
+                            onChange={(e) => updateLine(line.id, { rawFabricGsm: e.target.value })}
+                            className={monoInputCls(!!fieldErrors[`${p}.rawFabricGsm`])}
+                          />
+                          {fieldErrors[`${p}.rawFabricGsm`] && (
+                            <p className="text-xs text-error mt-1">{fieldErrors[`${p}.rawFabricGsm`]}</p>
+                          )}
+                        </div>
+                        <div>
+                          <Label>GSM tráng (Gia công)</Label>
+                          <input
+                            id={`ml-line-${line.id}-coatingGsm`}
+                            type="number" min={1} step={1} placeholder="e.g. 105"
+                            value={line.coatingGsm}
+                            onChange={(e) => updateLine(line.id, { coatingGsm: e.target.value })}
+                            className={monoInputCls()}
+                          />
+                        </div>
+                        <div>
+                          <Label required>GSM thành phẩm (Chốt PI)</Label>
+                          <input
+                            id={`ml-line-${line.id}-finishedGsm`}
+                            type="number" min={1} step={1} placeholder="e.g. 430"
+                            value={line.finishedGsm}
+                            onChange={(e) => updateLine(line.id, line.isLaminated
+                              // Đ5: đơn laminate — GSM đơn hàng chính là GSM thành phẩm,
+                              // gõ 1 lần ở đây, khỏi gõ lại ở mục GSM đơn hàng
+                              ? { finishedGsm: e.target.value, gsm: e.target.value }
+                              : { finishedGsm: e.target.value })}
+                            className={monoInputCls(!!fieldErrors[`${p}.rawFabricGsm`])}
+                          />
+                          {fieldErrors[`${p}.rawFabricGsm`] && (
+                            <p className="text-xs text-error mt-1">{fieldErrors[`${p}.rawFabricGsm`]}</p>
+                          )}
+                        </div>
+                      </div>
+                      {line.rawFabricGsm && line.coatingGsm && line.finishedGsm &&
+                       Number(line.rawFabricGsm) + Number(line.coatingGsm) !== Number(line.finishedGsm) && (
+                        <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                          ⚠️ Lưu ý: Mộc ({line.rawFabricGsm}) + Tráng ({line.coatingGsm}) = {Number(line.rawFabricGsm) + Number(line.coatingGsm)} ≠ Thành phẩm ({line.finishedGsm})
+                        </p>
+                      )}
+                      <p className="text-[11px] text-amber-700 dark:text-amber-300 italic">
+                        * Tổ dệt sẽ xuất sợi theo GSM mộc ({line.rawFabricGsm || '...'} gsm). Chứng từ PI và giao hàng chốt theo GSM thành phẩm ({line.finishedGsm || line.gsm || '...'} gsm).
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Chống cháy (FR) */}
+                <div className="space-y-2 pt-2 border-t border-outline-variant/30">
+                  <div className="flex items-center gap-2">
                     <input
                       id={`ml-line-${line.id}-frFlag`}
                       type="checkbox"
@@ -923,48 +1152,32 @@ export default function MultiLineOrderForm() {
                       }}
                       className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer"
                     />
-                    <label htmlFor={`ml-line-${line.id}-frFlag`} className="text-sm font-noto text-on-surface cursor-pointer select-none">
+                    <label htmlFor={`ml-line-${line.id}-frFlag`} className="text-sm font-medium text-on-surface cursor-pointer select-none">
                       Chống cháy (FR)
                     </label>
                   </div>
+
+                  {line.frFlag && (
+                    <div className="max-w-xs pl-6">
+                      <Label required>FR % (tỷ lệ phụ gia chống cháy)</Label>
+                      <input
+                        id={`ml-line-${line.id}-frPct`}
+                        type="number" min={0} max={100} step={0.01}
+                        placeholder="e.g. 6.5"
+                        value={line.frPct}
+                        onChange={(e) => updateLine(line.id, { frPct: e.target.value })}
+                        className={monoInputCls(!!fieldErrors[`${p}.frPct`])}
+                      />
+                      {fieldErrors[`${p}.frPct`] && (
+                        <p className="text-xs text-error mt-1">{fieldErrors[`${p}.frPct`]}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                {/* FR% — shown when frFlag is checked */}
-                {line.frFlag && (
-                  <div>
-                    <Label required>FR %</Label>
-                    <input
-                      id={`ml-line-${line.id}-frPct`}
-                      type="number" min={0} max={100} step={0.01}
-                      placeholder="e.g. 6.5"
-                      value={line.frPct}
-                      onChange={(e) => updateLine(line.id, { frPct: e.target.value })}
-                      className={monoInputCls(!!fieldErrors[`${p}.frPct`])}
-                    />
-                    {fieldErrors[`${p}.frPct`] && (
-                      <p className="text-xs text-error mt-1">{fieldErrors[`${p}.frPct`]}</p>
-                    )}
-                  </div>
-                )}
-                {/* Requires Packing */}
-                <div className="flex flex-col justify-end pb-1">
-                  <div className="flex items-center gap-2 py-2">
-                    <input
-                      id={`ml-line-${line.id}-requiresPacking`}
-                      type="checkbox"
-                      checked={line.requiresPacking}
-                      onChange={(e) => updateLine(line.id, { requiresPacking: e.target.checked })}
-                      className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer"
-                    />
-                    <label htmlFor={`ml-line-${line.id}-requiresPacking`} className="text-sm font-noto text-on-surface cursor-pointer select-none">
-                      Cần đóng gói
-                    </label>
-                  </div>
-                </div>
-
-                {/* Eyelet checkbox */}
-                <div className="flex flex-col justify-end pb-1">
-                  <div className="flex items-center gap-2 py-2">
+                {/* Dập khoen (Eyelet) */}
+                <div className="space-y-2 pt-2 border-t border-outline-variant/30">
+                  <div className="flex items-center gap-2">
                     <input
                       id={`ml-line-${line.id}-hasEyelet`}
                       type="checkbox"
@@ -972,54 +1185,52 @@ export default function MultiLineOrderForm() {
                       onChange={(e) => updateLine(line.id, { hasEyelet: e.target.checked })}
                       className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer"
                     />
-                    <label htmlFor={`ml-line-${line.id}-hasEyelet`} className="text-sm font-noto text-on-surface cursor-pointer select-none">
-                      Có eyelet
+                    <label htmlFor={`ml-line-${line.id}-hasEyelet`} className="text-sm font-medium text-on-surface cursor-pointer select-none">
+                      Có eyelet (khoen viền)
                     </label>
                   </div>
+
+                  {line.hasEyelet && (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pl-6">
+                      <div>
+                        <Label>Màu eyelet</Label>
+                        <input
+                          id={`ml-line-${line.id}-eyeletColor`}
+                          type="text"
+                          placeholder="e.g. SILVER"
+                          value={line.eyeletColor}
+                          onChange={(e) => updateLine(line.id, { eyeletColor: e.target.value })}
+                          className={inputCls()}
+                        />
+                      </div>
+                      <div>
+                        <Label>Số lines eyelet</Label>
+                        <input
+                          id={`ml-line-${line.id}-eyeletLines`}
+                          type="number" min={1} step={1}
+                          placeholder="e.g. 4"
+                          value={line.eyeletLines}
+                          onChange={(e) => updateLine(line.id, { eyeletLines: e.target.value })}
+                          className={monoInputCls()}
+                        />
+                      </div>
+                      <div>
+                        <Label>Mô tả eyelet</Label>
+                        <input
+                          id={`ml-line-${line.id}-eyeletSpec`}
+                          type="text"
+                          placeholder="VD: 5cm interval, single band both edges"
+                          value={line.eyeletSpec}
+                          onChange={(e) => updateLine(line.id, { eyeletSpec: e.target.value })}
+                          className={inputCls()}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {/* Eyelet color — only when hasEyelet */}
-                {line.hasEyelet && (
-                  <div>
-                    <Label>Màu eyelet</Label>
-                    <input
-                      id={`ml-line-${line.id}-eyeletColor`}
-                      type="text"
-                      placeholder="e.g. SILVER"
-                      value={line.eyeletColor}
-                      onChange={(e) => updateLine(line.id, { eyeletColor: e.target.value })}
-                      className={inputCls()}
-                    />
-                  </div>
-                )}
-
-                {/* Eyelet Lines — new per-line spec field */}
-                <div>
-                  <Label>Số lines eyelet</Label>
-                  <input
-                    id={`ml-line-${line.id}-eyeletLines`}
-                    type="number" min={1} step={1}
-                    placeholder="e.g. 4"
-                    value={line.eyeletLines}
-                    onChange={(e) => updateLine(line.id, { eyeletLines: e.target.value })}
-                    className={monoInputCls()}
-                  />
-                </div>
-
-                {/* Eyelet Spec — new per-line spec field */}
-                <div className="sm:col-span-2">
-                  <Label>Mô tả eyelet</Label>
-                  <input
-                    id={`ml-line-${line.id}-eyeletSpec`}
-                    type="text"
-                    placeholder="VD: 5cm interval, single band both edges"
-                    value={line.eyeletSpec}
-                    onChange={(e) => updateLine(line.id, { eyeletSpec: e.target.value })}
-                    className={inputCls()}
-                  />
-                </div>
-                {/* Line Note */}
-                <div className="sm:col-span-2">
+                {/* Ghi chú dòng */}
+                <div className="pt-2 border-t border-outline-variant/30">
                   <Label>Ghi chú dòng</Label>
                   <input
                     id={`ml-line-${line.id}-lineNote`}
@@ -1032,35 +1243,245 @@ export default function MultiLineOrderForm() {
                 </div>
               </div>
 
-              {/* Live calculation preview */}
-              {calc && (
-                <div className="mt-3 flex flex-wrap gap-4 px-1">
-                  {calc.totalMeters != null && (
-                    <span className="text-xs font-inter text-secondary">
-                      Tổng mét:{' '}
-                      <span className="font-mono text-on-surface font-semibold">
-                        {calc.totalMeters.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} m
-                      </span>
-                    </span>
+              {/* ── Section 3: Quy cách Đóng gói & Pallet (Packing & Logistics) ── */}
+              <div className="mt-4 bg-surface-variant/15 border border-outline-variant/40 rounded-lg p-3 space-y-3">
+                <div className="text-xs font-semibold text-primary uppercase tracking-wider">
+                  3. Quy cách Đóng gói & Pallet
+                </div>
+
+                {/* Kiểu đóng gói chính */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <Label required>Kiểu đóng gói</Label>
+                    <select
+                      id={`ml-line-${line.id}-primaryPackingType`}
+                      value={line.primaryPackingType}
+                      onChange={(e) => updateLine(line.id, { primaryPackingType: e.target.value as LineItem['primaryPackingType'] })}
+                      className={inputCls()}
+                    >
+                      {line.orderType !== 'pieces' && <option value="ROLL">Theo cuộn (ROLL)</option>}
+                      <option value="CARTON">Thùng carton (CARTON)</option>
+                      <option value="BALE">Kiện nén (BALE)</option>
+                    </select>
+                  </div>
+
+                  {line.primaryPackingType === 'ROLL' && (
+                    <>
+                      <div>
+                        <Label>Vỏ bọc</Label>
+                        <select
+                          id={`ml-line-${line.id}-outerWrapping`}
+                          value={line.outerWrapping}
+                          onChange={(e) => updateLine(line.id, { outerWrapping: e.target.value })}
+                          className={inputCls()}
+                        >
+                          <option value="POLYBAG">Túi polybag</option>
+                          <option value="TARPAULIN">Bạt tarpaulin</option>
+                          <option value="NONE">Không bọc</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-4 pt-6">
+                        <label className="inline-flex items-center gap-1.5 text-xs text-on-surface cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={line.hasPaperCore}
+                            onChange={(e) => updateLine(line.id, { hasPaperCore: e.target.checked })}
+                            className="w-4 h-4 rounded border-outline-variant text-primary cursor-pointer"
+                          />
+                          Lõi giấy
+                        </label>
+                        <label className="inline-flex items-center gap-1.5 text-xs text-on-surface cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={line.isHalfFolded}
+                            onChange={(e) => updateLine(line.id, { isHalfFolded: e.target.checked })}
+                            className="w-4 h-4 rounded border-outline-variant text-primary cursor-pointer"
+                          />
+                          Gấp đôi
+                        </label>
+                      </div>
+                    </>
                   )}
-                  {calc.totalWeightKgs != null && (
-                    <span className="text-xs font-inter text-secondary">
-                      Trọng lượng PO (dự kiến):{' '}
-                      <span className="font-mono text-on-surface font-semibold">
-                        {calc.totalWeightKgs.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} kg
-                      </span>
-                    </span>
+
+                  {line.primaryPackingType === 'CARTON' && (
+                    <>
+                      <div>
+                        <Label required>Số tấm/thùng</Label>
+                        <input
+                          id={`ml-line-${line.id}-piecesPerCarton`}
+                          type="number" min={1} step={1} placeholder="e.g. 4"
+                          value={line.piecesPerCarton}
+                          onChange={(e) => updateLine(line.id, { piecesPerCarton: e.target.value })}
+                          className={monoInputCls(!!fieldErrors[`${p}.piecesPerCarton`])}
+                        />
+                        {fieldErrors[`${p}.piecesPerCarton`] && (
+                          <p className="text-xs text-error mt-1">{fieldErrors[`${p}.piecesPerCarton`]}</p>
+                        )}
+                      </div>
+                    </>
                   )}
-                  {calc.requiredYarnKg != null && (
-                    <span className="text-xs font-inter text-secondary">
-                      Nhu cầu sợi ({line.productionGsm ? `${line.productionGsm}gsm` : 'tính theo GSM PO'}):{' '}
-                      <span className="font-mono text-primary font-semibold">
-                        {calc.requiredYarnKg.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} kg
-                      </span>
-                    </span>
+
+                  {line.primaryPackingType === 'BALE' && (
+                    <>
+                      <div>
+                        <Label required>Số tấm/kiện</Label>
+                        <input
+                          id={`ml-line-${line.id}-piecesPerBale`}
+                          type="number" min={1} step={1} placeholder="e.g. 50"
+                          value={line.piecesPerBale}
+                          onChange={(e) => updateLine(line.id, { piecesPerBale: e.target.value })}
+                          className={monoInputCls(!!fieldErrors[`${p}.piecesPerBale`])}
+                        />
+                        {fieldErrors[`${p}.piecesPerBale`] && (
+                          <p className="text-xs text-error mt-1">{fieldErrors[`${p}.piecesPerBale`]}</p>
+                        )}
+                      </div>
+                    </>
                   )}
                 </div>
-              )}
+
+                {/* Tùy chọn Pallet */}
+                <div className="space-y-2 pt-2 border-t border-outline-variant/30">
+                  <div className="flex items-center gap-2">
+                    <input
+                      id={`ml-line-${line.id}-onPallet`}
+                      type="checkbox"
+                      checked={line.onPallet}
+                      onChange={(e) => updateLine(line.id, { onPallet: e.target.checked })}
+                      className="w-4 h-4 rounded border-outline-variant text-primary cursor-pointer"
+                    />
+                    <label htmlFor={`ml-line-${line.id}-onPallet`} className="text-sm font-medium text-on-surface cursor-pointer select-none">
+                      Đóng trên Pallet
+                    </label>
+                  </div>
+
+                  {line.onPallet && (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pl-6">
+                      <div>
+                        <Label required>Loại pallet</Label>
+                        <select
+                          id={`ml-line-${line.id}-secondaryPackingType`}
+                          value={line.secondaryPackingType}
+                          onChange={(e) => updateLine(line.id, { secondaryPackingType: e.target.value })}
+                          className={inputCls(!!fieldErrors[`${p}.secondaryPackingType`])}
+                        >
+                          <option value="NONE">Chọn loại…</option>
+                          <option value="WOOD_PALLET">Pallet Gỗ</option>
+                          <option value="PLASTIC_PALLET">Pallet Nhựa</option>
+                          <option value="IRON_PALLET">Pallet Sắt</option>
+                        </select>
+                        {fieldErrors[`${p}.secondaryPackingType`] && (
+                          <p className="text-xs text-error mt-1">{fieldErrors[`${p}.secondaryPackingType`]}</p>
+                        )}
+                      </div>
+                      <div>
+                        <Label required>Kích thước pallet</Label>
+                        <input
+                          id={`ml-line-${line.id}-palletDimensions`}
+                          type="text" placeholder="KT Pallet (bắt buộc)"
+                          value={line.palletDimensions}
+                          onChange={(e) => updateLine(line.id, { palletDimensions: e.target.value })}
+                          className={inputCls(!!fieldErrors[`${p}.palletDimensions`])}
+                        />
+                        {fieldErrors[`${p}.palletDimensions`] && (
+                          <p className="text-xs text-error mt-1">{fieldErrors[`${p}.palletDimensions`]}</p>
+                        )}
+                      </div>
+                      <div>
+                        <Label>Số lượng trên pallet</Label>
+                        <input
+                          id={`ml-line-${line.id}-itemsPerPallet`}
+                          type="number" min={1} step={1} placeholder="SL/pallet"
+                          value={line.itemsPerPallet}
+                          onChange={(e) => updateLine(line.id, { itemsPerPallet: e.target.value })}
+                          className={monoInputCls()}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Ghi chú đóng gói */}
+                <div className="pt-2 border-t border-outline-variant/30">
+                  <Label>Ghi chú đóng gói</Label>
+                  <input
+                    id={`ml-line-${line.id}-packingNote`}
+                    type="text" placeholder="VD: Bọc màng co, dán nhãn SNY"
+                    value={line.packingNote}
+                    onChange={(e) => updateLine(line.id, { packingNote: e.target.value })}
+                    className={inputCls()}
+                  />
+                </div>
+              </div>
+
+              {/* ── Section 4: Tiêu chuẩn Dung sai & Dự tính Sản xuất (Tolerances & Preview) ── */}
+              <div className="mt-4 bg-surface-variant/15 border border-outline-variant/40 rounded-lg p-3 space-y-3">
+                <div className="text-xs font-semibold text-primary uppercase tracking-wider">
+                  4. Tiêu chuẩn Dung sai & Dự tính Sản xuất
+                </div>
+
+                {/* Quản lý Dung sai */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-md">
+                  <div>
+                    <Label>Dung sai số lượng (±%)</Label>
+                    <input
+                      id={`ml-line-${line.id}-toleranceQtyPct`}
+                      type="number" min={0} step={0.5}
+                      value={line.toleranceQtyPct}
+                      onChange={(e) => updateLine(line.id, { toleranceQtyPct: e.target.value })}
+                      className={monoInputCls()}
+                    />
+                  </div>
+                  <div>
+                    <Label>Dung sai rộng/dài/nặng (±%)</Label>
+                    <input
+                      id={`ml-line-${line.id}-toleranceSpecPct`}
+                      type="number" min={0} step={0.5}
+                      value={line.toleranceSpecPct}
+                      onChange={(e) => updateLine(line.id, { toleranceSpecPct: e.target.value })}
+                      className={monoInputCls()}
+                    />
+                  </div>
+                </div>
+
+                {/* Live calculation preview */}
+                {calc && (
+                  <div className="pt-3 border-t border-outline-variant/30 flex flex-wrap gap-4">
+                    {calc.totalMeters != null && (
+                      <span className="text-xs font-inter text-secondary">
+                        Tổng mét:{' '}
+                        <span className="font-mono text-on-surface font-semibold">
+                          {calc.totalMeters.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} m
+                        </span>
+                      </span>
+                    )}
+                    {calc.qtySqm != null && (
+                      <span className="text-xs font-inter text-secondary">
+                        Diện tích:{' '}
+                        <span className="font-mono text-on-surface font-semibold">
+                          {calc.qtySqm.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} m²
+                        </span>
+                      </span>
+                    )}
+                    {calc.totalWeightKgs != null && (
+                      <span className="text-xs font-inter text-secondary">
+                        Trọng lượng PO (dự kiến):{' '}
+                        <span className="font-mono text-on-surface font-semibold">
+                          {calc.totalWeightKgs.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} kg
+                        </span>
+                      </span>
+                    )}
+                    {calc.requiredYarnKg != null && (
+                      <span className="text-xs font-inter text-secondary">
+                        Nhu cầu sợi ({line.productionGsm ? `${line.productionGsm}gsm` : 'tính theo GSM PO'}):{' '}
+                        <span className="font-mono text-primary font-semibold">
+                          {calc.requiredYarnKg.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} kg
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )
         })}
@@ -1073,7 +1494,7 @@ export default function MultiLineOrderForm() {
           className="inline-flex items-center gap-2 border border-dashed border-primary text-primary text-sm font-medium px-4 py-2 h-9 rounded-lg hover:bg-primary/5 transition-colors w-full justify-center"
         >
           <span className="material-symbols-outlined text-[18px]">add</span>
-          + Thêm dòng hàng (copy từ dòng trước)
+          Thêm dòng hàng (copy từ dòng trước)
         </button>
       </div>
 

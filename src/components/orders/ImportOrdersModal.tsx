@@ -19,21 +19,44 @@ type ModalState =
   | 'success'
   | 'error'
 
+interface CustomerReview {
+  name: string
+  suggestedId: string
+  suggestedName: string
+  reason: string
+}
+
 interface PreviewData {
   rows: ParsedOrder[]
   totalParsed: number
   piWarnings?: string[]
+  customerWarnings?: string[]
+  customerReviews?: CustomerReview[]
+  customerNew?: string[]
+  customerAmbiguous?: { name: string; reason: string }[]
   decisions: OrderImportDecision[]
 }
 
 interface ConfirmResult {
   imported: number
   skipped: number
-  totalRows: number
-  summary: { identical: number; conflicted: number; invalid: number }
+  errors?: string[]
+  summary: { total: number; created: number; identical: number; conflicted: number; invalid: number }
+  decisions?: OrderImportDecision[]
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// B4: primary planner action per conflict resolution. Full reasons stay on
+// the decision; this is only the headline hint.
+const RESOLUTION_HINT: Record<string, string> = {
+  DUPLICATE_IN_DB: 'Hệ thống có nhiều đơn cùng PI + NO — cần người kiểm tra',
+  DRAFT_EXISTS: 'Đơn nháp này đã tồn tại — mở ra duyệt tay',
+  DUPLICATE_IN_FILE: 'Trong file có 2 dòng cùng PI + NO nhưng khác nội dung',
+  SPLIT_BY_CUSTOMER: 'Cùng PI với nhiều khách trong file — tách từng khách ra',
+  ADD_NO_TO_FILE: 'Bổ sung cột NO cho dòng này rồi import lại',
+  CONTENT_DIFFERS: 'Nội dung khác đơn hiện tại — mở đơn cũ để so sánh',
+}
 
 function formatDate(iso: string): string {
   if (!iso) return '—'
@@ -77,6 +100,9 @@ export default function ImportOrdersModal() {
   const [result, setResult] = useState<ConfirmResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  // Planner decision per NEEDS_REVIEW customer name: `MERGE:<customerId>` | 'NEW'.
+  // Defaults to the server suggestion (merge); planner flips per row if needed.
+  const [customerChoices, setCustomerChoices] = useState<Record<string, string>>({})
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
@@ -85,6 +111,7 @@ export default function ImportOrdersModal() {
     setResult(null)
     setError(null)
     setSelectedFile(null)
+    setCustomerChoices({})
     if (fileInputRef.current) fileInputRef.current.value = ''
     setState('uploading')
   }
@@ -132,7 +159,10 @@ export default function ImportOrdersModal() {
         return
       }
 
-      setPreview({ rows: json.preview, totalParsed: json.totalParsed, piWarnings: json.piWarnings, decisions: json.decisions ?? [] })
+      setPreview({ rows: json.preview, totalParsed: json.totalParsed, piWarnings: json.piWarnings, customerWarnings: json.customerWarnings, customerReviews: json.customerReviews, customerNew: json.customerNew, customerAmbiguous: json.customerAmbiguous ?? [], decisions: json.decisions ?? [] })
+      // B1: NO silent auto-merge. The planner must explicitly choose merge or
+      // new for every NEEDS_REVIEW name; customerChoices starts empty.
+      setCustomerChoices({})
       setState('preview')
     } catch {
       setError('Lỗi kết nối mạng — không thể gửi file lên máy chủ.')
@@ -155,7 +185,10 @@ export default function ImportOrdersModal() {
       const res = await fetch('/api/orders/import/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rows: preview.rows }),
+        body: JSON.stringify({
+          rows: preview.rows,
+          customerOverrides: Object.entries(customerChoices).map(([rowName, decision]) => ({ rowName, decision })),
+        }),
       })
       const json = await res.json()
 
@@ -168,8 +201,9 @@ export default function ImportOrdersModal() {
       setResult({
         imported: json.imported,
         skipped: json.skipped,
-        totalRows: preview.rows.length,
+        errors: json.errors ?? [],
         summary: json.summary,
+        decisions: json.decisions ?? [],
       })
       setState('success')
       router.refresh()
@@ -183,12 +217,30 @@ export default function ImportOrdersModal() {
     setError(null)
     setPreview(null)
     setSelectedFile(null)
+    setCustomerChoices({})
     if (fileInputRef.current) fileInputRef.current.value = ''
     setState('uploading')
   }
 
-  const validRowsCount = preview ? preview.rows.filter((r) => r.isValid !== false).length : 0
-  const invalidRowsCount = preview ? preview.rows.length - validRowsCount : 0
+  // B3: count from server decisions (same classifier confirm re-runs),
+  // never from row.isValid alone — conflict/identical are not writable.
+  const decisionCounts = (() => {
+    const c = { new: 0, identical: 0, conflict: 0, invalid: 0 }
+    for (const d of preview?.decisions ?? []) {
+      if (d.status === 'new') c.new += 1
+      else if (d.status === 'identical') c.identical += 1
+      else if (d.status === 'conflict') c.conflict += 1
+      else c.invalid += 1
+    }
+    return c
+  })()
+  // B2: NEEDS_REVIEW names the planner still has to resolve (radio starts
+  // unselected). AMBIGUOUS names are NOT counted here — they have no
+  // resolution UI yet (P0-10), their rows are already marked conflict and
+  // skipped; blocking the whole confirm on them would lock out good rows.
+  const pendingCustomerCount = (preview?.customerReviews ?? []).filter(
+    (r) => !(String(r.name).trim() in customerChoices),
+  ).length
 
   return (
     <>
@@ -309,18 +361,56 @@ export default function ImportOrdersModal() {
                     </div>
                   )}
 
-                  {/* Summary Bar */}
+                  {preview.customerWarnings && preview.customerWarnings.length > 0 && (
+                    <div className="p-3 bg-[#FFF8E7] border border-[#F59E0B] rounded-lg text-xs text-[#92400E] font-medium space-y-1">
+                      {preview.customerWarnings.map((w, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <span className="material-symbols-outlined text-[16px] shrink-0 mt-0.5 text-[#D97706]">group</span>
+                          <span>{w}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* B2: blocking banner — confirm stays disabled until resolved */}
+                  {pendingCustomerCount > 0 && (
+                    <div className="p-3 bg-[#FEF2F2] border border-[#FCA5A5] rounded-lg text-xs text-[#991B1B] font-semibold">
+                      Còn {pendingCustomerCount} khách hàng cần xử lý trước khi ghi dữ liệu. Chọn gộp hay tạo mới ở cột Customer cho từng tên bên dưới.
+                    </div>
+                  )}
+
+                  {preview.customerAmbiguous && preview.customerAmbiguous.length > 0 && (
+                    <div className="p-3 bg-[#FEF2F2] border border-[#FCA5A5] rounded-lg text-xs text-[#991B1B] font-medium space-y-1">
+                      {preview.customerAmbiguous.map((a, i) => (
+                        <div key={i}>
+                          ⛔ Khách hàng “{a.name}” trùng với nhiều bản ghi trong hệ thống — các dòng này chưa được ghi. {a.reason}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* B3: Summary Bar — counts from server decisions, never isValid */}
                   <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs">
                     <div className="flex items-center gap-3">
                       <span className="font-semibold text-slate-800">
                         Tổng số dòng: {preview.rows.length}
                       </span>
                       <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium">
-                        ✓ {validRowsCount} dòng hợp lệ
+                        ✓ {decisionCounts.new} dòng mới — sẽ ghi
                       </span>
-                      {invalidRowsCount > 0 && (
+                      {decisionCounts.identical > 0 && (
+                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium">
+                          ↺ {decisionCounts.identical} dòng trùng nội dung — bỏ qua
+                        </span>
+                      )}
+                      {decisionCounts.conflict > 0 && (
+                        <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-medium">
+                          ⚠ {decisionCounts.conflict} dòng cần xử lý — chưa ghi
+                        </span>
+                      )}
+                      {decisionCounts.invalid > 0 && (
                         <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-medium">
-                          ⚠ {invalidRowsCount} dòng bị thiếu trường bắt buộc (bỏ qua)
+                          ✗ {decisionCounts.invalid} dòng lỗi dữ liệu — chưa ghi
                         </span>
                       )}
                     </div>
@@ -364,8 +454,22 @@ export default function ImportOrdersModal() {
                                     ⚠ {row.validationErrors?.join(', ')}
                                   </span>
                                 ) : isConflict ? (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold border border-amber-300 text-[11px]">
-                                    ⚠ Conflict: {decision.reasons.join(', ')}
+                                  <span className="inline-flex flex-wrap items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-semibold border border-amber-300 text-[11px] max-w-[320px]">
+                                    <span>⚠ {decision.resolution ? RESOLUTION_HINT[decision.resolution] ?? `Conflict: ${decision.reasons.join(', ')}` : `Conflict: ${decision.reasons.join(', ')}`}</span>
+                                    {decision.reasons.length > 1 && (
+                                      <span className="font-normal">và {decision.reasons.length - 1} lý do khác</span>
+                                    )}
+                                    {decision.existingOrderId && (
+                                      <a
+                                        href={`/orders/${decision.existingOrderId}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="underline font-bold"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        Xem đơn cũ
+                                      </a>
+                                    )}
                                   </span>
                                 ) : isIdentical ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium border border-slate-200 text-[11px]">
@@ -380,7 +484,45 @@ export default function ImportOrdersModal() {
 
                               <td className="px-sm py-xs font-mono text-type-mono text-on-surface whitespace-nowrap">{row.piNumber}</td>
                               <td className="px-sm py-xs text-secondary text-center">{row.subLineIndex}</td>
-                              <td className="px-sm py-xs text-body-md font-noto text-on-surface whitespace-nowrap max-w-[140px] truncate">{row.customer || <span className="text-rose-500 italic">Trống</span>}</td>
+                              <td className="px-sm py-xs text-body-md font-noto text-on-surface whitespace-nowrap max-w-[140px] truncate">
+                                {row.customer || <span className="text-rose-500 italic">Trống</span>}
+                                {(() => {
+                                  const key = String(row.customer ?? '').trim()
+                                  const review = preview.customerReviews?.find((r) => String(r.name).trim() === key)
+                                  if (review) {
+                                    const choice = customerChoices[key] ?? `MERGE:${review.suggestedId}`
+                                    return (
+                                      <span className="block mt-1 normal-case">
+                                        <span className="block text-[11px] font-semibold text-amber-800">Gần giống: {review.suggestedName}</span>
+                                        <label className="flex items-center gap-1 text-[11px] font-normal">
+                                          <input
+                                            type="radio"
+                                            name={`cust-${idx}`}
+                                            checked={choice !== 'NEW'}
+                                            onChange={() => setCustomerChoices((prev) => ({ ...prev, [key]: `MERGE:${review.suggestedId}` }))}
+                                          />
+                                          Gộp vào {review.suggestedName}
+                                        </label>
+                                        <label className="flex items-center gap-1 text-[11px] font-normal">
+                                          <input
+                                            type="radio"
+                                            name={`cust-${idx}`}
+                                            checked={choice === 'NEW'}
+                                            onChange={() => setCustomerChoices((prev) => ({ ...prev, [key]: 'NEW' }))}
+                                          />
+                                          Tạo khách mới
+                                        </label>
+                                      </span>
+                                    )
+                                  }
+                                  if ((preview.customerNew ?? []).some((n) => String(n).trim() === key)) {
+                                    return (
+                                      <span className="block mt-1 text-[11px] font-semibold text-sky-800">Khách mới — sẽ tạo</span>
+                                    )
+                                  }
+                                  return null
+                                })()}
+                              </td>
                               <td className="px-sm py-xs font-mono text-type-mono text-on-surface-variant whitespace-nowrap tabular-nums">{formatDate(row.orderDate)}</td>
                               <td className="px-sm py-xs text-right font-mono text-type-mono text-on-surface tabular-nums">{row.widthM || <span className="text-rose-500 italic">0</span>}</td>
                               <td className="px-sm py-xs text-right font-mono text-type-mono text-on-surface tabular-nums" suppressHydrationWarning>
@@ -440,7 +582,7 @@ export default function ImportOrdersModal() {
                   <div className="text-center space-y-2">
                     <p className="text-headline-md font-inter font-semibold text-on-surface">Import Hoàn Tất!</p>
                     <p className="text-body-md font-noto text-secondary">
-                      Đã import thành công <span className="text-[#15803d] font-bold">{result.imported}/{result.totalRows}</span> dòng đơn hàng hợp lệ.
+                      Đã import thành công <span className="text-[#15803d] font-bold">{result.imported}/{result.summary.total}</span> dòng đơn hàng hợp lệ.
                     </p>
                     {result.summary.invalid > 0 && (
                       <p className="text-xs text-rose-600 font-medium">
@@ -451,6 +593,21 @@ export default function ImportOrdersModal() {
                       <p className="text-xs text-slate-500">
                         · {result.summary.identical} dòng giống hệt được giữ nguyên; {result.summary.conflicted} dòng xung đột cần sửa ở chi tiết.
                       </p>
+                    )}
+                    {/* B6: skipped rows stay visible with reasons after confirm */}
+                    {result.decisions && result.decisions.some((d) => d.status !== 'new') && (
+                      <details className="text-left text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg p-3 max-h-48 overflow-y-auto w-full max-w-xl">
+                        <summary className="cursor-pointer font-semibold">
+                          Xem {result.decisions.filter((d) => d.status !== 'new').length} dòng đã bỏ qua và lý do
+                        </summary>
+                        <ul className="mt-2 space-y-1">
+                          {result.decisions.filter((d) => d.status !== 'new').map((d) => (
+                            <li key={d.rowIndex}>
+                              Dòng {d.rowIndex + 1} ({d.piNumber} / NO {d.subLineIndex}): {d.status === 'identical' ? '↺ Trùng hệt — bỏ qua' : `⚠ ${d.resolution ? RESOLUTION_HINT[d.resolution] ?? d.reasons.join('; ') : d.reasons.join('; ')}`}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
                     )}
                   </div>
                 </div>
@@ -482,15 +639,16 @@ export default function ImportOrdersModal() {
                     >
                       ← Chọn file khác
                     </button>
-                    <button
-                      id="btn-confirm-import"
-                      onClick={handleConfirm}
-                      disabled={!preview || preview.rows.length === 0}
-                      className="inline-flex items-center justify-center gap-sm bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
-                    >
-                      <span className="material-symbols-outlined text-[18px]">check</span>
-                      Xác Nhận Import ({validRowsCount} dòng hợp lệ)
-                    </button>
+                      <button
+                        id="btn-confirm-import"
+                        onClick={handleConfirm}
+                        disabled={!preview || preview.rows.length === 0 || decisionCounts.new === 0 || pendingCustomerCount > 0}
+                        title={pendingCustomerCount > 0 ? `Còn ${pendingCustomerCount} khách hàng cần xử lý trước khi ghi` : undefined}
+                        className="inline-flex items-center justify-center gap-sm bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">check</span>
+                        {decisionCounts.new === 0 ? 'Không có dòng mới để ghi' : `Xác Nhận Import (${decisionCounts.new} dòng mới)`}
+                      </button>
                   </>
                 )}
                 {state === 'success' && (

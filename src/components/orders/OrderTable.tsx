@@ -7,6 +7,7 @@
 
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import type { SerializedProductionOrder } from '@/types'
 import { OrderStatus, calcOrderStatus } from '@/lib/orderStatus'
 import OrderStatusBadge from './OrderStatusBadge'
@@ -271,12 +272,23 @@ export default function OrderTable({ orders }: OrderTableProps) {
                         )}
                       </td>
 
-                      {/* Action — View button, visible on row hover */}
+                      {/* Action — View & Edit PI buttons, visible on row hover */}
                       <td className="px-md py-sm text-right whitespace-nowrap">
-                        <span className="opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-xs text-label-sm font-inter text-primary border border-[0.5px] border-outline-variant rounded px-sm py-xs hover:bg-surface-container">
-                          <span className="material-symbols-outlined text-[14px]">open_in_new</span>
-                          View
-                        </span>
+                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Link
+                            href={`/orders/pi/${encodeURIComponent(order.piNumber)}`}
+                            onClick={(e) => e.stopPropagation()}
+                            title="Chỉnh sửa toàn bộ PI (Master-Detail)"
+                            className="inline-flex items-center gap-xs text-label-sm font-inter text-primary border border-primary/30 bg-primary/10 rounded px-sm py-xs hover:bg-primary/20"
+                          >
+                            <span className="material-symbols-outlined text-[14px]">table_rows</span>
+                            Sửa PI
+                          </Link>
+                          <span className="inline-flex items-center gap-xs text-label-sm font-inter text-secondary border border-[0.5px] border-outline-variant rounded px-sm py-xs hover:bg-surface-container">
+                            <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                            Chi tiết
+                          </span>
+                        </div>
                       </td>
                     </tr>
                   ))
