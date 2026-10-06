@@ -33,6 +33,7 @@ model ProductionOrder {
   productionGsm Int?     // GSM sản xuất thực tế (Sprint I2) — optional, dùng tính requiredYarnKg
   color         String?  // e.g. "BLACK", "WHITE"
   mbCode       String?  // Mã Masterbatch màu — e.g. "MYD4501A", "7079", "LS309315"
+  itemCode     String?  // Item Code tự do theo dòng đơn (không unique, không bắt buộc)
 
   // Draft Order (Sprint F1) — true cho đơn lưu tạm thiếu thông tin
   isDraft      Boolean  @default(false)
@@ -72,6 +73,11 @@ model ProductionOrder {
   // Quản lý Dung sai (Tolerance Management)
   toleranceQtyPct       Float?   @default(10.0) // Dung sai số lượng ±10%
   toleranceSpecPct      Float?   @default(5.0)  // Dung sai quy cách/GSM ±5%
+  // Deprecated (A1 04/10/2026): đã gộp thành toleranceQtyPct/toleranceSpecPct, code không đọc nữa;
+  // giữ cột an toàn DB (y hệt isHalfFolded), không dùng cho logic mới.
+  foldType              String?                       // Deprecated: giữ cột an toàn DB
+  toleranceQtyMinusPct  Float?                        // Deprecated: giữ cột an toàn DB
+  toleranceQtyPlusPct   Float?                        // Deprecated: giữ cột an toàn DB
 
   // Optional order details (added S2)
   qty             Int?                  // quantity in rolls
