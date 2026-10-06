@@ -156,8 +156,8 @@ export default function ImportWarpingModal({ onImported, onClose }: Props) {
               <div className="bg-surface-container rounded-lg p-4 text-xs text-secondary space-y-1">
                 <p className="font-medium text-on-surface mb-2">Yêu cầu file:</p>
                 <p>• File .xlsx từ SNY có sheet tên <strong>WARPING</strong></p>
-                <p>• Ngày báo cáo tự động phát hiện theo từng khối ngày ("SNY VINA CO.,LTD.")</p>
-                <p>• Mỗi máy có header "MACHINE 1" đến "MACHINE 6"</p>
+                <p>• Ngày báo cáo tự động phát hiện theo từng khối ngày (&quot;SNY VINA CO.,LTD.&quot;)</p>
+                <p>• Mỗi máy có header &quot;MACHINE 1&quot; đến &quot;MACHINE 6&quot;</p>
                 <p>• Dòng TOTAL máy & các dòng tổng kết ngày (TOTAL DAY/NIGHT/SCRAP) sẽ bị bỏ qua</p>
               </div>
             </div>

@@ -3,13 +3,14 @@
 ## Goal
 
 Add "Import Excel" to `/orders`. User uploads `.xlsx` → server parses with SheetJS
-→ preview 20 rows in modal → confirm → upsert to DB (skip duplicates).
+→ previews every parsed row in a scrollable modal → confirm → save valid rows to DB
+(skip duplicates).
 
 ## File Tree
 
 ### New files
 ```
-src/app/api/orders/import/route.ts           POST — parse xlsx → preview 20 rows
+src/app/api/orders/import/route.ts           POST — parse xlsx → preview all rows
 src/app/api/orders/import/confirm/route.ts   POST — upsert rows to DB
 src/components/orders/ImportOrdersModal.tsx  client modal — state machine
 src/components/orders/OrdersActionBar.tsx    "use client" action bar wrapper
@@ -67,11 +68,39 @@ src/types/index.ts        add ParsedOrder type
 3. Modal opens on click
 4. Non-.xlsx → error message
 5. File > 10MB → error message
-6. Valid .xlsx → 20-row preview
+6. Valid .xlsx → preview contains every parsed row and reports invalid rows
 7. Confirm → success banner with import count
 8. Same file again → skipped count matches
-9. schema.prisma not modified
+9. File with more than 5,000 rows → rejected before confirm with a clear limit
+10. schema.prisma not modified
 
 ## Out of Scope
 
 ❌ CSV/.xls import, edit rows in preview, schedule/materials import, auth, audit log
+
+## Current handover implementation (S1–S8)
+
+The original S5 note above is historical. The current implementation also
+covers the existing order, inventory and Packing flows under the
+`complete-existing-flows` plan. The following rules are now enforced:
+
+- Order import is preview-only until confirmation. Rows are classified as new,
+  identical, conflict or invalid by `PI + NO`. Conflicts keep the stored order;
+  a user must edit the order detail screen. Replaying the same file is a
+  no-op. Approved orders are validated again before writes, and edits can use
+  an optimistic `updatedAt` token.
+- Inventory reports are scoped by material group and report date. `LAST STOCK`
+  is the authoritative closing value. An identical retry does not add another
+  movement; a changed report for the same day requires explicit replacement;
+  an older report cannot overwrite a newer report. Snapshot provenance is
+  additive and must be deployed before the inventory confirm endpoint is used.
+- Packing rows are identified by calendar `date`, never by filename. A renamed
+  file is a no-op when its six values match. A changed existing day requires an
+  explicit date replacement; rows/days missing from the payload are retained.
+  Explicit zero and blank/null remain different values, and every confirm is
+  locked and atomic.
+
+The First Bar / Middle Bar / Back Bar screenshot is technical yarn and colour
+input. It does not define a deterministic customer-approved formula, so A/B
+selection and beam/MB formula work remain a separate plan and are deliberately
+not implemented here.

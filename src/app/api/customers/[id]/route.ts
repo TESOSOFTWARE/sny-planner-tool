@@ -19,6 +19,24 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       )
     }
 
+    // Stale-guard: chặn ghi đè khi bản ghi đã bị sửa ở cửa sổ/tab khác.
+    const current = await prisma.customer.findUnique({
+      where: { id: params.id },
+      select: { id: true, updatedAt: true },
+    })
+    if (!current) {
+      return NextResponse.json({ success: false, error: 'Không tìm thấy khách hàng' }, { status: 404 })
+    }
+    if (current.updatedAt.getTime() !== new Date(parsed.data.expectedUpdatedAt).getTime()) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Thông tin khách hàng đã thay đổi ở cửa sổ khác. Hãy đóng lại và mở lại để xem bản mới nhất.',
+        },
+        { status: 409 }
+      )
+    }
+
     const customer = await prisma.customer.update({
       where: { id: params.id },
       data: {

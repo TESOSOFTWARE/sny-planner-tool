@@ -117,12 +117,12 @@ export default function RollingTab({ onImport }: Props) {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <StatCard
           label="TỔNG BẢN GHI"
-          value={total.toLocaleString()}
+          value={total.toLocaleString('vi-VN')}
           icon="format_list_bulleted"
         />
         <StatCard
           label="TỔNG ĐƠN HÀNG"
-          value={uniqueOrdersCount.toLocaleString()}
+          value={uniqueOrdersCount.toLocaleString('vi-VN')}
           icon="shopping_cart"
           accent="text-primary"
         />
@@ -276,8 +276,8 @@ export default function RollingTab({ onImport }: Props) {
         {/* Pagination footer */}
         {totalPages > 1 && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-outline-variant bg-surface-container/30 text-xs">
-            <span className="text-secondary">
-              Hiển thị page <strong>{page}</strong> / <strong>{totalPages}</strong> ({total.toLocaleString()} bản ghi)
+            <span className="text-secondary" suppressHydrationWarning>
+              Hiển thị page <strong>{page}</strong> / <strong>{totalPages}</strong> ({total.toLocaleString('vi-VN')} bản ghi)
             </span>
             <div className="flex items-center gap-2">
               <button

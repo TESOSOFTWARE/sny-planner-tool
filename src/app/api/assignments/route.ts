@@ -95,10 +95,10 @@ export async function POST(request: Request) {
       );
     }
 
-    // Fetch order to check if draft (for isPlaceholder flag)
+    // Fetch order to check lifecycle and placeholder
     const targetOrder = await prisma.productionOrder.findUnique({
       where: { id: orderId },
-      select: { isDraft: true, piNumber: true },
+      select: { isDraft: true, isPlaceholder: true, lifecycleStatus: true, piNumber: true },
     });
 
     if (!targetOrder) {
@@ -122,14 +122,23 @@ export async function POST(request: Request) {
       );
     }
 
-    // Insert with isPlaceholder = true if order is draft
+    // Đơn nháp hoặc đơn giữ chỗ lên máy dệt với cờ isPlaceholder = true như nhánh cũ
+    const isPlaceholder = Boolean(
+      targetOrder.isDraft ||
+      targetOrder.lifecycleStatus === 'DRAFT' ||
+      targetOrder.lifecycleStatus === 'RESERVED' ||
+      targetOrder.lifecycleStatus === 'RESERVE' ||
+      targetOrder.lifecycleStatus === 'PLACEHOLDER' ||
+      targetOrder.isPlaceholder
+    );
+
     const assignment = await prisma.machineAssignment.create({
       data: {
         machineId,
         orderId,
         startDate: start,
         endDate: end,
-        isPlaceholder: targetOrder.isDraft,
+        isPlaceholder,
         ...(allocatedMeters != null && { allocatedMeters }),
         ...(estimatedDailyOutput != null && { estimatedDailyOutput }),
       },

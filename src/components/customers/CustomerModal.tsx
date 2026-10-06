@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { customerSchema, type CustomerInput } from '@/lib/validations/customer'
@@ -24,8 +24,10 @@ export default function CustomerModal({ customer, onClose, onSaved }: Props) {
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<CustomerInput>({
     resolver: zodResolver(customerSchema)
   })
+  const [serverError, setServerError] = useState<string | null>(null)
 
   useEffect(() => {
+    setServerError(null)
     if (customer) {
       reset({
         name: customer.name,
@@ -45,25 +47,29 @@ export default function CustomerModal({ customer, onClose, onSaved }: Props) {
   }, [customer, reset])
 
   const onSubmit = async (data: CustomerInput) => {
+    setServerError(null)
     try {
       const url = customer ? `/api/customers/${customer.id}` : '/api/customers'
       const method = customer ? 'PATCH' : 'POST'
 
+      // Stale-guard: báo 409 nếu bản ghi đã bị sửa ở cửa sổ/tab khác.
+      const body = customer ? { ...data, expectedUpdatedAt: customer.updatedAt } : data
+
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify(body),
       })
-      
+
       const json = await res.json()
       if (!res.ok || !json.success) {
-        alert(json.error || 'Đã có lỗi xảy ra')
+        setServerError(json.error || 'Đã có lỗi xảy ra')
         return
       }
 
       onSaved()
     } catch (err) {
-      alert('Network error')
+      setServerError('Lỗi mạng — vui lòng thử lại')
     }
   }
 
@@ -82,6 +88,11 @@ export default function CustomerModal({ customer, onClose, onSaved }: Props) {
         </div>
 
         <div className="p-lg overflow-y-auto">
+          {serverError && (
+            <div role="alert" className="mb-md px-md py-sm bg-error-container text-on-error-container rounded text-sm font-noto">
+              {serverError}
+            </div>
+          )}
           <form id="customer-form" onSubmit={handleSubmit(onSubmit)} className="space-y-md">
             <div>
               <label className="text-label-sm font-inter font-medium text-on-surface-variant block mb-1">Tên công ty *</label>

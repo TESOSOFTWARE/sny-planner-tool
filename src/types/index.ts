@@ -4,6 +4,8 @@
 // in sync automatically — no manual duplication of field definitions.
 
 import type { Prisma } from '@prisma/client'
+import type { MaterialGroupInput, ParsedMaterialRow } from '@/lib/excel/parseMaterialReport'
+import type { ParsedPackingOutput } from '@/lib/excel/parsePackingReport'
 
 /**
  * Full ProductionOrder as returned by Prisma (Date objects for timestamps,
@@ -32,8 +34,36 @@ export interface SerializedProductionOrder {
   productionGsm: number | null
   color: string | null
   mbCode: string | null
+  itemCode: string | null
 
   isDraft: boolean
+  lifecycleStatus: string
+  isPlaceholder: boolean
+  colorVersion: string | null
+  colorRecipeSnapshot: string | null
+
+  // Packing v4
+  primaryPackingType: string
+  subPackingType?: string | null
+  hasPaperCore: boolean
+  isHalfFolded: boolean
+  outerWrapping?: string | null
+  piecesPerCarton: number | null
+  piecesPerBale: number | null
+  boxDimensions: string | null
+  onPallet: boolean
+  secondaryPackingType: string
+  palletDimensions: string | null
+  itemsPerPallet: number | null
+  packingNote: string | null
+
+  // Dual-GSM & Tolerance
+  isLaminated?: boolean
+  rawFabricGsm?: number | null
+  coatingGsm?: number | null
+  finishedGsm?: number | null
+  toleranceQtyPct?: number | null
+  toleranceSpecPct?: number | null
 
   qty: number | null
   uvPct: string | null
@@ -76,10 +106,17 @@ export interface SerializedProductionOrder {
   }[]
 }
 
+export type PrimaryPackingType = 'ROLL' | 'BALE' | 'CARTON' | 'HEMMED'
+export type SubPackingType = 'CARTON' | 'BALE'
+export type SecondaryPackingType = 'NONE' | 'WOOD_PALLET' | 'IRON_PALLET' | 'PLASTIC_PALLET'
+export type OrderLifecycleStatus = 'DRAFT' | 'RESERVED' | 'RESERVE' | 'PLACEHOLDER' | 'APPROVED'
+// 'RESERVE' | 'PLACEHOLDER' deprecated — chỉ đọc tương thích dữ liệu/file cũ, khi ghi dùng 'RESERVED'.
+
 /**
  * A single row parsed from the ORDER_LIST Excel file.
  * Plain JSON-serializable — travels from server parser → client preview → server confirm.
- * All required fields are non-nullable after parsing; optional fields may be null.
+ * Required fields are represented with their parsed value; rows that fail
+ * validation keep their values so the preview can explain what needs fixing.
  */
 export interface ParsedOrder {
   piNumber: string
@@ -87,20 +124,49 @@ export interface ParsedOrder {
   customer: string
   orderDate: string        // YYYY-MM-DD
   widthM: number
-  lengthM: number
+  lengthM: number | null
   gsm: number
   color: string
+  colorVersion?: string | null
+  colorRecipeSnapshot?: string | null
   productionGsm?: number | null
   orderType?: 'meters' | 'rolls' | 'pieces'
   qty: number | null
   rollLength?: number | null
   pieceLength?: number | null
-  uvPct: number | null     // stored as-is (0.02 = 2%)
+
+  // v4 Lifecycle & Packing
+  lifecycleStatus?: OrderLifecycleStatus
+  isPlaceholder?: boolean
+  primaryPackingType?: PrimaryPackingType
+  subPackingType?: SubPackingType | null
+  hasPaperCore?: boolean
+  isHalfFolded?: boolean
+  piecesPerCarton?: number | null
+  piecesPerBale?: number | null
+  boxDimensions?: string | null
+  onPallet?: boolean
+  secondaryPackingType?: SecondaryPackingType
+  palletDimensions?: string | null
+  itemsPerPallet?: number | null
+  packingNote?: string | null
+  outerWrapping?: 'POLYBAG' | 'TARPAULIN' | 'NONE' | null
+
+  // Dual-GSM & Tolerance
+  isLaminated?: boolean
+  rawFabricGsm?: number | null
+  coatingGsm?: number | null
+  finishedGsm?: number | null
+  toleranceQtyPct?: number | null
+  toleranceSpecPct?: number | null
+
+  uvPct: number | null     // percentage 0-100 (e.g. 2.0 = 2%)
   frFlag: boolean
   frPct?: number | null
   description: string | null
   remark: string | null
   mbCode?: string | null
+  itemCode?: string | null
   meshType?: string | null
   needleCount?: number | null
   beamCount?: number | null
@@ -108,9 +174,94 @@ export interface ParsedOrder {
   requiresPacking?: boolean
   deliveryDate?: string | null
   containerSize?: string | null
+  hasEyelet?: boolean
+  eyeletColor?: string | null
+  eyeletLines?: number | null
+  eyeletSpec?: string | null
+  /** True when the parser generated a missing NO/sub-line value. */
+  noWasGenerated?: boolean
   // Validation status fields for preview UI
   isValid?: boolean
   validationErrors?: string[]
+}
+
+export type OrderImportStatus = 'new' | 'identical' | 'conflict' | 'invalid'
+
+/** Primary planner action for a conflict row. UI hint only — `reasons` stays complete. */
+export type OrderImportResolution =
+  | 'DUPLICATE_IN_DB'
+  | 'DRAFT_EXISTS'
+  | 'DUPLICATE_IN_FILE'
+  | 'SPLIT_BY_CUSTOMER'
+  | 'ADD_NO_TO_FILE'
+  | 'CONTENT_DIFFERS'
+
+export interface OrderImportDecision {
+  rowIndex: number
+  piNumber: string
+  subLineIndex: number
+  status: OrderImportStatus
+  existingOrderId: string | null
+  /** Server-derived values for a supplied code differing from the stored code. */
+  itemCodeChange?: { existing: string | null; incoming: string }
+  changedFields: string[]
+  reasons: string[]
+  /** Highest-priority action when status is 'conflict'. Undefined otherwise. */
+  resolution?: OrderImportResolution
+}
+
+export interface OrderImportSummary {
+  total: number
+  created: number
+  identical: number
+  conflicted: number
+  invalid: number
+}
+
+export type StockDecisionStatus = 'new' | 'identical' | 'replace' | 'conflict' | 'invalid'
+
+export interface StockDecision {
+  rowIndex: number
+  materialKey: string
+  materialId: string | null
+  status: StockDecisionStatus
+  reasons: string[]
+}
+
+export interface StockPreviewResponse {
+  success: true
+  rows: ParsedMaterialRow[]
+  parsed: number
+  matched: number
+  unmatched: number
+  group: MaterialGroupInput
+  txDate: string
+  headerRow: number
+  expectedSnapshot: string
+  decisions: StockDecision[]
+}
+
+export interface StockConfirmBody {
+  group: MaterialGroupInput
+  txDate: string
+  rows: ParsedMaterialRow[]
+  expectedSnapshot: string
+  replaceKeys: string[]
+}
+
+export type PackingDecisionStatus = 'new' | 'identical' | 'replace'
+
+export interface PackingDecision {
+  date: string
+  status: PackingDecisionStatus
+  changedFields: string[]
+}
+
+export interface PackingConfirmBody {
+  outputs: ParsedPackingOutput[]
+  fileName: string
+  expectedSnapshot: string
+  replaceDates: string[]
 }
 
 export interface SerializedRollingMetric {
@@ -141,3 +292,23 @@ export interface SerializedPackingOutput {
   createdAt: string
 }
 
+export interface OrderTableItem {
+  id: string
+  piNumber: string
+  subLineIndex: number
+  customer: string
+  customerId: string | null
+  orderDate: string
+  widthM: number | null
+  lengthM: number | null
+  gsm: number | null
+  color: string | null
+  itemCode: string | null
+  lifecycleStatus: string
+  isDraft: boolean
+  isPlaceholder: boolean
+  assignments: {
+    startDate: string
+    endDate: string
+  }[]
+}

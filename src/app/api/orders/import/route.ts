@@ -5,8 +5,10 @@
 // Does NOT write anything to the database.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { parseOrderList } from '@/lib/excel/parseOrderList'
+import { classifyOrderImport, parseOrderList } from '@/lib/excel/parseOrderList'
+import { findCustomerMatch } from '@/lib/customers/matching'
 import { prisma } from '@/lib/db'
+import { MAX_IMPORTED_ORDER_ROWS } from '@/lib/validations/order'
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 // 10 MB
 
@@ -76,72 +78,109 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // ── 5. Check PI Number customer conflicts & Duplicate subLineIndex ────────
-  const piWarnings: string[] = []
-
-  // Check 5a: Duplicate (piNumber, subLineIndex) in uploaded rows
-  const seenKeys = new Set<string>()
-  let duplicateCount = 0
-  for (const r of rows) {
-    if (r.piNumber) {
-      const key = `${r.piNumber.trim().toUpperCase()}#${r.subLineIndex}`
-      if (seenKeys.has(key)) {
-        duplicateCount++
-      } else {
-        seenKeys.add(key)
-      }
-    }
-  }
-
-  if (duplicateCount > 0) {
-    piWarnings.push(
-      `⚠ Phát hiện ${duplicateCount} dòng trùng số thứ tự (subLineIndex), có thể bị bỏ qua khi import.`
+  if (rows.length > MAX_IMPORTED_ORDER_ROWS) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: `File contains ${rows.length} rows. The maximum supported import is ${MAX_IMPORTED_ORDER_ROWS} rows.`,
+      },
+      { status: 422 },
     )
   }
 
-  // Check 5b: Customer name mismatch for existing PIs
-  const piCustomerMap = new Map<string, string>()
-  for (const r of rows) {
-    if (r.piNumber && r.customer) {
-      piCustomerMap.set(r.piNumber.trim().toUpperCase(), r.customer.trim())
-    }
+  // ── 5. Classify against the current DB state (preview only) ───────────────
+  const uniquePis = Array.from(new Set(
+    rows
+      .map((row) => row.piNumber.trim())
+      .filter((pi) => pi && pi !== 'CHƯA_CÓ_PI'),
+  ))
+  let decisions
+  try {
+    const existingOrders = uniquePis.length > 0
+      ? await prisma.productionOrder.findMany({
+          where: { piNumber: { in: uniquePis, mode: 'insensitive' } },
+        })
+      : []
+    decisions = classifyOrderImport(rows, existingOrders)
+  } catch (err) {
+    console.error('[POST /api/orders/import] DB classification error:', err)
+    return NextResponse.json({ success: false, error: 'Không thể kiểm tra dữ liệu đơn hàng hiện tại.' }, { status: 500 })
   }
 
-  const uniquePis = Array.from(piCustomerMap.keys())
-  if (uniquePis.length > 0) {
-    const existingOrders = await prisma.productionOrder.findMany({
-      where: {
-        piNumber: { in: uniquePis, mode: 'insensitive' },
-      },
-      select: { piNumber: true, customer: true },
-    })
+  const piWarnings = Array.from(new Set(
+    decisions
+      .filter((decision) => decision.status === 'conflict')
+      .flatMap((decision) => decision.reasons.map((reason) => `⚠ Dòng ${decision.rowIndex + 1} (${decision.piNumber} / NO ${decision.subLineIndex}): ${reason}`)),
+  ))
 
-    const existingPiMap = new Map<string, Set<string>>()
-    for (const o of existingOrders) {
-      const key = o.piNumber.trim().toUpperCase()
-      const set = existingPiMap.get(key) ?? new Set()
-      if (o.customer) set.add(o.customer.trim())
-      existingPiMap.set(key, set)
-    }
-
-    for (const [piUpper, fileCustomer] of Array.from(piCustomerMap.entries())) {
-      const dbCustomers = existingPiMap.get(piUpper)
-      if (dbCustomers && dbCustomers.size > 0) {
-        const dbCust = Array.from(dbCustomers)[0]
-        if (dbCust.toLowerCase() !== fileCustomer.toLowerCase()) {
-          piWarnings.push(
-            `⚠ PI Number [${piUpper}] đã tồn tại với khách hàng [${dbCust}] — file Excel đang nhập cho khách hàng [${fileCustomer}].`
-          )
-        }
+  // ── 5b. Classify customer names against existing customers (preview only) ──
+  // Read-only: same matching engine as confirm, but surfaces NEEDS_REVIEW /
+  // UNMATCHED to the planner BEFORE anything is written.
+  const customerNames = Array.from(new Set(
+    rows.map((row) => String(row.customer ?? '').trim()).filter(Boolean),
+  ))
+  let customerWarnings: string[] = []
+  let customerReviews: { name: string; suggestedId: string; suggestedName: string; reason: string }[] = []
+  let customerNew: string[] = []
+  let customerAmbiguous: { name: string; reason: string }[] = []
+  try {
+    const allCustomers = await prisma.customer.findMany({ select: { id: true, name: true } })
+    const seenReview = new Set<string>()
+    const seenNew = new Set<string>()
+    const seenAmbiguous = new Set<string>()
+    for (const name of customerNames) {
+      const match = findCustomerMatch(name, allCustomers)
+      if (match.status === 'NEEDS_REVIEW' && match.suggested && !seenReview.has(name)) {
+        seenReview.add(name)
+        customerReviews.push({
+          name,
+          suggestedId: match.suggested.id,
+          suggestedName: match.suggested.name,
+          reason: match.reason ?? 'Tên gần giống khách hiện có — cần xác nhận gộp hay tạo mới',
+        })
+        customerWarnings.push(`⚠ Khách hàng "${name}" gần giống "${match.suggested.name}" — chọn gộp hay tạo mới ở cột Customer trước khi xác nhận.`)
+      } else if (match.status === 'AMBIGUOUS' && !seenAmbiguous.has(name)) {
+        // B1: surface AMBIGUOUS in preview. The engine never auto-picks when
+        // several customers share one normalized name — same rule as confirm.
+        seenAmbiguous.add(name)
+        customerAmbiguous.push({
+          name,
+          reason: match.reason ?? `Tên khách hàng "${name}" trùng với nhiều bản ghi — cần dọn danh sách khách`,
+        })
+      } else if (match.status === 'UNMATCHED' && !seenNew.has(name)) {
+        seenNew.add(name)
+        customerNew.push(name)
       }
     }
+    customerWarnings = Array.from(new Set(customerWarnings))
+  } catch (err) {
+    console.error('[POST /api/orders/import] customer classification error:', err)
+    return NextResponse.json({ success: false, error: 'Không thể kiểm tra danh mục khách hàng hiện tại.' }, { status: 500 })
   }
 
-  // ── 6. Return first PREVIEW_LIMIT rows (no DB write) ─────────────────────
+  // B1: block AMBIGUOUS rows in preview exactly like confirm does.
+  // No auto-pick, no silent drop — the planner sees them before confirming.
+  if (customerAmbiguous.length > 0) {
+    const blockedNames = new Set(customerAmbiguous.map((c) => c.name))
+    decisions.forEach((decision, index) => {
+      const key = String(rows[index].customer ?? '').trim()
+      if (blockedNames.has(key) && decision.status !== 'invalid') {
+        decision.status = 'conflict'
+        decision.reasons.push('Tên khách hàng trùng với nhiều bản ghi trong hệ thống; không tự chọn bản ghi')
+      }
+    })
+  }
+
+  // ── 6. Return every parsed row and server decisions (no DB write) ─────────
   return NextResponse.json({
     success: true,
     totalParsed: rows.length,
     preview: rows,
     piWarnings,
+    customerWarnings,
+    customerReviews,
+    customerNew,
+    customerAmbiguous,
+    decisions,
   })
 }

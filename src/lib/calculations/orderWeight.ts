@@ -11,6 +11,11 @@ export interface OrderWeightInput {
   qty?: number | null
   rollLength?: number | null
   pieceLength?: number | null
+  // Dual-GSM cho hàng gia công tráng màng ngoài
+  isLaminated?: boolean | null
+  rawFabricGsm?: number | null
+  coatingGsm?: number | null
+  finishedGsm?: number | null
 }
 
 export interface OrderWeightResult {
@@ -44,30 +49,43 @@ export function calculateOrderWeight(input: OrderWeightInput): OrderWeightResult
     input.pieceLength != null && input.pieceLength > 0
   ) {
     totalMeters = input.qty * Number(input.pieceLength)
-  } else if (input.lengthM != null && input.lengthM > 0) {
+  } else if (input.orderType === 'meters' && input.lengthM != null && input.lengthM > 0) {
     totalMeters = input.lengthM
   }
 
-  if (totalMeters == null || isNaN(totalMeters) || totalMeters <= 0) {
+  if (totalMeters == null || !Number.isFinite(totalMeters) || totalMeters <= 0 || totalMeters > 100_000) {
     return { totalMeters: null, qtySqm: null, totalWeightKgs: null, requiredYarnKg: null }
   }
 
-  if (input.widthM == null || isNaN(input.widthM) || input.widthM <= 0) {
+  if (input.widthM == null || !Number.isFinite(input.widthM) || input.widthM <= 0 || input.widthM > 20) {
     return { totalMeters, qtySqm: null, totalWeightKgs: null, requiredYarnKg: null }
   }
 
   const qtySqm = input.widthM * totalMeters
 
-  if (input.gsm == null || isNaN(input.gsm) || input.gsm <= 0) {
+  // Xác định GSM thương mại & GSM dệt mộc
+  const commercialGsm = (input.isLaminated && input.finishedGsm && input.finishedGsm > 0)
+    ? input.finishedGsm
+    : input.gsm
+
+  if (!Number.isFinite(qtySqm) || commercialGsm == null || !Number.isFinite(commercialGsm) || commercialGsm <= 0 || commercialGsm > 500) {
     return { totalMeters, qtySqm, totalWeightKgs: null, requiredYarnKg: null }
   }
 
-  // 1. Trọng lượng hiển thị đơn hàng (totalWeightKgs) — dùng gsm đơn hàng gốc
-  const totalWeightKgs = (qtySqm * input.gsm) / 1000
+  // 1. Trọng lượng hiển thị đơn hàng (totalWeightKgs) — dùng commercialGsm (thành phẩm giao khách)
+  const totalWeightKgs = (qtySqm * commercialGsm) / 1000
 
-  // 2. Nhu cầu nguyên liệu sợi nội bộ (requiredYarnKg) — dùng productionGsm nếu có, fallback gsm gốc
-  const effectiveYarnGsm = (input.productionGsm != null && input.productionGsm > 0) ? input.productionGsm : input.gsm
+  // 2. Nhu cầu nguyên liệu sợi nội bộ (requiredYarnKg):
+  // Nếu là đơn tráng màng ngoài → dùng rawFabricGsm (dệt mộc 325) để tính kg sợi mộc
+  // Nếu không → dùng productionGsm nếu có, fallback commercialGsm
+  const effectiveYarnGsm = (input.isLaminated && input.rawFabricGsm && input.rawFabricGsm > 0)
+    ? input.rawFabricGsm
+    : ((input.productionGsm != null && input.productionGsm > 0) ? input.productionGsm : commercialGsm)
   const requiredYarnKg = ((qtySqm * effectiveYarnGsm) / 1000) * 1.05
+
+  if (!Number.isFinite(totalWeightKgs) || !Number.isFinite(requiredYarnKg)) {
+    return { totalMeters, qtySqm, totalWeightKgs: null, requiredYarnKg: null }
+  }
 
   return { totalMeters, qtySqm, totalWeightKgs, requiredYarnKg }
 }

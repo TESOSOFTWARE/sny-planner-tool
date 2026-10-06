@@ -81,8 +81,8 @@ export default function PackingTab() {
             <span className="rounded-lg bg-blue-50 p-2 text-blue-600 text-lg">📅</span>
           </div>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-slate-800">
-              {uniqueDaysCount.toLocaleString()}
+            <span className="text-3xl font-bold text-slate-800" suppressHydrationWarning>
+              {uniqueDaysCount.toLocaleString('vi-VN')}
             </span>
             <span className="text-xs text-slate-500">ngày</span>
           </div>
@@ -242,17 +242,17 @@ export default function PackingTab() {
                       <td className="px-4 py-3 font-medium text-slate-800 whitespace-nowrap">
                         {row.date}
                       </td>
-                      <td className="px-4 py-3 text-right text-slate-600 whitespace-nowrap">
-                        {row.qtyDay != null ? row.qtyDay.toLocaleString() : '-'}
+                      <td className="px-4 py-3 text-right text-slate-600 whitespace-nowrap" suppressHydrationWarning>
+                        {row.qtyDay != null ? row.qtyDay.toLocaleString('vi-VN') : '-'}
                       </td>
-                      <td className="px-4 py-3 text-right font-medium text-emerald-700 whitespace-nowrap">
+                      <td className="px-4 py-3 text-right font-medium text-emerald-700 whitespace-nowrap" suppressHydrationWarning>
                         {row.totalMDay != null ? Number(row.totalMDay).toLocaleString('vi-VN') : '-'}
                       </td>
-                      <td className="px-4 py-3 text-right text-slate-600 whitespace-nowrap">
+                      <td className="px-4 py-3 text-right text-slate-600 whitespace-nowrap" suppressHydrationWarning>
                         {row.weightDay != null ? Number(row.weightDay).toLocaleString('vi-VN') : '-'}
                       </td>
-                      <td className="px-4 py-3 text-right text-slate-600 whitespace-nowrap">
-                        {row.qtyNight != null ? row.qtyNight.toLocaleString() : '-'}
+                      <td className="px-4 py-3 text-right text-slate-600 whitespace-nowrap" suppressHydrationWarning>
+                        {row.qtyNight != null ? row.qtyNight.toLocaleString('vi-VN') : '-'}
                       </td>
                       <td className="px-4 py-3 text-right font-medium text-emerald-700 whitespace-nowrap">
                         {row.totalMNight != null ? Number(row.totalMNight).toLocaleString('vi-VN') : '-'}

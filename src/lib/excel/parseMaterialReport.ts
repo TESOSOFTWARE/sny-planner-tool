@@ -1,18 +1,15 @@
 // src/lib/excel/parseMaterialReport.ts
-// Server-only utility — parses SNY's daily HDPE material report (.xlsx)
-// Returns ParsedMaterialRow[] for each material found (including those with lastStock=0).
-//
-// Excel structure (SNY daily HDPE report):
-//   Section 1: HDPE (raw plastic) — material name in a single name column
-//   Section 2: HDPE Recycled — same structure
-//   Section 3: M/B (masterbatch colors) — name = CODE + COLOR + ITEM combined
-//
-//   Header row contains: "FISRT STOCK"/"FIRST STOCK", "IN", "HDPE BROKEN",
-//                        "XUẤT TAPE"/"OUT TAPE", "REJECT", "OUT USEING"/"OUT USING"/"OUT", "LAST STOCK"
-//   Numeric columns start after the name column(s).
-//   TOTAL rows are skipped.
+// Server-only parser for the selected material-report block in an .xlsx file.
 
 import * as XLSX from 'xlsx'
+
+export type MaterialGroupInput = 'HDPE' | 'MB' | 'KOREA'
+
+export interface MaterialBlock {
+  sheetName: string
+  headerRow: number
+  endRow: number
+}
 
 export interface ParsedMaterialRow {
   materialName: string
@@ -23,138 +20,145 @@ export interface ParsedMaterialRow {
   outTape: number
   outReject: number
   lastStock: number
+  sourceRow: number
+  isValid: boolean
+  validationErrors: string[]
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+const MAX_MATERIAL_ROWS = 500
+const MAX_DECIMAL = 99_999_999.99
 
-function toNum(v: unknown): number {
-  if (v == null || v === '') return 0
-  const n = Number(v)
-  return isNaN(n) ? 0 : Math.abs(n) // abs so negative OUT values become positive
+export function normalizeMaterialName(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toUpperCase()
 }
 
-function normalise(s: unknown): string {
-  return String(s ?? '').trim().toUpperCase().replace(/\s+/g, ' ')
+export function materialReportKey(group: MaterialGroupInput, name: string): string {
+  return JSON.stringify([group, normalizeMaterialName(name)])
 }
 
-/** Find the index of the first column whose normalised header matches any of the keywords */
-function findCol(header: unknown[], keywords: string[]): number {
-  const kw = keywords.map((k) => k.toUpperCase())
-  return header.findIndex((h) => kw.some((k) => normalise(h).includes(k)))
+function normalizeCell(value: unknown): string {
+  return String(value ?? '').trim().replace(/\s+/g, ' ').toUpperCase()
 }
 
-// ── Main parser ───────────────────────────────────────────────────────────────
+function groupSheetMatches(sheetName: string, group: MaterialGroupInput): boolean {
+  const normalized = normalizeCell(sheetName)
+  if (group === 'HDPE') return normalized === 'HDPE'
+  if (group === 'MB') return normalized === 'MB' || normalized === 'M/B'
+  return normalized === 'KOREA'
+}
 
-export function parseMaterialReport(buffer: Buffer, sheetType: 'HDPE' | 'MB' | 'KOREA' = 'HDPE'): ParsedMaterialRow[] {
-  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true })
-
-  // Find the target sheet
-  const targetName = workbook.SheetNames.find((n) => {
-    const norm = n.trim().toUpperCase()
-    if (sheetType === 'HDPE') return norm === 'HDPE'
-    if (sheetType === 'MB') return norm === 'M/B' || norm === 'MB'
-    if (sheetType === 'KOREA') return norm === 'KOREA'
-    return false
-  }) ?? workbook.SheetNames[0]
-
-  if (!targetName) throw new Error('Excel file has no sheets.')
-
-  const sheet = workbook.Sheets[targetName]
-
-  // Convert to 2D array with raw values
-  const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
+function workbookRows(buffer: Buffer, group: MaterialGroupInput): { workbook: XLSX.WorkBook; sheetName: string; rows: unknown[][] } {
+  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true, raw: true })
+  const matchingSheets = workbook.SheetNames.filter((name) => groupSheetMatches(name, group))
+  if (matchingSheets.length === 0) throw new Error(`Không tìm thấy sheet ${group} trong file Excel.`)
+  if (matchingSheets.length > 1) throw new Error(`Có nhiều sheet ${group} trong file Excel; không thể tự chọn.`)
+  const sheetName = matchingSheets[0]
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
     header: 1,
     raw: true,
-    defval: '',
+    defval: null,
   }) as unknown[][]
+  return { workbook, sheetName, rows }
+}
 
-  // ── Find header row ────────────────────────────────────────────────────────
-  // Look for a row that contains "FISRT STOCK" or "FIRST STOCK" or "LAST STOCK"
-  let headerRowIdx = -1
-  for (let i = 0; i < Math.min(rows.length, 15); i++) {
-    const norm = rows[i].map(normalise)
-    if (
-      norm.some((c) => c.includes('FISRT STOCK') || c.includes('FIRST STOCK') || c.includes('LAST STOCK'))
-    ) {
-      headerRowIdx = i
-      break
-    }
+function isHeaderRow(row: unknown[]): boolean {
+  const cells = row.map(normalizeCell)
+  return cells.some((cell) => cell === 'FIRST STOCK' || cell === 'FISRT STOCK') && cells.some((cell) => cell === 'LAST STOCK')
+}
+
+export function inspectMaterialBlocks(buffer: Buffer, group: MaterialGroupInput): MaterialBlock[] {
+  const { sheetName, rows } = workbookRows(buffer, group)
+  const headers = rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => Array.isArray(row) && isHeaderRow(row))
+  return headers.map(({ index }, position) => ({
+    sheetName,
+    headerRow: index + 1,
+    endRow: (headers[position + 1]?.index ?? rows.length) as number,
+  }))
+}
+
+function findExactHeader(headers: string[], aliases: string[]): number {
+  const accepted = new Set(aliases.map((alias) => normalizeCell(alias)))
+  return headers.findIndex((header) => accepted.has(header))
+}
+
+function parseNumber(value: unknown): number | null {
+  if (value == null || value === '') return null
+  if (typeof value === 'object') return null
+  const number = typeof value === 'number' ? value : Number(String(value).trim())
+  return Number.isFinite(number) ? number : null
+}
+
+function round2(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100
+}
+
+function numericValue(
+  value: unknown,
+  options: { required: boolean; allowNegative: boolean },
+  label: string,
+  errors: string[],
+): number {
+  const parsed = parseNumber(value)
+  if (parsed == null) {
+    if (options.required || (value != null && String(value).trim() !== '')) errors.push(`${label} phải là số`)
+    return 0
   }
+  if (!options.allowNegative && parsed < 0) errors.push(`${label} không được âm`)
+  const absolute = options.allowNegative ? Math.abs(parsed) : parsed
+  if (absolute > MAX_DECIMAL) errors.push(`${label} vượt giới hạn ${MAX_DECIMAL}`)
+  return round2(absolute)
+}
 
-  if (headerRowIdx === -1) {
-    throw new Error(
-      'Không tìm thấy header row. Hãy đảm bảo file có cột "FIRST STOCK" / "LAST STOCK".',
-    )
-  }
+function isSectionLabel(name: string): boolean {
+  const normalized = normalizeMaterialName(name)
+  return normalized === 'TOTAL' || normalized === 'TỔNG' || normalized === 'CỘNG' || normalized.includes('SUMMARY')
+}
 
-  const header = rows[headerRowIdx].map(normalise)
+export function parseMaterialReport(
+  buffer: Buffer,
+  group: MaterialGroupInput = 'HDPE',
+  headerRow?: number,
+): ParsedMaterialRow[] {
+  const { sheetName, rows } = workbookRows(buffer, group)
+  const blocks = inspectMaterialBlocks(buffer, group)
+  if (blocks.length === 0) throw new Error('Không tìm thấy header FIRST STOCK/LAST STOCK trong file.')
+  const block = headerRow == null
+    ? blocks.length === 1 ? blocks[0] : (() => { throw new Error('BLOCK_REQUIRED') })()
+    : blocks.find((candidate) => candidate.headerRow === headerRow)
+  if (!block) throw new Error('Header block không tồn tại trong file.')
 
-  // ── Locate numeric columns ─────────────────────────────────────────────────
-  const colFirstStock = findCol(header, ['FISRT STOCK', 'FIRST STOCK'])
-  const colIn         = findCol(header, ['IN'])
-  const colBroken     = findCol(header, ['HDPE BROKEN', 'BROKEN'])
-  const colTape       = findCol(header, ['OUT TAPE', 'XUẤT TAPE', 'TAPE'])
-  const colReject     = findCol(header, ['REJECT'])
-  const colOutUsing   = findCol(header, ['OUT USEING', 'OUT USING', 'OUT USAGE', 'OUT USE', 'OUT'])
-  const colLastStock  = findCol(header, ['LAST STOCK'])
-
-  if (colFirstStock === -1 || colLastStock === -1) {
-    throw new Error('Không tìm thấy cột FIRST STOCK hoặc LAST STOCK trong file.')
-  }
-
-  // The name column is the last non-empty text column BEFORE colFirstStock.
-  // We scan backward from colFirstStock to find the rightmost text column.
-  const nameColCandidates: number[] = []
-  for (let c = 0; c < colFirstStock; c++) {
-    const val = normalise(rows[headerRowIdx + 1]?.[c] ?? '')
-    if (val && !val.match(/^\d/)) nameColCandidates.push(c)
-  }
-  // We'll use dynamic detection per row — look for any non-numeric content
-  // in columns before colFirstStock.
-
-  // ── Parse data rows ────────────────────────────────────────────────────────
+  const headerIndex = block.headerRow - 1
+  const headers = rows[headerIndex].map(normalizeCell)
+  const firstStockCol = findExactHeader(headers, ['FIRST STOCK', 'FISRT STOCK'])
+  const lastStockCol = findExactHeader(headers, ['LAST STOCK'])
+  if (firstStockCol < 0 || lastStockCol < 0) throw new Error('Không tìm thấy cột FIRST STOCK hoặc LAST STOCK.')
+  const inCol = findExactHeader(headers, ['IN'])
+  const brokenCol = findExactHeader(headers, ['HDPE BROKEN', 'BROKEN'])
+  const tapeCol = findExactHeader(headers, ['OUT TAPE', 'XUẤT TAPE', 'TAPE'])
+  const rejectCol = findExactHeader(headers, ['REJECT'])
+  const outUsingCol = findExactHeader(headers, ['OUT USING', 'OUT USEING', 'OUT USAGE', 'OUT USE', 'OUT'])
+  const dataEnd = Math.min(block.endRow, rows.length)
   const result: ParsedMaterialRow[] = []
 
-  for (let i = headerRowIdx + 1; i < rows.length; i++) {
-    const row = rows[i]
-
-    // Skip empty rows
-    if (!row || row.every((c) => c === '' || c == null)) continue
-
-    // Extract numeric values first
-    const lastStock = colLastStock >= 0 ? toNum(row[colLastStock]) : 0
-
-    // Extract material name from non-numeric columns before colFirstStock
-    // Try to join all text-looking cells in cols 0..colFirstStock-1
-    const nameParts: string[] = []
-    for (let c = 0; c < colFirstStock; c++) {
-      const cell = String(row[c] ?? '').trim()
-      if (cell && !cell.match(/^[\d.,\-]+$/) && cell.length < 80) {
-        nameParts.push(cell)
-      }
-    }
+  for (let rowIndex = headerIndex + 1; rowIndex < dataEnd; rowIndex += 1) {
+    const row = rows[rowIndex] ?? []
+    if (row.length === 0 || row.every((cell) => cell == null || String(cell).trim() === '')) continue
+    const nameParts = row.slice(0, Math.max(firstStockCol, 0))
+      .map((cell) => String(cell ?? '').trim())
+      .filter(Boolean)
     const materialName = nameParts.join(' ').trim()
+    if (!materialName || isSectionLabel(materialName) || isHeaderRow(row)) continue
 
-    // Skip if no material name
-    if (!materialName) continue
-
-    // Skip TOTAL rows
-    const upperName = materialName.toUpperCase()
-    if (
-      upperName.includes('TOTAL') ||
-      upperName.includes('TỔNG') ||
-      upperName.includes('CỘNG')
-    )
-      continue
-
-    const firstStock = colFirstStock >= 0 ? toNum(row[colFirstStock]) : 0
-    const inQty      = colIn         >= 0 ? toNum(row[colIn])         : 0
-    const outBroken  = colBroken     >= 0 ? toNum(row[colBroken])     : 0
-    const outTape    = colTape       >= 0 ? toNum(row[colTape])       : 0
-    const outReject  = colReject     >= 0 ? toNum(row[colReject])     : 0
-    const outUsing   = colOutUsing   >= 0 ? toNum(row[colOutUsing])   : 0
-
-
+    const validationErrors: string[] = []
+    const firstStock = numericValue(row[firstStockCol], { required: true, allowNegative: false }, 'FIRST STOCK', validationErrors)
+    const lastStock = numericValue(row[lastStockCol], { required: true, allowNegative: false }, 'LAST STOCK', validationErrors)
+    const inQty = inCol >= 0 ? numericValue(row[inCol], { required: false, allowNegative: false }, 'IN', validationErrors) : 0
+    const outUsing = outUsingCol >= 0 ? numericValue(row[outUsingCol], { required: false, allowNegative: true }, 'OUT USING', validationErrors) : 0
+    const outBroken = brokenCol >= 0 ? numericValue(row[brokenCol], { required: false, allowNegative: true }, 'HDPE BROKEN', validationErrors) : 0
+    const outTape = tapeCol >= 0 ? numericValue(row[tapeCol], { required: false, allowNegative: true }, 'OUT TAPE', validationErrors) : 0
+    const outReject = rejectCol >= 0 ? numericValue(row[rejectCol], { required: false, allowNegative: true }, 'REJECT', validationErrors) : 0
     result.push({
       materialName,
       firstStock,
@@ -164,8 +168,20 @@ export function parseMaterialReport(buffer: Buffer, sheetType: 'HDPE' | 'MB' | '
       outTape,
       outReject,
       lastStock,
+      sourceRow: rowIndex + 1,
+      isValid: validationErrors.length === 0,
+      validationErrors,
     })
   }
 
+  if (result.length > MAX_MATERIAL_ROWS) throw new Error(`Báo cáo vượt quá ${MAX_MATERIAL_ROWS} dòng vật tư.`)
+  const byName = new Map<string, ParsedMaterialRow[]>()
+  result.forEach((row) => byName.set(normalizeMaterialName(row.materialName), [...(byName.get(normalizeMaterialName(row.materialName)) ?? []), row]))
+  byName.forEach((rowsForName) => {
+    if (rowsForName.length > 1) rowsForName.forEach((row) => {
+      row.isValid = false
+      row.validationErrors.push('Trùng tên vật tư trong cùng block; không tự gộp')
+    })
+  })
   return result
 }

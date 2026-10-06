@@ -1,10 +1,7 @@
-// src/app/orders/page.tsx
-// Server Component — fetches orders, computes KPI counts, renders list page.
-
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { prisma } from '@/lib/db'
-import type { SerializedProductionOrder } from '@/types'
+import type { OrderTableItem } from '@/types'
 import OrderTable from '@/components/orders/OrderTable'
 import ImportOrdersModal from '@/components/orders/ImportOrdersModal'
 
@@ -15,8 +12,6 @@ export const metadata: Metadata = {
 
 export const dynamic = 'force-dynamic'
 
-// ── KPI card component ────────────────────────────────────────────────────────
-
 function KpiCard({ label, value, icon }: { label: string; value: number; icon: string }) {
   return (
     <div className="bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-xl p-lg flex flex-col gap-sm">
@@ -26,39 +21,54 @@ function KpiCard({ label, value, icon }: { label: string; value: number; icon: s
         </span>
         <span className="material-symbols-outlined text-[20px] text-outline">{icon}</span>
       </div>
-      <p className="text-headline-lg font-inter font-semibold text-on-surface tabular-nums">
-        {value.toLocaleString()}
+      <p className="text-headline-lg font-inter font-semibold text-on-surface tabular-nums" suppressHydrationWarning>
+        {value.toLocaleString('vi-VN')}
       </p>
     </div>
   )
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
-
 export default async function OrdersPage() {
-  let orders: SerializedProductionOrder[] = []
+  let orders: OrderTableItem[] = []
   let fetchError: string | null = null
+  let totalCustomers = 0
 
   try {
     const raw = await prisma.productionOrder.findMany({
-      orderBy: { orderDate: 'desc' },
-      include: { assignments: { select: { startDate: true, endDate: true } } },
+      orderBy: [
+        { orderDate: 'desc' },
+        { id: 'desc' },
+      ],
+      select: {
+        id: true,
+        piNumber: true,
+        subLineIndex: true,
+        customer: true,
+        customerId: true,
+        orderDate: true,
+        widthM: true,
+        lengthM: true,
+        gsm: true,
+        color: true,
+        itemCode: true,
+        lifecycleStatus: true,
+        isDraft: true,
+        isPlaceholder: true,
+        assignments: {
+          select: {
+            startDate: true,
+            endDate: true,
+          },
+        },
+      },
     })
+
+    totalCustomers = await prisma.customer.count()
 
     orders = raw.map((o) => ({
       ...o,
       orderDate: o.orderDate.toISOString(),
-      createdAt: o.createdAt.toISOString(),
-      updatedAt: o.updatedAt.toISOString(),
-      uvPct: o.uvPct != null ? o.uvPct.toString() : null,
-      rollLength:  o.rollLength  != null ? o.rollLength.toString()  : null,
-      pieceLength: o.pieceLength != null ? o.pieceLength.toString() : null,
-      qtySqm:         o.qtySqm         != null ? o.qtySqm.toString()         : null,
-      totalWeightKgs: o.totalWeightKgs != null ? o.totalWeightKgs.toString() : null,
-      requiredYarnKg: o.requiredYarnKg != null ? o.requiredYarnKg.toString() : null,
-      deliveryDate: o.deliveryDate != null ? o.deliveryDate.toISOString() : null,
-      frPct: o.frPct != null ? o.frPct.toString() : null,
-      assignments: o.assignments.map(a => ({
+      assignments: o.assignments.map((a) => ({
         startDate: a.startDate.toISOString(),
         endDate: a.endDate.toISOString(),
       })),
@@ -68,19 +78,15 @@ export default async function OrdersPage() {
     fetchError = err instanceof Error ? err.message : 'Unknown database error'
   }
 
-  // ── KPI computations (derived from existing fetch — no extra DB query) ──────
   const now = new Date()
   const totalOrders = orders.length
   const thisMonth = orders.filter((o) => {
     const d = new Date(o.orderDate)
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
   }).length
-  const totalCustomers = new Set(orders.map((o) => o.customer)).size
 
   return (
     <div className="max-w-[1440px] mx-auto px-container-margin py-xl">
-
-      {/* Page header */}
       <div className="flex items-start justify-between mb-lg">
         <div>
           <h1 className="text-display font-inter font-semibold text-primary tracking-tight">
@@ -91,7 +97,6 @@ export default async function OrdersPage() {
           </p>
         </div>
 
-        {/* Action buttons */}
         <div className="flex items-center gap-md mt-1">
           <a
             id="btn-download-template"
@@ -130,16 +135,14 @@ export default async function OrdersPage() {
         </div>
       </div>
 
-      {/* KPI cards */}
       {!fetchError && (
         <div className="grid grid-cols-3 gap-md mb-lg">
-          <KpiCard label="Total orders"  value={totalOrders}   icon="receipt_long" />
-          <KpiCard label="đơn mới tháng này"    value={thisMonth}     icon="calendar_month" />
-          <KpiCard label="khách hàng"     value={totalCustomers} icon="groups" />
+          <KpiCard label="Total orders" value={totalOrders} icon="receipt_long" />
+          <KpiCard label="đơn mới tháng này" value={thisMonth} icon="calendar_month" />
+          <KpiCard label="khách hàng" value={totalCustomers} icon="groups" />
         </div>
       )}
 
-      {/* DB error banner */}
       {fetchError && (
         <div
           role="alert"
@@ -161,7 +164,6 @@ export default async function OrdersPage() {
         </div>
       )}
 
-      {/* Orders table */}
       {!fetchError && <OrderTable orders={orders} />}
     </div>
   )

@@ -4,6 +4,70 @@
 
 import { z } from 'zod'
 
+export function isValidISODate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+}
+
+const isoDateSchema = (message: string) => z.string().refine(isValidISODate, message)
+
+/**
+ * H2 (01/10): HEMMED không lưu số tấm / kích thước thùng/kiện.
+ * Gọi ở mọi điểm persist để đảm bảo DB không chứa field dư.
+ */
+export function clearHemmedFields<T extends {
+  primaryPackingType?: string | null
+  piecesPerCarton?: number | null
+  piecesPerBale?: number | null
+  boxDimensions?: string | null
+}>(data: T): T {
+  if (data.primaryPackingType === 'HEMMED') {
+    return { ...data, piecesPerCarton: null, piecesPerBale: null, boxDimensions: null }
+  }
+  return data
+}
+
+/**
+ * P0-3: Chuẩn hóa lifecycleStatus + isPlaceholder từ mọi entry point.
+ * Ưu tiên: lifecycleStatus tường minh > isPlaceholder > isDraft > APPROVED.
+ * Trước P0-3, 3 route (multi-line, [id] PATCH, POST) không ghi lifecycleStatus
+ * → DB default('APPROVED') thắng → đơn nháp bị gắn nhãn APPROVED.
+ */
+export function resolveLifecycle(
+  input: { lifecycleStatus?: string | null; isPlaceholder?: boolean | null; isDraft?: boolean | null },
+): { lifecycleStatus: 'DRAFT' | 'RESERVED' | 'APPROVED'; isPlaceholder: boolean } {
+  let explicit = input.lifecycleStatus
+  if (explicit === 'PLACEHOLDER' || explicit === 'RESERVE') explicit = 'RESERVED'
+  if (explicit === 'DRAFT' || explicit === 'RESERVED' || explicit === 'APPROVED') {
+    return { lifecycleStatus: explicit, isPlaceholder: explicit === 'RESERVED' }
+  }
+  if (input.isPlaceholder === true) return { lifecycleStatus: 'RESERVED', isPlaceholder: true }
+  if (input.isDraft === true) return { lifecycleStatus: 'DRAFT', isPlaceholder: false }
+  return { lifecycleStatus: 'APPROVED', isPlaceholder: false }
+}
+
+/**
+ * Auto-derive orderType ('meters' | 'rolls' | 'pieces') from packingType / text.
+ * Guarantees 100% backward math compatibility even if UI only displays packingType.
+ */
+export function deriveOrderTypeFromPacking(
+  primaryPackingType?: string | null,
+  currentOrderType?: string | null
+): 'meters' | 'rolls' | 'pieces' {
+  if (currentOrderType && ['meters', 'rolls', 'pieces'].includes(currentOrderType)) {
+    return currentOrderType as 'meters' | 'rolls' | 'pieces'
+  }
+  if (!primaryPackingType) return 'rolls'
+  const normalized = primaryPackingType.toUpperCase()
+  if (normalized.includes('CARTON') || normalized.includes('THÙNG') || normalized.includes('PIECE')) return 'pieces'
+  if (normalized.includes('BALE') || normalized.includes('KIỆN') || normalized.includes('METER')) return 'meters'
+  return 'rolls'
+}
+
 export const createOrderSchema = z.object({
   // ── Required fields ────────────────────────────────────────────────────────
   piNumber: z
@@ -29,26 +93,26 @@ export const createOrderSchema = z.object({
   orderDate: z
     .string()
     .min(1, 'Order date is required')
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Order date must be a valid date (YYYY-MM-DD)'),
+    .refine(isValidISODate, 'Order date must be a valid date (YYYY-MM-DD)'),
 
   widthM: z
-    .number()
+    .number().finite()
     .gt(0, 'Width must be greater than 0')
     .max(20, 'Width must be 20 m or less'),
 
   lengthM: z
-    .number()
+    .number().finite()
     .gt(0, 'Length must be greater than 0')
     .max(100_000, 'Length must be 100,000 m or less'),
 
   gsm: z
-    .number()
+    .number().finite()
     .int('GSM must be a whole number')
     .gt(0, 'GSM must be greater than 0')
     .max(500, 'GSM must be 500 or less'),
 
   productionGsm: z
-    .number()
+    .number().finite()
     .int('GSM sản xuất must be a whole number')
     .gt(0, 'GSM sản xuất must be greater than 0')
     .max(500, 'GSM sản xuất must be 500 or less')
@@ -63,21 +127,31 @@ export const createOrderSchema = z.object({
 
   // ── Optional fields ────────────────────────────────────────────────────────
   qty: z
-    .number()
+    .number().finite()
     .int('Quantity must be a whole number')
     .gt(0, 'Quantity must be greater than 0')
     .nullable()
     .optional(),
 
   uvPct: z
-    .number()
+    .number().finite()
     .min(0, 'UV% must be between 0 and 100')
     .max(100, 'UV% must be between 0 and 100')
     .nullable()
     .optional(),
 
   frFlag: z.boolean().default(false),
-  frPct: z.number().min(0, 'FR% must be between 0 and 100').max(100, 'FR% must be between 0 and 100').nullable().optional(),
+  frPct: z.preprocess((val) => {
+    if (val === null || val === undefined || val === '') return null
+    if (typeof val === 'number') return val <= 0 ? null : val
+    if (typeof val === 'string') {
+      const cleaned = val.replace('%', '').trim()
+      if (!cleaned) return null
+      const num = Number(cleaned)
+      return Number.isFinite(num) && num > 0 ? num : null
+    }
+    return val
+  }, z.number().finite().min(0, 'FR% must be between 0 and 100').max(100, 'FR% must be between 0 and 100').nullable().optional()),
 
   description: z
     .string()
@@ -101,7 +175,7 @@ export const createOrderSchema = z.object({
     .optional(),
 
   requiresPacking: z.boolean().default(false),
-  deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Delivery date must be a valid date (YYYY-MM-DD)').nullable().optional(),
+  deliveryDate: isoDateSchema('Delivery date must be a valid date (YYYY-MM-DD)').nullable().optional(),
   containerSize: z.string().max(50, 'Container size must be 50 characters or fewer').transform((v) => v.trim()).nullable().optional(),
 
   // Technical specs
@@ -113,31 +187,69 @@ export const createOrderSchema = z.object({
     .optional(),
 
   needleCount: z
-    .number()
+    .number().finite()
     .int('Số kim must be a whole number')
     .positive('Số kim must be positive')
     .nullable()
     .optional(),
 
   beamCount: z
-    .number()
+    .number().finite()
     .int('Số dàn must be a whole number')
     .positive('Số dàn must be positive')
     .nullable()
     .optional(),
 
-  // Mã Masterbatch màu (optional)
+  // Mã Masterbatch màu & Công thức v4
   mbCode: z
     .string()
     .max(50, 'MB Code must be 50 characters or fewer')
     .transform((v) => v.trim())
     .nullable()
     .optional(),
+  itemCode: z
+    .string()
+    .max(100, 'Item Code must be 100 characters or fewer')
+    .transform((v) => {
+      const t = v.trim()
+      return t === '' ? null : t
+    })
+    .nullable()
+    .optional(),
+  colorVersion: z.string().max(50).nullable().optional(),
+  colorRecipeSnapshot: z.string().nullable().optional(),
 
-  // Kiểu đơn hàng
+  // Lifecycle v4
+  lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).optional(),
+  isPlaceholder: z.boolean().optional(),
+
+
+  // Kiểu đơn hàng & Đóng gói v4
   orderType: z.enum(['meters', 'rolls', 'pieces']).default('meters'),
-  rollLength: z.number().positive('Số mét/cuộn phải lớn hơn 0').nullable().optional(),
-  pieceLength: z.number().positive('Chiều dài tấm phải lớn hơn 0').nullable().optional(),
+  rollLength: z.number().finite().positive('Số mét/cuộn phải lớn hơn 0').nullable().optional(),
+  pieceLength: z.number().finite().positive('Chiều dài tấm phải lớn hơn 0').nullable().optional(),
+
+  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).default('ROLL'),
+  subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
+  hasPaperCore: z.boolean().default(false),
+  isHalfFolded: z.boolean().default(false),
+  outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).default('POLYBAG').nullable().optional(),
+  piecesPerCarton: z.number().int('Số tấm/thùng phải là số nguyên').positive('Số tấm/thùng phải > 0').nullable().optional(),
+  piecesPerBale: z.number().int('Số tấm/kiện phải là số nguyên').positive('Số tấm/kiện phải > 0').nullable().optional(),
+  boxDimensions: z.string().max(100).nullable().optional(),
+  onPallet: z.boolean().default(false),
+  secondaryPackingType: z.enum(['NONE', 'WOOD_PALLET', 'IRON_PALLET', 'PLASTIC_PALLET']).default('NONE'),
+  palletDimensions: z.string().max(100).nullable().optional(),
+  itemsPerPallet: z.number().int('Số lượng/pallet phải là số nguyên').positive('Số lượng/pallet phải > 0').nullable().optional(),
+  packingNote: z.string().max(200).nullable().optional(),
+
+  // Dual-GSM & Tolerance
+  isLaminated: z.boolean().default(false),
+  rawFabricGsm: z.number().int().positive().nullable().optional(),
+  coatingGsm: z.number().int().positive().nullable().optional(),
+  finishedGsm: z.number().int().positive().nullable().optional(),
+  toleranceQtyPct: z.number().positive().default(10.0).nullable().optional(),
+  toleranceSpecPct: z.number().positive().default(5.0).nullable().optional(),
 
   // Eyelet
   hasEyelet: z.boolean().default(false),
@@ -145,6 +257,30 @@ export const createOrderSchema = z.object({
   eyeletLines: z.number().int('Số lines eyelet phải là số nguyên').positive('Số lines eyelet phải > 0').nullable().optional(),
   eyeletSpec: z.string().max(200, 'Eyelet spec must be 200 characters or fewer').nullable().optional(),
 })
+  .refine(
+    (data) => data.primaryPackingType !== 'CARTON' || (data.piecesPerCarton != null && data.piecesPerCarton > 0),
+    { message: 'Thiếu số tấm/thùng khi chọn đóng thùng Carton (piecesPerCarton > 0)', path: ['piecesPerCarton'] },
+  )
+  .refine(
+    (data) => data.primaryPackingType !== 'BALE' || (data.piecesPerBale != null && data.piecesPerBale > 0),
+    { message: 'Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)', path: ['piecesPerBale'] },
+  )
+  .refine(
+    (data) => data.primaryPackingType !== 'HEMMED' || (data.subPackingType === 'CARTON' || data.subPackingType === 'BALE'),
+    { message: 'Thiếu quy cách đóng gói con (Thùng Carton hoặc Kiện nén BALE) khi chọn May viền, đóng khuy (HEMMED)', path: ['subPackingType'] },
+  )
+  .refine(
+    (data) => data.onPallet !== true || (data.secondaryPackingType != null && data.secondaryPackingType !== 'NONE'),
+    { message: 'Chưa chọn loại Pallet (Gỗ/Nhựa/Sắt) khi đóng trên Pallet', path: ['secondaryPackingType'] },
+  )
+  .refine(
+    (data) => data.isLaminated !== true || (data.rawFabricGsm != null && data.rawFabricGsm > 0 && data.finishedGsm != null && data.finishedGsm > 0),
+    { message: 'Hàng tráng màng ngoài bắt buộc có GSM dệt mộc và GSM thành phẩm', path: ['rawFabricGsm'] },
+  )
+  .refine(desertSandVersionOk, {
+    message: 'Màu Desert Sand bắt buộc chọn tường minh Version A hoặc Version B (không tự gán)',
+    path: ['colorVersion'],
+  })
 
 export type CreateOrderInput = z.input<typeof createOrderSchema>
 
@@ -155,6 +291,9 @@ export type CreateOrderOutput = z.output<typeof createOrderSchema>
 // All fields optional — allows partial updates. Same validation rules as create.
 
 export const updateOrderSchema = z.object({
+  // Optimistic concurrency token from the detail page. It is checked by the
+  // PATCH route and never persisted as an order field.
+  expectedUpdatedAt: z.string().datetime({ offset: true }).optional(),
   piNumber: z
     .string()
     .min(1, 'PI Number is required')
@@ -179,30 +318,33 @@ export const updateOrderSchema = z.object({
 
   orderDate: z
     .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Order date must be a valid date (YYYY-MM-DD)')
+    .refine(isValidISODate, 'Order date must be a valid date (YYYY-MM-DD)')
     .optional(),
 
   widthM: z
-    .number()
+    .number().finite()
     .gt(0, 'Width must be greater than 0')
     .max(20, 'Width must be 20 m or less')
+    .nullable()
     .optional(),
 
   lengthM: z
-    .number()
+    .number().finite()
     .gt(0, 'Length must be greater than 0')
     .max(100_000, 'Length must be 100,000 m or less')
+    .nullable()
     .optional(),
 
   gsm: z
-    .number()
+    .number().finite()
     .int('GSM must be a whole number')
     .gt(0, 'GSM must be greater than 0')
     .max(500, 'GSM must be 500 or less')
+    .nullable()
     .optional(),
 
   productionGsm: z
-    .number()
+    .number().finite()
     .int('GSM sản xuất must be a whole number')
     .gt(0, 'GSM sản xuất must be greater than 0')
     .max(500, 'GSM sản xuất must be 500 or less')
@@ -214,24 +356,25 @@ export const updateOrderSchema = z.object({
     .min(1, 'Color is required')
     .max(50, 'Color must be 50 characters or fewer')
     .transform((v) => v.trim().toUpperCase())
+    .nullable()
     .optional(),
 
   qty: z
-    .number()
+    .number().finite()
     .int('Quantity must be a whole number')
     .gt(0, 'Quantity must be greater than 0')
     .nullable()
     .optional(),
 
   uvPct: z
-    .number()
+    .number().finite()
     .min(0, 'UV% must be between 0 and 100')
     .max(100, 'UV% must be between 0 and 100')
     .nullable()
     .optional(),
 
   frFlag: z.boolean().optional(),
-  frPct: z.number().min(0).max(100).nullable().optional(),
+  frPct: z.number().finite().min(0).max(100).nullable().optional(),
 
   description: z
     .string()
@@ -249,7 +392,7 @@ export const updateOrderSchema = z.object({
 
   lineNote: z.string().max(200).transform(v => v.trim()).nullable().optional(),
   requiresPacking: z.boolean().optional(),
-  deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  deliveryDate: isoDateSchema('Delivery date must be a valid date (YYYY-MM-DD)').nullable().optional(),
   containerSize: z.string().max(50).transform(v => v.trim()).nullable().optional(),
 
   // Technical specs
@@ -261,31 +404,68 @@ export const updateOrderSchema = z.object({
     .optional(),
 
   needleCount: z
-    .number()
+    .number().finite()
     .int('Số kim must be a whole number')
     .positive('Số kim must be positive')
     .nullable()
     .optional(),
 
   beamCount: z
-    .number()
+    .number().finite()
     .int('Số dàn must be a whole number')
     .positive('Số dàn must be positive')
     .nullable()
     .optional(),
 
-  // Mã Masterbatch màu (optional)
+  // Mã Masterbatch màu & Công thức v4
   mbCode: z
     .string()
     .max(50, 'MB Code must be 50 characters or fewer')
     .transform((v) => v.trim())
     .nullable()
     .optional(),
+  itemCode: z
+    .string()
+    .max(100, 'Item Code must be 100 characters or fewer')
+    .transform((v) => {
+      const t = v.trim()
+      return t === '' ? null : t
+    })
+    .nullable()
+    .optional(),
+  colorVersion: z.string().max(50).nullable().optional(),
+  colorRecipeSnapshot: z.string().nullable().optional(),
 
-  // Kiểu đơn hàng
+  // Lifecycle v4
+  lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).optional(),
+  isPlaceholder: z.boolean().optional(),
+
+  // Kiểu đơn hàng & Đóng gói v4
   orderType: z.enum(['meters', 'rolls', 'pieces']).optional(),
-  rollLength: z.number().positive('Số mét/cuộn phải lớn hơn 0').nullable().optional(),
-  pieceLength: z.number().positive('Chiều dài tấm phải lớn hơn 0').nullable().optional(),
+  rollLength: z.number().finite().positive('Số mét/cuộn phải lớn hơn 0').nullable().optional(),
+  pieceLength: z.number().finite().positive('Chiều dài tấm phải lớn hơn 0').nullable().optional(),
+
+  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).optional(),
+  subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
+  hasPaperCore: z.boolean().optional(),
+  isHalfFolded: z.boolean().optional(),
+  outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).optional(),
+  piecesPerCarton: z.number().int().positive().nullable().optional(),
+  piecesPerBale: z.number().int().positive().nullable().optional(),
+  boxDimensions: z.string().max(100).nullable().optional(),
+  onPallet: z.boolean().optional(),
+  secondaryPackingType: z.enum(['NONE', 'WOOD_PALLET', 'IRON_PALLET', 'PLASTIC_PALLET']).optional(),
+  palletDimensions: z.string().max(100).nullable().optional(),
+  itemsPerPallet: z.number().int().positive().nullable().optional(),
+  packingNote: z.string().max(200).nullable().optional(),
+
+  // Dual-GSM & Tolerance
+  isLaminated: z.boolean().optional(),
+  rawFabricGsm: z.number().int().positive().nullable().optional(),
+  coatingGsm: z.number().int().positive().nullable().optional(),
+  finishedGsm: z.number().int().positive().nullable().optional(),
+  toleranceQtyPct: z.number().positive().nullable().optional(),
+  toleranceSpecPct: z.number().positive().nullable().optional(),
 
   // Eyelet
   hasEyelet: z.boolean().optional(),
@@ -293,39 +473,360 @@ export const updateOrderSchema = z.object({
   eyeletLines: z.number().int().positive().nullable().optional(),
   eyeletSpec: z.string().max(200).nullable().optional(),
 })
+  // V4.1 conditional rules (mục 5 — OrderDetail đơn lẻ).
+  // Partial-update: chỉ kiểm khi field điều khiển xuất hiện trong payload;
+  // field vắng mặt nghĩa là "giữ giá trị cũ", PATCH merge với current ở route.
+  .refine(
+    (data) => data.primaryPackingType !== 'CARTON' || (data.piecesPerCarton != null && data.piecesPerCarton > 0),
+    { message: 'Thiếu số tấm/thùng khi chọn đóng thùng Carton (piecesPerCarton > 0)', path: ['piecesPerCarton'] },
+  )
+  .refine(
+    (data) => data.primaryPackingType !== 'BALE' || (data.piecesPerBale != null && data.piecesPerBale > 0),
+    { message: 'Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)', path: ['piecesPerBale'] },
+  )
+  .refine(
+    (data) => data.primaryPackingType !== 'HEMMED' || (data.subPackingType === 'CARTON' || data.subPackingType === 'BALE'),
+    { message: 'Thiếu quy cách đóng gói con (Thùng Carton hoặc Kiện nén BALE) khi chọn May viền, đóng khuy (HEMMED)', path: ['subPackingType'] },
+  )
+  // G2: partial-update nên chỉ bắt khi loại pallet xuất hiện tường minh là NONE
+  // (vắng mặt = giữ giá trị cũ trong DB). Form edit luôn gửi đủ nên vẫn chặn được.
+  .refine(
+    (data) => data.onPallet !== true || data.secondaryPackingType == null || data.secondaryPackingType !== 'NONE',
+    { message: 'Chưa chọn loại Pallet (Gỗ/Nhựa/Sắt) khi đóng trên Pallet', path: ['secondaryPackingType'] },
+  )
+  .refine(
+    (data) => data.isLaminated !== true || (data.rawFabricGsm != null && data.rawFabricGsm > 0 && data.finishedGsm != null && data.finishedGsm > 0),
+    { message: 'Hàng tráng màng ngoài bắt buộc có GSM dệt mộc và GSM thành phẩm', path: ['rawFabricGsm'] },
+  )
+  // desertSandVersionIssue là const khai báo phía dưới — inline message để tránh TDZ lúc load module
+  // (function desertSandVersionOk thì hoisted nên tham chiếu trực tiếp được).
+  .refine(desertSandVersionOk, {
+    message: 'Màu Desert Sand bắt buộc chọn tường minh Version A hoặc Version B (không tự gán)',
+    path: ['colorVersion'],
+  })
+  // FR: partial-update nên chỉ bắt khi frFlag xuất hiện tường minh là true
+  // (vắng mặt = giữ giá trị cũ trong DB). Form edit luôn gửi đủ nên vẫn chặn được.
+  .refine(
+    (data) => data.frFlag !== true || (data.frPct != null && data.frPct > 0),
+    { message: 'FR% phải lớn hơn 0 khi chọn chống cháy (FR)', path: ['frPct'] },
+  )
 
 export type UpdateOrderInput = z.input<typeof updateOrderSchema>
 
 /** Output type for PATCH (after transforms). */
 export type UpdateOrderOutput = z.output<typeof updateOrderSchema>
 
+// ── Excel import schema ──────────────────────────────────────────────────────
+// Shared by the Excel parser and the confirm endpoint so preview and save use
+// exactly the same rules.  The parser keeps invalid rows for the preview,
+// while the endpoint rejects the same rows before writing to the database.
+// R6 (feedback KH): màu Desert Sand bắt buộc chọn tường minh Version A hoặc
+// Version B — hệ thống không được tự gán ngầm định (xuất sai màu bị phạt HĐ).
+export function desertSandVersionOk(data: { color?: string | null; colorVersion?: string | null }): boolean {
+  const color = (data.color || '').toUpperCase()
+  if (color.includes('DESERT SAND')) {
+    return data.colorVersion === 'Version A' || data.colorVersion === 'Version B'
+  }
+  return true
+}
+
+export const desertSandVersionIssue = {
+  message: 'Màu Desert Sand bắt buộc chọn tường minh Version A hoặc Version B (không tự gán)',
+  path: ['colorVersion'],
+}
+
+export const importedOrderRowSchema = z
+  .object({
+    piNumber:     z.string().min(1, 'PI Number là bắt buộc').max(50).transform((v) => v.trim()),
+    subLineIndex: z.number().int().min(0),
+    customer:     z.string().min(1, 'Khách hàng là bắt buộc').max(100).transform((v) => v.trim()),
+    orderDate:    isoDateSchema('Ngày đặt không hợp lệ (YYYY-MM-DD)'),
+    widthM:       z.number().finite().gt(0, 'Khổ m phải > 0').max(20),
+    lengthM:      z.number().finite().gt(0).max(100_000).nullable().optional(),
+    gsm:          z.number().finite().int().gt(0, 'GSM phải > 0').max(500),
+    productionGsm: z.number().finite().int().gt(0).max(500).nullable().optional(),
+    color:        z.string().min(1, 'Màu là bắt buộc').max(50).transform((v) => v.trim().toUpperCase()),
+    colorVersion: z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
+    colorRecipeSnapshot: z.string().nullable().optional(),
+
+    lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).default('APPROVED'),
+    isPlaceholder: z.boolean().default(false),
+
+    orderType:    z.enum(['meters', 'rolls', 'pieces']).default('meters'),
+    qty:          z.number().finite().int().gt(0).nullable().optional(),
+    rollLength:   z.number().finite().gt(0).nullable().optional(),
+    pieceLength:  z.number().finite().gt(0).nullable().optional(),
+
+    primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).default('ROLL'),
+    subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
+    hasPaperCore: z.boolean().default(false),
+    isHalfFolded: z.boolean().default(false),
+    piecesPerCarton: z.number().finite().int().positive().nullable().optional(),
+    piecesPerBale: z.number().finite().int().positive().nullable().optional(),
+    boxDimensions: z.string().max(100).nullable().optional().transform((v) => v?.trim() ?? null),
+    onPallet:     z.boolean().default(false),
+    secondaryPackingType: z.enum(['NONE', 'WOOD_PALLET', 'IRON_PALLET', 'PLASTIC_PALLET']).default('NONE'),
+    palletDimensions: z.string().max(100).nullable().optional().transform((v) => v?.trim() ?? null),
+    itemsPerPallet: z.number().finite().int().positive().nullable().optional(),
+    packingNote:  z.string().max(200).nullable().optional().transform((v) => v?.trim() ?? null),
+    // V4.1 (mục 5): PATCH đơn lẻ merge state qua schema này — thiếu field nào
+    // zod sẽ strip field đó khiến updateData reset về default. Optional thuần
+    // (không default) để hàng import cũ thiếu field vẫn parse y như trước.
+    outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).nullable().optional(),
+    isLaminated:  z.boolean().optional(),
+    rawFabricGsm: z.number().finite().int().positive().nullable().optional(),
+    coatingGsm:   z.number().finite().int().positive().nullable().optional(),
+    finishedGsm:  z.number().finite().int().positive().nullable().optional(),
+    toleranceQtyPct:  z.number().finite().positive().nullable().optional(),
+    toleranceSpecPct: z.number().finite().positive().nullable().optional(),
+    uvPct:        z.number().finite().min(0).max(100).nullable().optional(),
+    frFlag:       z.boolean().default(false),
+    frPct:        z.number().finite().min(0).max(100).nullable().optional(),
+    description:  z.string().max(200).nullable().optional().transform((v) => v?.trim() ?? null),
+    remark:       z.string().max(200).nullable().optional().transform((v) => v?.trim() ?? null),
+    mbCode:       z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
+  itemCode:     z.string().max(100).nullable().optional().transform((v) => {
+      const t = v?.trim() ?? ''
+      return t === '' ? null : t
+    }),
+    meshType:     z.string().max(100).nullable().optional().transform((v) => v?.trim() ?? null),
+    needleCount:  z.number().finite().int().positive().nullable().optional(),
+    beamCount:    z.number().finite().int().positive().nullable().optional(),
+    lineNote:     z.string().max(200).nullable().optional().transform((v) => v?.trim() ?? null),
+    requiresPacking: z.boolean().default(false),
+    deliveryDate: isoDateSchema('Ngày giao không hợp lệ (YYYY-MM-DD)').nullable().optional(),
+    containerSize: z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
+    hasEyelet:    z.boolean().default(false),
+    eyeletColor:  z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
+    eyeletLines:  z.number().int().positive().nullable().optional(),
+    eyeletSpec:   z.string().max(200).nullable().optional().transform((v) => v?.trim() ?? null),
+  })
+  .refine(
+    (data) => !data.frFlag || (data.frPct != null && data.frPct > 0),
+    { message: 'FR% phải > 0 khi chọn chống cháy (FR)', path: ['frPct'] },
+  )
+  // G2: import từ Excel — ĐÓNG PALLET=YES mà LOẠI PALLET=NONE thì chặn ở preview.
+  .refine(
+    (data) => data.onPallet !== true || (data.secondaryPackingType != null && data.secondaryPackingType !== 'NONE'),
+    { message: 'Chưa chọn loại Pallet (Gỗ/Nhựa/Sắt) khi đóng trên Pallet', path: ['secondaryPackingType'] },
+  )
+  .refine(
+    (data) => {
+      const totalMeters = data.orderType === 'rolls'
+        ? (data.qty != null && data.rollLength != null ? data.qty * data.rollLength : null)
+        : data.orderType === 'pieces'
+          ? (data.qty != null && data.pieceLength != null ? data.qty * data.pieceLength : null)
+          : data.lengthM
+      if (totalMeters != null && totalMeters > 100_000) return false
+      if (data.orderType === 'meters') {
+        return data.lengthM != null && data.lengthM > 0
+      }
+      if (data.orderType === 'rolls') {
+        return data.qty != null && data.qty > 0 && data.rollLength != null && data.rollLength > 0
+      }
+      return data.qty != null && data.qty > 0 && data.pieceLength != null && data.pieceLength > 0
+    },
+    {
+      message: 'Thiếu thông số chiều dài hoặc tổng mét vượt quá 100.000',
+      path: ['lengthM'],
+    },
+  )
+  .refine(
+    (data) => {
+      if (data.primaryPackingType === 'CARTON') {
+        return data.piecesPerCarton != null && data.piecesPerCarton > 0
+      }
+      return true
+    },
+    { message: 'Thiếu số tấm/thùng khi chọn đóng thùng Carton (piecesPerCarton > 0)', path: ['piecesPerCarton'] }
+  )
+  .refine(
+    (data) => {
+      if (data.primaryPackingType === 'BALE') {
+        return data.piecesPerBale != null && data.piecesPerBale > 0
+      }
+      return true
+    },
+    { message: 'Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)', path: ['piecesPerBale'] }
+  )
+  .refine(
+    (data) => {
+      if (data.primaryPackingType === 'HEMMED') {
+        return data.subPackingType === 'CARTON' || data.subPackingType === 'BALE'
+      }
+      return true
+    },
+    { message: 'Thiếu quy cách đóng gói con (Thùng Carton hoặc Kiện nén BALE) khi chọn May viền, đóng khuy (HEMMED)', path: ['subPackingType'] }
+  )
+  .refine(
+    (data) => {
+      if (data.isLaminated) {
+        return data.rawFabricGsm != null && data.rawFabricGsm > 0 && data.finishedGsm != null && data.finishedGsm > 0
+      }
+      return true
+    },
+    { message: 'Hàng tráng màng ngoài bắt buộc có GSM dệt mộc và GSM thành phẩm', path: ['rawFabricGsm'] }
+  )
+  .refine(desertSandVersionOk, desertSandVersionIssue)
+
+export const MAX_IMPORTED_ORDER_ROWS = 5000
+
+// P0-13: insert chunk size. One createMany = one multi-row INSERT, capped
+// by the Postgres 65,535 bind-param limit. Create input has ~55 columns,
+// so 500 rows ≈ 27,500 params (~42% of the limit — 2.4x safety margin).
+// 1,000 rows (≈55,000 params, 84%) is too close to the ceiling.
+export const IMPORT_INSERT_CHUNK_SIZE = 500
+
+// Param budget guard for the chunk test: chunks must stay well under
+// the Postgres limit even if columns are added later.
+export const IMPORT_INSERT_PARAM_BUDGET = 60000
+
+export const importedOrderBodySchema = z.object({
+  rows: z.array(importedOrderRowSchema).min(1).max(MAX_IMPORTED_ORDER_ROWS),
+})
+
+export type ImportedOrderInput = z.input<typeof importedOrderRowSchema>
+export type ImportedOrderOutput = z.output<typeof importedOrderRowSchema>
+
+export const approvedOrderStateSchema = importedOrderRowSchema
+
+export const draftOrderStateSchema = z.object({
+  piNumber: z.string().min(1).max(50).transform((v) => v.trim()),
+  subLineIndex: z.number().finite().int().min(0),
+  customer: z.string().min(1).max(100).transform((v) => v.trim()),
+  orderDate: isoDateSchema('Ngày đặt không hợp lệ (YYYY-MM-DD)'),
+  widthM: z.number().finite().gt(0).max(20).nullable().optional(),
+  lengthM: z.number().finite().gt(0).max(100_000).nullable().optional(),
+  gsm: z.number().finite().int().gt(0).max(500).nullable().optional(),
+  productionGsm: z.number().finite().int().gt(0).max(500).nullable().optional(),
+  color: z.string().min(1).max(50).transform((v) => v.trim().toUpperCase()).nullable().optional(),
+  colorVersion: z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
+  colorRecipeSnapshot: z.string().nullable().optional(),
+
+  lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).default('DRAFT'),
+  isPlaceholder: z.boolean().default(false),
+
+  orderType: z.enum(['meters', 'rolls', 'pieces']).default('meters'),
+  qty: z.number().finite().int().gt(0).nullable().optional(),
+  rollLength: z.number().finite().gt(0).nullable().optional(),
+  pieceLength: z.number().finite().gt(0).nullable().optional(),
+
+  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).default('ROLL'),
+  subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
+  hasPaperCore: z.boolean().default(false),
+  isHalfFolded: z.boolean().default(false),
+  piecesPerCarton: z.number().finite().int().positive().nullable().optional(),
+  piecesPerBale: z.number().finite().int().positive().nullable().optional(),
+  boxDimensions: z.string().max(100).nullable().optional().transform((v) => v?.trim() ?? null),
+  onPallet: z.boolean().default(false),
+  secondaryPackingType: z.enum(['NONE', 'WOOD_PALLET', 'IRON_PALLET', 'PLASTIC_PALLET']).default('NONE'),
+  palletDimensions: z.string().max(100).nullable().optional().transform((v) => v?.trim() ?? null),
+  itemsPerPallet: z.number().finite().int().positive().nullable().optional(),
+  packingNote: z.string().max(200).nullable().optional().transform((v) => v?.trim() ?? null),
+
+  // V4.1 (mục 5): giữ lại qua state-parse của đơn nháp — lý do như importedOrderRowSchema.
+  outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).nullable().optional(),
+  isLaminated: z.boolean().optional(),
+  rawFabricGsm: z.number().finite().int().positive().nullable().optional(),
+  coatingGsm: z.number().finite().int().positive().nullable().optional(),
+  finishedGsm: z.number().finite().int().positive().nullable().optional(),
+  toleranceQtyPct: z.number().finite().positive().nullable().optional(),
+  toleranceSpecPct: z.number().finite().positive().nullable().optional(),
+
+  uvPct: z.number().finite().min(0).max(100).nullable().optional(),
+  frFlag: z.boolean().default(false),
+  frPct: z.number().finite().min(0).max(100).nullable().optional(),
+  description: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
+  remark: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
+  mbCode: z.string().max(50).transform((v) => v.trim()).nullable().optional(),
+  itemCode: z.string().max(100).transform((v) => {
+      const t = v.trim()
+      return t === '' ? null : t
+    }).nullable().optional(),
+  meshType: z.string().max(100).transform((v) => v.trim()).nullable().optional(),
+  needleCount: z.number().finite().int().positive().nullable().optional(),
+  beamCount: z.number().finite().int().positive().nullable().optional(),
+  lineNote: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
+  requiresPacking: z.boolean().default(false),
+  deliveryDate: isoDateSchema('Ngày giao không hợp lệ (YYYY-MM-DD)').nullable().optional(),
+  containerSize: z.string().max(50).transform((v) => v.trim()).nullable().optional(),
+  hasEyelet: z.boolean().default(false),
+  eyeletColor: z.string().max(50).transform((v) => v.trim()).nullable().optional(),
+  eyeletLines: z.number().finite().int().positive().nullable().optional(),
+  eyeletSpec: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
+}).superRefine((data, ctx) => {
+  if (data.frFlag && (data.frPct == null || data.frPct <= 0)) {
+    ctx.addIssue({ code: 'custom', path: ['frPct'], message: 'FR% phải > 0 khi chọn chống cháy (FR)' })
+  }
+  const totalMeters = data.orderType === 'rolls'
+    ? data.qty != null && data.rollLength != null ? data.qty * data.rollLength : null
+    : data.orderType === 'pieces'
+      ? data.qty != null && data.pieceLength != null ? data.qty * data.pieceLength : null
+      : data.lengthM
+  if (totalMeters != null && totalMeters > 100_000) {
+    ctx.addIssue({ code: 'custom', path: ['lengthM'], message: 'Tổng mét không được vượt quá 100.000' })
+  }
+})
+
 // ── Multi-line order schema ────────────────────────────────────────────────────
 // Used by /api/orders/multi-line POST and the MultiLineOrderForm component.
 // Shared fields apply to ALL sub-lines; per-line fields are in the `lines` array.
 
+// (desertSandVersionOk and desertSandVersionIssue moved above importedOrderRowSchema)
+
 export const lineSchema = z
   .object({
     color:       z.string().min(1, 'Màu là bắt buộc').max(50).transform((v) => v.trim().toUpperCase()),
-    widthM:      z.number().gt(0, 'Khổ phải lớn hơn 0').max(20),
-    gsm:         z.number().int().gt(0, 'GSM phải lớn hơn 0').max(500),
-    productionGsm: z.number().int().gt(0, 'GSM sản xuất phải lớn hơn 0').max(500).nullable().optional(),
+    colorVersion: z.string().max(50).nullable().optional(),
+    colorRecipeSnapshot: z.string().nullable().optional(),
+    widthM:      z.number().finite().gt(0, 'Khổ phải lớn hơn 0').max(20),
+    gsm:         z.number().finite().int().gt(0, 'GSM phải lớn hơn 0').max(500),
+    productionGsm: z.number().finite().int().gt(0, 'GSM sản xuất phải lớn hơn 0').max(500).nullable().optional(),
     orderType:   z.enum(['meters', 'rolls', 'pieces']).default('meters'),
-    lengthM:     z.number().gt(0).max(100_000).nullable().optional(),
-    qty:         z.number().int().gt(0).nullable().optional(),
-    rollLength:  z.number().gt(0).nullable().optional(),
-    pieceLength: z.number().gt(0).nullable().optional(),
-    uvPct:       z.number().min(0).max(100).nullable().optional(),
+    lengthM:     z.number().finite().gt(0).max(100_000).nullable().optional(),
+    qty:         z.number().finite().int().gt(0).nullable().optional(),
+    rollLength:  z.number().finite().gt(0).nullable().optional(),
+    pieceLength: z.number().finite().gt(0).nullable().optional(),
+
+    primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).default('ROLL'),
+    subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
+    // Lõi giấy chỉ áp dụng cho ROLL. BALE/CARTON = false.
+    hasPaperCore: z.boolean().default(false),
+    isHalfFolded: z.boolean().default(false),
+    outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).default('POLYBAG').nullable().optional(),
+    piecesPerCarton: z.number().finite().int().positive().nullable().optional(),
+    piecesPerBale: z.number().finite().int().positive().nullable().optional(),
+    boxDimensions: z.string().max(100).nullable().optional(),
+    onPallet:    z.boolean().default(false),
+    secondaryPackingType: z.enum(['NONE', 'WOOD_PALLET', 'IRON_PALLET', 'PLASTIC_PALLET']).default('NONE'),
+    palletDimensions: z.string().max(100).nullable().optional(),
+    itemsPerPallet: z.number().finite().int().positive().nullable().optional(),
+    packingNote: z.string().max(200).nullable().optional(),
+
+    // Dual-GSM & Tolerance
+    isLaminated: z.boolean().default(false),
+    rawFabricGsm: z.number().finite().int().positive().nullable().optional(),
+    coatingGsm: z.number().finite().int().positive().nullable().optional(),
+    finishedGsm: z.number().finite().int().positive().nullable().optional(),
+    toleranceQtyPct: z.number().finite().positive().default(10.0).nullable().optional(),
+    toleranceSpecPct: z.number().finite().positive().default(5.0).nullable().optional(),
+
+    uvPct:       z.number().finite().min(0).max(100).nullable().optional(),
     frFlag:      z.boolean().default(false),
-    frPct:       z.number().min(0, 'FR% phải từ 0 đến 100').max(100, 'FR% phải từ 0 đến 100').nullable().optional(),
+    frPct:       z.number().finite().min(0, 'FR% phải từ 0 đến 100').max(100, 'FR% phải từ 0 đến 100').nullable().optional(),
     requiresPacking: z.boolean().default(false),
     lineNote:    z.string().max(200).transform(v => v.trim()).nullable().optional(),
     hasEyelet:   z.boolean().default(false),
     eyeletColor: z.string().max(50).nullable().optional(),
     mbCode:      z.string().max(50).transform((v) => v.trim()).nullable().optional(),
+    itemCode:    z.string().max(100).transform((v) => {
+      const t = v.trim()
+      return t === '' ? null : t
+    }).nullable().optional(),
     meshType:    z.string().max(100).transform((v) => v.trim()).nullable().optional(),
-    needleCount: z.number().int().positive().nullable().optional(),
-    beamCount:   z.number().int().positive().nullable().optional(),
-    eyeletLines: z.number().int().positive().nullable().optional(),
+    needleCount: z.number().finite().int().positive().nullable().optional(),
+    beamCount:   z.number().finite().int().positive().nullable().optional(),
+    eyeletLines: z.number().finite().int().positive().nullable().optional(),
     eyeletSpec:  z.string().max(200).nullable().optional(),
   })
   .refine(
@@ -358,18 +859,77 @@ export const lineSchema = z
       path: ['lengthM'],
     }
   )
+  .refine(
+    (data) => {
+      const totalMeters = data.orderType === 'rolls'
+        ? data.qty != null && data.rollLength != null ? data.qty * data.rollLength : null
+        : data.orderType === 'pieces'
+          ? data.qty != null && data.pieceLength != null ? data.qty * data.pieceLength : null
+          : data.lengthM
+      return totalMeters == null || totalMeters <= 100_000
+    },
+    { message: 'Tổng mét không được vượt quá 100.000', path: ['lengthM'] },
+  )
+  .refine(
+    (data) => {
+      if (data.primaryPackingType === 'CARTON') {
+        return data.piecesPerCarton != null && data.piecesPerCarton > 0
+      }
+      return true
+    },
+    { message: 'Thiếu số tấm/thùng khi chọn đóng thùng Carton (piecesPerCarton > 0)', path: ['piecesPerCarton'] }
+  )
+  .refine(
+    (data) => {
+      if (data.primaryPackingType === 'BALE') {
+        return data.piecesPerBale != null && data.piecesPerBale > 0
+      }
+      return true
+    },
+    { message: 'Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)', path: ['piecesPerBale'] }
+  )
+  .refine(
+    (data) => {
+      if (data.primaryPackingType === 'HEMMED') {
+        return data.subPackingType === 'CARTON' || data.subPackingType === 'BALE'
+      }
+      return true
+    },
+    { message: 'Thiếu quy cách đóng gói con (Thùng Carton hoặc Kiện nén BALE) khi chọn May viền, đóng khuy (HEMMED)', path: ['subPackingType'] }
+  )
+  .refine(
+    (data) => {
+      if (data.onPallet) {
+        return data.secondaryPackingType != null && data.secondaryPackingType !== 'NONE'
+      }
+      return true
+    },
+    { message: 'Chưa chọn loại Pallet (Gỗ/Nhựa/Sắt) khi đóng trên Pallet', path: ['secondaryPackingType'] }
+  )
+  .refine(
+    (data) => {
+      if (data.isLaminated) {
+        return data.rawFabricGsm != null && data.rawFabricGsm > 0 && data.finishedGsm != null && data.finishedGsm > 0
+      }
+      return true
+    },
+    { message: 'Hàng tráng màng ngoài bắt buộc có GSM dệt mộc và GSM thành phẩm', path: ['rawFabricGsm'] }
+  )
+  .refine(desertSandVersionOk, desertSandVersionIssue)
 
 export const multiLineOrderSchema = z.object({
   // Shared fields — apply to all sub-lines
   piNumber:    z.string().min(1, 'PI Number là bắt buộc').max(50).transform((v) => v.trim()),
   customer:    z.string().min(1, 'Khách hàng là bắt buộc').max(100).transform((v) => v.trim()),
   customerId:  z.string().nullable().optional(),
-  orderDate:   z.string().min(1, 'Ngày đặt hàng là bắt buộc').regex(/^\d{4}-\d{2}-\d{2}$/),
-  deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  orderDate:   isoDateSchema('Ngày đặt hàng phải là ngày hợp lệ (YYYY-MM-DD)'),
+  deliveryDate: isoDateSchema('Ngày giao phải là ngày hợp lệ (YYYY-MM-DD)').nullable().optional(),
   containerSize: z.string().max(50).transform(v => v.trim()).nullable().optional(),
   description: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   remark:      z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   isDraft:     z.boolean().optional(),
+  lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).optional(),
+  isPlaceholder: z.boolean().optional(),
   lines:       z.array(lineSchema).min(1, 'Cần ít nhất 1 dòng'),
 })
 
@@ -380,30 +940,96 @@ export type MultiLineOrderOutput = z.output<typeof multiLineOrderSchema>
 // Used when isDraft === true. Requires ONLY piNumber and customer.
 // All spec fields on lines are optional/nullable.
 
-const draftLineSchema = z.object({
+export const draftLineSchema = z.object({
   color:       z.string().max(50).transform((v) => v.trim().toUpperCase()).nullable().optional(),
-  widthM:      z.number().gt(0).max(20).nullable().optional(),
-  gsm:         z.number().int().gt(0).max(500).nullable().optional(),
-  productionGsm: z.number().int().gt(0).max(500).nullable().optional(),
+  colorVersion: z.string().max(50).nullable().optional(),
+  colorRecipeSnapshot: z.string().nullable().optional(),
+  widthM:      z.number().finite().gt(0).max(20).nullable().optional(),
+  gsm:         z.number().finite().int().gt(0).max(500).nullable().optional(),
+  productionGsm: z.number().finite().int().gt(0).max(500).nullable().optional(),
   orderType:   z.enum(['meters', 'rolls', 'pieces']).default('rolls'),
-  lengthM:     z.number().gt(0).max(100_000).nullable().optional(),
-  qty:         z.number().int().gt(0).nullable().optional(),
-  rollLength:  z.number().gt(0).nullable().optional(),
-  pieceLength: z.number().gt(0).nullable().optional(),
-  uvPct:       z.number().min(0).max(100).nullable().optional(),
+  lengthM:     z.number().finite().gt(0).max(100_000).nullable().optional(),
+  qty:         z.number().finite().int().gt(0).nullable().optional(),
+  rollLength:  z.number().finite().gt(0).nullable().optional(),
+  pieceLength: z.number().finite().gt(0).nullable().optional(),
+
+  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).default('ROLL'),
+  subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
+  hasPaperCore: z.boolean().default(false),
+  isHalfFolded: z.boolean().default(false),
+  outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).default('POLYBAG').nullable().optional(),
+  piecesPerCarton: z.number().finite().int().positive().nullable().optional(),
+  piecesPerBale: z.number().finite().int().positive().nullable().optional(),
+  boxDimensions: z.string().max(100).nullable().optional(),
+  onPallet:    z.boolean().default(false),
+  secondaryPackingType: z.enum(['NONE', 'WOOD_PALLET', 'IRON_PALLET', 'PLASTIC_PALLET']).default('NONE'),
+  palletDimensions: z.string().max(100).nullable().optional(),
+  itemsPerPallet: z.number().finite().int().positive().nullable().optional(),
+  packingNote: z.string().max(200).nullable().optional(),
+
+  // Dual-GSM & Tolerance
+  isLaminated: z.boolean().default(false),
+  rawFabricGsm: z.number().finite().int().positive().nullable().optional(),
+  coatingGsm: z.number().finite().int().positive().nullable().optional(),
+  finishedGsm: z.number().finite().int().positive().nullable().optional(),
+  toleranceQtyPct: z.number().finite().positive().default(10.0).nullable().optional(),
+  toleranceSpecPct: z.number().finite().positive().default(5.0).nullable().optional(),
+
+  uvPct:       z.number().finite().min(0).max(100).nullable().optional(),
   frFlag:      z.boolean().default(false),
-  frPct:       z.number().min(0).max(100).nullable().optional(),
+  frPct:       z.number().finite().min(0).max(100).nullable().optional(),
   requiresPacking: z.boolean().default(false),
   lineNote:    z.string().max(200).transform(v => v.trim()).nullable().optional(),
   hasEyelet:   z.boolean().default(false),
   eyeletColor: z.string().max(50).nullable().optional(),
   mbCode:      z.string().max(50).transform((v) => v.trim()).nullable().optional(),
+  itemCode:    z.string().max(100).transform((v) => {
+      const t = v.trim()
+      return t === '' ? null : t
+    }).nullable().optional(),
   meshType:    z.string().max(100).transform((v) => v.trim()).nullable().optional(),
-  needleCount: z.number().int().positive().nullable().optional(),
-  beamCount:   z.number().int().positive().nullable().optional(),
-  eyeletLines: z.number().int().positive().nullable().optional(),
+  needleCount: z.number().finite().int().positive().nullable().optional(),
+  beamCount:   z.number().finite().int().positive().nullable().optional(),
+  eyeletLines: z.number().finite().int().positive().nullable().optional(),
   eyeletSpec:  z.string().max(200).nullable().optional(),
 })
+  .refine(
+    (data) => {
+      if (data.primaryPackingType === 'CARTON') {
+        return data.piecesPerCarton != null && data.piecesPerCarton > 0
+      }
+      return true
+    },
+    { message: 'Thiếu số tấm/thùng khi chọn đóng thùng Carton (piecesPerCarton > 0)', path: ['piecesPerCarton'] }
+  )
+  .refine(
+    (data) => {
+      if (data.primaryPackingType === 'BALE') {
+        return data.piecesPerBale != null && data.piecesPerBale > 0
+      }
+      return true
+    },
+    { message: 'Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)', path: ['piecesPerBale'] }
+  )
+  .refine(
+    (data) => {
+      if (data.onPallet) {
+        return data.secondaryPackingType != null && data.secondaryPackingType !== 'NONE'
+      }
+      return true
+    },
+    { message: 'Chưa chọn loại Pallet (Gỗ/Nhựa/Sắt) khi đóng trên Pallet', path: ['secondaryPackingType'] }
+  )
+  .refine(
+    (data) => {
+      if (data.isLaminated) {
+        return data.rawFabricGsm != null && data.rawFabricGsm > 0 && data.finishedGsm != null && data.finishedGsm > 0
+      }
+      return true
+    },
+    { message: 'Hàng tráng màng ngoài bắt buộc có GSM dệt mộc và GSM thành phẩm', path: ['rawFabricGsm'] }
+  )
+  .refine(desertSandVersionOk, desertSandVersionIssue)
 
 export const draftMultiLineOrderSchema = z.object({
   piNumber:    z.string().min(1, 'PI Number là bắt buộc').max(50).transform((v) => v.trim()),
@@ -415,5 +1041,84 @@ export const draftMultiLineOrderSchema = z.object({
   description: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   remark:      z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   isDraft:     z.boolean().default(true),
+  lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).default('DRAFT'),
+  isPlaceholder: z.boolean().default(false),
   lines:       z.array(draftLineSchema).min(1, 'Cần ít nhất 1 dòng'),
 })
+
+/**
+ * Sanitizes a sub-line object before passing to Zod lineSchema / draftLineSchema.
+ * Automatically converts empty strings '' for numeric fields into undefined,
+ * preventing Zod type errors ("Expected number, received string") on optional fields.
+ */
+export function cleanSubLineForValidation(raw: any): any {
+  if (!raw || typeof raw !== 'object') return raw
+
+  const numOrUndef = (v: any) => {
+    if (v === '' || v === null || v === undefined) return undefined
+    if (typeof v === 'string') {
+      const cleaned = v.replace('%', '').trim()
+      if (cleaned === '') return undefined
+      const n = Number(cleaned)
+      return isNaN(n) ? v : n
+    }
+    const n = Number(v)
+    return isNaN(n) ? v : n
+  }
+
+  const strOrUndef = (v: any) => {
+    if (typeof v === 'string') {
+      const trimmed = v.trim()
+      return trimmed === '' ? undefined : trimmed
+    }
+    return v ?? undefined
+  }
+
+  return {
+    ...raw,
+    // Required / Key numbers
+    widthM: numOrUndef(raw.widthM),
+    gsm: numOrUndef(raw.gsm),
+    productionGsm: numOrUndef(raw.productionGsm),
+    lengthM: numOrUndef(raw.lengthM),
+    qty: numOrUndef(raw.qty),
+    rollLength: numOrUndef(raw.rollLength),
+    pieceLength: numOrUndef(raw.pieceLength),
+
+    // Packing numbers
+    piecesPerCarton: numOrUndef(raw.piecesPerCarton),
+    piecesPerBale: numOrUndef(raw.piecesPerBale),
+    itemsPerPallet: numOrUndef(raw.itemsPerPallet),
+
+    // Dual-GSM & Tolerance
+    rawFabricGsm: numOrUndef(raw.rawFabricGsm),
+    coatingGsm: numOrUndef(raw.coatingGsm),
+    finishedGsm: numOrUndef(raw.finishedGsm),
+    toleranceQtyPct: numOrUndef(raw.toleranceQtyPct),
+    toleranceSpecPct: numOrUndef(raw.toleranceSpecPct),
+
+    // Technical numbers
+    uvPct: numOrUndef(raw.uvPct),
+    frPct: numOrUndef(raw.frPct),
+    needleCount: numOrUndef(raw.needleCount),
+    beamCount: numOrUndef(raw.beamCount),
+    eyeletLines: numOrUndef(raw.eyeletLines),
+
+    // Strings
+    color: typeof raw.color === 'string' ? raw.color.trim() : raw.color,
+    colorVersion: strOrUndef(raw.colorVersion),
+    primaryPackingType: strOrUndef(raw.primaryPackingType),
+    subPackingType: strOrUndef(raw.subPackingType),
+    boxDimensions: strOrUndef(raw.boxDimensions),
+    palletDimensions: strOrUndef(raw.palletDimensions),
+    packingNote: strOrUndef(raw.packingNote),
+    lineNote: strOrUndef(raw.lineNote),
+    meshType: strOrUndef(raw.meshType),
+    mbCode: strOrUndef(raw.mbCode),
+    eyeletColor: strOrUndef(raw.eyeletColor),
+    eyeletSpec: strOrUndef(raw.eyeletSpec),
+    outerWrapping: raw.outerWrapping || undefined,
+    secondaryPackingType: raw.secondaryPackingType || undefined,
+  }
+}
+

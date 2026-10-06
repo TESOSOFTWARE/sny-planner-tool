@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { createOrderSchema } from '@/lib/validations/order'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
+import { resolveLifecycle, cleanSubLineForValidation, clearHemmedFields } from '@/lib/validations/order'
 
 export async function POST(req: NextRequest) {
   // ── 1. Parse body ──────────────────────────────────────────────────────────
@@ -19,7 +20,8 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 2. Server-side Zod validation ──────────────────────────────────────────
-  const parsed = createOrderSchema.safeParse(body)
+  const sanitizedBody = body && typeof body === 'object' ? cleanSubLineForValidation(body) : body
+  const parsed = createOrderSchema.safeParse(sanitizedBody)
   if (!parsed.success) {
     const messages = parsed.error.issues
       .map((e) => `${String(e.path.join('.'))}: ${e.message}`)
@@ -31,6 +33,12 @@ export async function POST(req: NextRequest) {
   }
 
   const data = parsed.data
+
+  // P0-3: ghi lifecycleStatus + isPlaceholder thay vì để DB default('APPROVED') thắng
+  const lifecycle = resolveLifecycle({
+    lifecycleStatus: data.lifecycleStatus,
+    isPlaceholder: data.isPlaceholder,
+  })
 
   // ── 3. Calculate weight (Case A formula) ──────────────────────────────────
   const { qtySqm, totalWeightKgs, requiredYarnKg } = calculateOrderWeight({
@@ -47,7 +55,7 @@ export async function POST(req: NextRequest) {
   // ── 4. Save to DB ──────────────────────────────────────────────────────────
   try {
     const order = await prisma.productionOrder.create({
-      data: {
+      data: clearHemmedFields({
         piNumber: data.piNumber,
         subLineIndex: data.subLineIndex,
         customer: data.customer,
@@ -63,10 +71,13 @@ export async function POST(req: NextRequest) {
         ...(data.qty != null && { qty: data.qty }),
         ...(data.uvPct != null && { uvPct: data.uvPct }),
         frFlag: data.frFlag ?? false,
+        ...(data.frPct != null && { frPct: data.frPct }),
         ...(data.description && { description: data.description }),
         ...(data.remark && { remark: data.remark }),
         ...(data.lineNote != null && { lineNote: data.lineNote }),
         requiresPacking: data.requiresPacking ?? false,
+        lifecycleStatus: lifecycle.lifecycleStatus,
+        isPlaceholder: lifecycle.isPlaceholder,
         ...(data.deliveryDate && { deliveryDate: new Date(data.deliveryDate) }),
         ...(data.containerSize != null && { containerSize: data.containerSize }),
         // Technical specs
@@ -75,6 +86,8 @@ export async function POST(req: NextRequest) {
         ...(data.beamCount  != null && { beamCount:   data.beamCount }),
         // Mã Masterbatch màu
         ...(data.mbCode != null && { mbCode: data.mbCode }),
+        // Item Code tự do theo dòng
+        ...(data.itemCode != null && { itemCode: data.itemCode }),
         // Kiểu đơn hàng
         orderType: data.orderType ?? 'meters',
         ...(data.rollLength  != null && { rollLength:  data.rollLength }),
@@ -84,11 +97,31 @@ export async function POST(req: NextRequest) {
         ...(data.eyeletColor != null && { eyeletColor: data.eyeletColor }),
         ...(data.eyeletLines != null && { eyeletLines: data.eyeletLines }),
         ...(data.eyeletSpec != null && { eyeletSpec: data.eyeletSpec }),
+        // V4 Packaging & Dual-GSM
+        primaryPackingType: data.primaryPackingType ?? 'ROLL',
+        subPackingType: data.subPackingType ?? null,
+        hasPaperCore: data.hasPaperCore ?? false,
+        isHalfFolded: Boolean(data.isHalfFolded),
+        outerWrapping: data.outerWrapping ?? 'POLYBAG',
+        piecesPerCarton: data.piecesPerCarton ?? null,
+        piecesPerBale: data.piecesPerBale ?? null,
+        boxDimensions: data.boxDimensions ?? null,
+        secondaryPackingType: data.secondaryPackingType ?? 'NONE',
+        palletDimensions: data.palletDimensions ?? null,
+        itemsPerPallet: data.itemsPerPallet ?? null,
+        packingNote: data.packingNote ?? null,
+        isLaminated: Boolean(data.isLaminated),
+        rawFabricGsm: data.rawFabricGsm ?? null,
+        coatingGsm: data.coatingGsm ?? null,
+        finishedGsm: data.finishedGsm ?? null,
+        colorVersion: data.colorVersion ?? null,
+        toleranceQtyPct: data.toleranceQtyPct ?? 10.0,
+        toleranceSpecPct: data.toleranceSpecPct ?? 5.0,
         // Calculated weight
         qtySqm,
         totalWeightKgs,
         requiredYarnKg,
-      },
+      }),
     })
 
     return NextResponse.json({ success: true, order }, { status: 201 })

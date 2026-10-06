@@ -20,6 +20,8 @@ export async function getUnassignedOrders() {
       subLineIndex: true,
       customer: true,
       isDraft: true,
+      lifecycleStatus: true,
+      isPlaceholder: true,
       widthM: true,
       gsm: true,
       color: true,

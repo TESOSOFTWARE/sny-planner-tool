@@ -2,6 +2,8 @@
 // Utility for parsing tab-separated text pasted from Excel.
 
 import type { ParsedOrder } from '@/types'
+import { isValidISODate } from '@/lib/validations/order'
+import { normalizeUvPct } from '@/lib/excel/parseOrderList'
 
 /**
  * Robust date parser supporting YYYY-MM-DD, DD/MM/YYYY, and MM/DD/YYYY formats.
@@ -13,10 +15,7 @@ export function parseOrderDate(rawDate: string): string | null {
 
   // 1. YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) {
-    const d = new Date(cleaned)
-    if (!isNaN(d.getTime())) {
-      return cleaned
-    }
+    return isValidISODate(cleaned) ? cleaned : null
   }
 
   // 2. Match DD/MM/YYYY or M/D/YYYY or MM/DD/YYYY
@@ -100,7 +99,7 @@ export function parsePastedText(text: string): ParsedOrder[] {
 
     // Parse Sub-line index (index 2) - required, default to row sequence
     const rawSubLine = cols[2]?.trim()
-    const parsedSub = rawSubLine ? parseInt(rawSubLine, 10) : NaN
+    const parsedSub = rawSubLine ? Number(rawSubLine) : NaN
     const validSubLine = (!isNaN(parsedSub) && parsedSub > 0) ? parsedSub : count
 
     // Parse Customer (index 3) - required
@@ -126,21 +125,7 @@ export function parsePastedText(text: string): ParsedOrder[] {
     }
 
     // Parse UV % (index 7) - optional
-    let uvPct: number | null = null
-    const rawUv = cols[7]?.trim()
-    if (rawUv) {
-      if (rawUv.endsWith('%')) {
-        const val = parseFloat(rawUv.replace('%', ''))
-        if (!isNaN(val)) {
-          uvPct = val / 100
-        }
-      } else {
-        const val = parseFloat(rawUv)
-        if (!isNaN(val)) {
-          uvPct = val > 1 ? val / 100 : val
-        }
-      }
-    }
+    const uvPct = normalizeUvPct(cols[7])
 
     // Parse FR (index 8) - optional
     let frFlag = false
@@ -155,19 +140,19 @@ export function parsePastedText(text: string): ParsedOrder[] {
     // Parse GSM (index 9) - required
     const rawGsm = cols[9]?.trim()
     if (!rawGsm) continue
-    const gsm = parseInt(rawGsm, 10)
+    const gsm = Number(rawGsm)
     if (isNaN(gsm) || gsm <= 0) continue
 
     // Parse Width (index 10) - required
     const rawWidth = cols[10]?.trim()
     if (!rawWidth) continue
-    const widthM = parseFloat(rawWidth)
+    const widthM = Number(rawWidth)
     if (isNaN(widthM) || widthM <= 0) continue
 
     // Parse Length (index 11) - required
     const rawLength = cols[11]?.trim()
     if (!rawLength) continue
-    const lengthM = parseFloat(rawLength)
+    const lengthM = Number(rawLength)
     if (isNaN(lengthM) || lengthM <= 0) continue
 
     // Parse Color (index 12) - required
@@ -179,7 +164,7 @@ export function parsePastedText(text: string): ParsedOrder[] {
     let qty: number | null = null
     const rawQty = cols[14]?.trim()
     if (rawQty) {
-      const parsedQty = parseInt(rawQty, 10)
+      const parsedQty = Number(rawQty)
       if (!isNaN(parsedQty)) {
         qty = parsedQty
       }
@@ -241,7 +226,7 @@ export function parsePastedTextExtended(text: string): ParsedRowResult[] {
     }
 
     const rawSubLine = cols[2]?.trim()
-    const subLineIndex = rawSubLine ? parseInt(rawSubLine, 10) : 1
+    const subLineIndex = rawSubLine ? Number(rawSubLine) : 1
     const validSubLine = isNaN(subLineIndex) ? 1 : subLineIndex
 
     const customer = cols[3]?.trim()
@@ -288,21 +273,7 @@ export function parsePastedTextExtended(text: string): ParsedRowResult[] {
       description = col6
     }
 
-    let uvPct: number | null = null
-    const rawUv = cols[7]?.trim()
-    if (rawUv) {
-      if (rawUv.endsWith('%')) {
-        const val = parseFloat(rawUv.replace('%', ''))
-        if (!isNaN(val)) {
-          uvPct = val / 100
-        }
-      } else {
-        const val = parseFloat(rawUv)
-        if (!isNaN(val)) {
-          uvPct = val > 1 ? val / 100 : val
-        }
-      }
-    }
+    const uvPct = normalizeUvPct(cols[7])
 
     let frFlag = false
     const rawFr = cols[8]?.trim()
@@ -323,7 +294,7 @@ export function parsePastedTextExtended(text: string): ParsedRowResult[] {
       })
       continue
     }
-    const gsm = parseInt(rawGsm, 10)
+    const gsm = Number(rawGsm)
     if (isNaN(gsm) || gsm <= 0) {
       results.push({
         order: null,
@@ -344,7 +315,7 @@ export function parsePastedTextExtended(text: string): ParsedRowResult[] {
       })
       continue
     }
-    const widthM = parseFloat(rawWidth)
+    const widthM = Number(rawWidth)
     if (isNaN(widthM) || widthM <= 0) {
       results.push({
         order: null,
@@ -365,7 +336,7 @@ export function parsePastedTextExtended(text: string): ParsedRowResult[] {
       })
       continue
     }
-    const lengthM = parseFloat(rawLength)
+    const lengthM = Number(rawLength)
     if (isNaN(lengthM) || lengthM <= 0) {
       results.push({
         order: null,
@@ -391,7 +362,7 @@ export function parsePastedTextExtended(text: string): ParsedRowResult[] {
     let qty: number | null = null
     const rawQty = cols[14]?.trim()
     if (rawQty) {
-      const parsedQty = parseInt(rawQty, 10)
+      const parsedQty = Number(rawQty)
       if (!isNaN(parsedQty)) {
         qty = parsedQty
       }

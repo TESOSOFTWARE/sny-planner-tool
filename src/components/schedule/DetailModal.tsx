@@ -281,7 +281,7 @@ export default function DetailModal({ isOpen, onClose, assignment, onSuccess }: 
                 </div>
                 <div>
                   <dt className="text-label-sm font-inter text-secondary">Chiều dài (Length)</dt>
-                  <dd className="text-body-md font-mono text-on-surface">{Number(assignment.order.lengthM).toLocaleString()} m</dd>
+                  <dd className="text-body-md font-mono text-on-surface" suppressHydrationWarning>{Number(assignment.order.lengthM).toLocaleString('vi-VN')} m</dd>
                 </div>
                 <div>
                   <dt className="text-label-sm font-inter text-secondary">GSM</dt>
@@ -300,7 +300,7 @@ export default function DetailModal({ isOpen, onClose, assignment, onSuccess }: 
                 {assignment.order.qty != null && (
                   <div>
                     <dt className="text-label-sm font-inter text-secondary">Số lượng</dt>
-                    <dd className="text-body-md font-mono text-on-surface">{assignment.order.qty.toLocaleString()} cuộn</dd>
+                    <dd className="text-body-md font-mono text-on-surface" suppressHydrationWarning>{assignment.order.qty.toLocaleString('vi-VN')} cuộn</dd>
                   </div>
                 )}
                 {assignment.order.meshType && (
@@ -332,8 +332,8 @@ export default function DetailModal({ isOpen, onClose, assignment, onSuccess }: 
                 {assignment.allocatedMeters && (
                   <div className="col-span-2">
                     <dt className="text-label-sm font-inter text-secondary">Số mét phân công</dt>
-                    <dd className="text-body-md font-mono text-on-surface">
-                      {Number(assignment.allocatedMeters).toLocaleString()} m
+                    <dd className="text-body-md font-mono text-on-surface" suppressHydrationWarning>
+                      {Number(assignment.allocatedMeters).toLocaleString('vi-VN')} m
                     </dd>
                   </div>
                 )}
