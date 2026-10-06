@@ -708,7 +708,9 @@ function comparisonValues(row: ParsedOrder | ProductionOrder): Record<ImportComp
     rollLength: normalizedNumber(row.rollLength),
     pieceLength: normalizedNumber(row.pieceLength),
     primaryPackingType: normalizedText((row as any).primaryPackingType, true) ?? 'ROLL',
-    hasPaperCore: (row as any).hasPaperCore !== false,
+    // Match import persistence: only explicit true means a paper core.
+    // The Excel parser has already resolved its own packing defaults.
+    hasPaperCore: row.hasPaperCore === true,
     isHalfFolded: (row as any).isHalfFolded === true,
     piecesPerCarton: normalizedNumber((row as any).piecesPerCarton),
     piecesPerBale: normalizedNumber((row as any).piecesPerBale),
