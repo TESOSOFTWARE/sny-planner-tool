@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import * as XLSX from 'xlsx'
-import { parseOrderList, classifyOrderImport, normalizeUvPct } from './parseOrderList'
+import { parseOrderList, classifyOrderImport, normalizeUvPct, deduplicateValidationErrors } from './parseOrderList'
 import type { ProductionOrder } from '@/types'
 
 function makeOrderListWorkbook(headers: string[], rows: unknown[][]): Buffer {
@@ -269,3 +269,132 @@ test('UV% Excel import round-trip: raw cells parsed into 0-100 percentage scale'
   assert.equal(parsed[3].uvPct, null, 'null cell should remain null')
 })
 
+
+test('FR percentage-only template infers the flag and preserves percentage validation', () => {
+  const headers = ['PI NUMBER', 'CUSTOMER', 'NO', 'DATE', 'GSM', 'WIDTH', 'LENGTH', 'COLOR', 'ORDER TYPE', 'FR %']
+  for (const [pct, flag, valid] of [[6.5, true, true], [100, true, true], [0, false, true], [null, false, true], [-1, false, false], [101, true, false]] as const) {
+    const [row] = parseOrderList(makeOrderListWorkbook(headers, [
+      ['PI-FR', 'CUSTOMER-A', 1, '2026-09-29', 100, 4, 1000, 'BLACK', 'meters', pct],
+    ]))
+    assert.equal(row.frFlag, flag, `flag for ${pct}`)
+    assert.equal(row.frPct, pct, `percentage for ${pct}`)
+    assert.equal(row.isValid, valid, `validation for ${pct}: ${JSON.stringify(row.validationErrors)}`)
+  }
+})
+
+test('UNIT fallback (01/10): real SNY files use UNIT column, empty PACKING must not default to ROLL', () => {
+  const headers = ['PI NUMBER', 'CUSTOMER', 'NO', 'DATE', 'GSM', 'WIDTH', 'LENGTH', 'COLOR', 'ORDER TYPE', 'PACKING TYPE', 'UNIT']
+  const cases: Array<[string | null, string | null, string, string, string]> = [
+    // [packing cell, unit cell, expected orderType, expected packing, note]
+    [null, 'ROLL', 'rolls', 'ROLL', 'cuon'],
+    [null, 'PCS', 'pieces', 'CARTON', 'tam'],
+    [null, 'PANEL', 'pieces', 'CARTON', 'tam lon'],
+    [null, 'PACK/BOX', 'pieces', 'CARTON', 'thung'],
+    [null, 'BOX', 'pieces', 'CARTON', 'thung'],
+    [null, 'BALES', 'meters', 'BALE', 'kien so nhieu'],
+    [null, 'BIG BAG BALE', 'meters', 'BALE', 'kien bao'],
+    [null, null, 'rolls', 'ROLL', 'khong thong tin giu default cu'],
+    // Explicit columns win over UNIT
+    ['BALE', 'PCS', 'meters', 'BALE', 'packing tuong minh thang'],
+  ]
+  for (const [packing, unit, expectedType, expectedPacking, note] of cases) {
+    const [row] = parseOrderList(makeOrderListWorkbook(headers, [
+      ['PI-UNIT', 'CUSTOMER-A', 1, '2026-09-29', 240, 2, 50, 'BLACK', null, packing, unit],
+    ]))
+    assert.equal(row.orderType, expectedType, `orderType for UNIT="${unit}" (${note})`)
+    assert.equal(row.primaryPackingType, expectedPacking, `packing for UNIT="${unit}" (${note})`)
+  }
+})
+
+test('H4 (01/10): PACKING TYPE keywords from real SNY data map to HEMMED', () => {
+  const headers = ['PI NUMBER', 'CUSTOMER', 'NO', 'DATE', 'GSM', 'WIDTH', 'LENGTH', 'COLOR', 'ORDER TYPE', 'PACKING TYPE']
+  const cases: Array<[string, string, string | null]> = [
+    // [packing cell, expected primaryPackingType, expected subPackingType]
+    ['HEMMED', 'HEMMED', 'CARTON'],
+    ['reinforced hemmed edges', 'HEMMED', 'CARTON'],
+    ['Debris net HDPE, reinforced hemmed edges, grommets', 'HEMMED', 'CARTON'],
+    ['WEBBING HEM', 'HEMMED', 'CARTON'],
+    ['Finished size after including webbing hem on 4 edges', 'HEMMED', 'CARTON'],
+    ['HEM', 'HEMMED', 'CARTON'],
+    ['May viền, đóng khuy', 'HEMMED', 'CARTON'],
+    // Precedence: HEMMED wins over CARTON/BALE mentioned in the same cell
+    ['HEMMED CARTON', 'HEMMED', 'CARTON'],
+    ['HEMMED - pack in BALE', 'HEMMED', 'BALE'],
+    // False-positive guards: substrings without word boundary must NOT match
+    ['CHEMICAL treatment', 'ROLL', null],
+    ['THEME pack', 'ROLL', null],
+    // Regression: normal packing flow intact
+    ['Thùng (CARTON)', 'CARTON', null],
+    ['Kiện (BALE)', 'BALE', null],
+    ['Theo cuộn (ROLL)', 'ROLL', null],
+  ]
+  for (const [packing, expectedPrimary, expectedSub] of cases) {
+    const [row] = parseOrderList(makeOrderListWorkbook(headers, [
+      ['PI-HEM', 'CUSTOMER-A', 1, '2026-09-29', 240, 2, 5000, 'DESERT SAND', 'meters', packing],
+    ]))
+    assert.equal(row.primaryPackingType, expectedPrimary, `primary for "${packing}"`)
+    assert.equal(row.subPackingType ?? null, expectedSub, `sub for "${packing}"`)
+  }
+})
+
+test('Legacy FR column remains authoritative when present', () => {
+  const headers = ['PI NUMBER', 'CUSTOMER', 'NO', 'DATE', 'GSM', 'WIDTH', 'LENGTH', 'COLOR', 'ORDER TYPE', 'FR', 'FR %']
+  for (const [flag, pct, expected, valid] of [['YES', 6.5, true, true], ['NO', 6.5, false, true], ['YES', null, true, false]] as const) {
+    const [row] = parseOrderList(makeOrderListWorkbook(headers, [
+      ['PI-FR', 'CUSTOMER-A', 1, '2026-09-29', 100, 4, 1000, 'BLACK', 'meters', flag, pct],
+    ]))
+    assert.equal(row.frFlag, expected)
+    assert.equal(row.isValid, valid)
+  }
+})
+
+test('Header TÌNH TRẠNG ĐƠN parses DRAFT, RESERVED, APPROVED correctly', () => {
+  const headers = ['PI NUMBER', 'CUSTOMER', 'NO', 'DATE', 'GSM', 'WIDTH', 'LENGTH', 'COLOR', 'ORDER TYPE', 'TÌNH TRẠNG ĐƠN *']
+  const cases: Array<[string, 'DRAFT' | 'RESERVED' | 'APPROVED', boolean]> = [
+    ['Đã chốt — sản xuất (APPROVED)', 'APPROVED', false],
+    ['Giữ chỗ máy — được xếp lịch (RESERVED)', 'RESERVED', true],
+    ['Đơn nháp — chưa xếp lịch được (DRAFT)', 'DRAFT', false],
+    ['GIỮ CHỖ', 'RESERVED', true],
+    ['NHÁP', 'DRAFT', false],
+    ['CHÍNH THỨC', 'APPROVED', false],
+  ]
+  for (const [val, expectedStatus, expectedPlaceholder] of cases) {
+    const [row] = parseOrderList(makeOrderListWorkbook(headers, [
+      ['PI-STATUS', 'CUSTOMER-A', 1, '2026-10-02', 150, 3, 500, 'BLUE', 'meters', val],
+    ]))
+    assert.equal(row.lifecycleStatus, expectedStatus, `lifecycleStatus for "${val}"`)
+    assert.equal(row.isPlaceholder, expectedPlaceholder, `isPlaceholder for "${val}"`)
+  }
+})
+
+test('DRAFT order is valid even when missing color, GSM, width, and length', () => {
+  const headers = ['PI NUMBER', 'CUSTOMER', 'NO', 'DATE', 'GSM', 'WIDTH', 'LENGTH', 'COLOR', 'ORDER TYPE', 'TÌNH TRẠNG ĐƠN *']
+  const [row] = parseOrderList(makeOrderListWorkbook(headers, [
+    ['DFT26-004', 'ALROBOOA', 1, '2026-10-05', null, null, null, null, 'meters', 'DRAFT'],
+  ]))
+
+  assert.equal(row.lifecycleStatus, 'DRAFT')
+  assert.equal(row.isValid, true, 'Draft order without technical specs must be valid')
+  assert.equal(row.validationErrors?.length ?? 0, 0)
+})
+
+test('deduplicateValidationErrors removes redundant manual and Zod messages for same fields', () => {
+  const rawErrors = [
+    'Thiếu Màu',
+    'Màu là bắt buộc',
+    'Thiếu GSM (>0)',
+    'GSM phải > 0',
+    'Thiếu Khổ m (>0)',
+    'Khổ m phải > 0',
+    'Thiếu PI Number',
+    'PI Number là bắt buộc',
+  ]
+  const deduplicated = deduplicateValidationErrors(rawErrors)
+  assert.equal(deduplicated.length, 4, 'Should reduce 8 duplicate messages to 4 clean field messages')
+  assert.deepEqual(deduplicated, [
+    'Thiếu Màu',
+    'Thiếu GSM (>0)',
+    'Thiếu Khổ m (>0)',
+    'Thiếu PI Number',
+  ])
+})
