@@ -41,3 +41,101 @@ export function getPiColorStyle(piNumber?: string | null): ColorStyle {
   const index = Math.abs(hash) % PI_COLOR_PALETTE.length
   return PI_COLOR_PALETTE[index]
 }
+
+export interface FactoryColorPreset {
+  name: string
+  color: string
+  version: string
+  mbCode?: string
+  subText: string
+  tags?: string[]
+}
+
+/**
+ * Danh mục Màu công thức xưởng tiêu chuẩn được đối chiếu từ:
+ * - Kế hoạch đặt Masterbatch (kế hoạch đặt MB 2025.xlsx)
+ * - Lịch sử đơn hàng xuất khẩu (ORDER LIST OFFICIAL 2023-2026.xlsx)
+ * - Work Instructions (WI ALTAJ26-4, SEDCO26-2)
+ */
+export const FACTORY_COLOR_PRESETS: FactoryColorPreset[] = [
+  {
+    name: 'DESERT SAND (Bản A)',
+    color: 'DESERT SAND',
+    version: 'Version A',
+    mbCode: '3160-2',
+    subText: 'Hạt MB Korea 3160-2 · 3%',
+    tags: ['SAND', 'BEIGE', 'DESERT', 'KOREA', 'A'],
+  },
+  {
+    name: 'DESERT SAND (Bản B)',
+    color: 'DESERT SAND',
+    version: 'Version B',
+    mbCode: '8005A',
+    subText: 'Hạt Arirang 8005A · 3%',
+    tags: ['SAND', 'BEIGE', 'DESERT', 'ARIRANG', 'B'],
+  },
+  {
+    name: 'BLACK (Đen)',
+    color: 'BLACK',
+    version: 'STD',
+    mbCode: 'B045',
+    subText: 'Tiêu chuẩn B045 / IM-B045ANF',
+    tags: ['BLACK', 'ĐEN', 'DEBRIS'],
+  },
+  {
+    name: 'DARK GREEN (Xanh rêu)',
+    color: 'DARK GREEN',
+    version: 'STD',
+    mbCode: 'G024',
+    subText: 'Tiêu chuẩn G024 / 8086-2',
+    tags: ['GREEN', 'XANH', 'RÊU', 'D.GREEN'],
+  },
+  {
+    name: 'SNOW WHITE (Trắng tuyết)',
+    color: 'SNOW WHITE',
+    version: 'STD',
+    mbCode: '1065',
+    subText: 'Tiêu chuẩn 1065 / PE970N',
+    tags: ['WHITE', 'TRẮNG', 'SNOW', 'SWHITE', 'S.WHITE'],
+  },
+  {
+    name: 'BLUE (Xanh dương)',
+    color: 'BLUE',
+    version: 'STD',
+    mbCode: '6087-1',
+    subText: 'Pantone 287C / MBD-5007',
+    tags: ['BLUE', 'XANH DƯƠNG', 'PANTONE 287C'],
+  },
+  {
+    name: 'AQUA BLUE (Xanh biển)',
+    color: 'AQUA BLUE',
+    version: 'STD',
+    mbCode: '6026-1',
+    subText: 'Tiêu chuẩn 6026-1 / #293',
+    tags: ['AQUA', 'BLUE', 'XANH BIỂN', '293'],
+  },
+  {
+    name: 'BEIGE (Màu be)',
+    color: 'BEIGE',
+    version: 'STD',
+    mbCode: '3233-5',
+    subText: 'Tiêu chuẩn 3233-5 / 8005A',
+    tags: ['BEIGE', 'BE', 'KEM', 'IVORY'],
+  },
+  {
+    name: 'ORANGE (Cam cảnh báo)',
+    color: 'ORANGE',
+    version: 'STD',
+    mbCode: '5066-3',
+    subText: 'Tiêu chuẩn 5066-3 / MOD-2002',
+    tags: ['ORANGE', 'CAM', 'PANTONE 021C'],
+  },
+  {
+    name: 'STEEL GREY (Xám thép)',
+    color: 'STEEL GREY',
+    version: 'STD',
+    mbCode: '2032-2',
+    subText: 'Tiêu chuẩn 2032-2 / #421',
+    tags: ['GREY', 'GRAY', 'XÁM', 'STEEL', '421'],
+  },
+]

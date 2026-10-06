@@ -3,6 +3,7 @@
 
 import type { ParsedOrder } from '@/types'
 import { isValidISODate } from '@/lib/validations/order'
+import { normalizeUvPct } from '@/lib/excel/parseOrderList'
 
 /**
  * Robust date parser supporting YYYY-MM-DD, DD/MM/YYYY, and MM/DD/YYYY formats.
@@ -124,21 +125,7 @@ export function parsePastedText(text: string): ParsedOrder[] {
     }
 
     // Parse UV % (index 7) - optional
-    let uvPct: number | null = null
-    const rawUv = cols[7]?.trim()
-    if (rawUv) {
-      if (rawUv.endsWith('%')) {
-        const val = parseFloat(rawUv.replace('%', ''))
-        if (!isNaN(val)) {
-          uvPct = val / 100
-        }
-      } else {
-        const val = parseFloat(rawUv)
-        if (!isNaN(val)) {
-          uvPct = val > 1 ? val / 100 : val
-        }
-      }
-    }
+    const uvPct = normalizeUvPct(cols[7])
 
     // Parse FR (index 8) - optional
     let frFlag = false
@@ -286,21 +273,7 @@ export function parsePastedTextExtended(text: string): ParsedRowResult[] {
       description = col6
     }
 
-    let uvPct: number | null = null
-    const rawUv = cols[7]?.trim()
-    if (rawUv) {
-      if (rawUv.endsWith('%')) {
-        const val = parseFloat(rawUv.replace('%', ''))
-        if (!isNaN(val)) {
-          uvPct = val / 100
-        }
-      } else {
-        const val = parseFloat(rawUv)
-        if (!isNaN(val)) {
-          uvPct = val > 1 ? val / 100 : val
-        }
-      }
-    }
+    const uvPct = normalizeUvPct(cols[7])
 
     let frFlag = false
     const rawFr = cols[8]?.trim()

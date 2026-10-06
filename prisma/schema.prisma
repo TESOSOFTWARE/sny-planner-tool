@@ -37,6 +37,42 @@ model ProductionOrder {
   // Draft Order (Sprint F1) — true cho đơn lưu tạm thiếu thông tin
   isDraft      Boolean  @default(false)
 
+  // Lifecycle v4: DRAFT (nháp chưa xong) | PLACEHOLDER (giữ máy 40 loom) | APPROVED (chính thức sản xuất)
+  lifecycleStatus       String   @default("APPROVED") // DRAFT | PLACEHOLDER | APPROVED
+  isPlaceholder         Boolean  @default(false)      // True nếu đơn là placeholder chiếm chỗ lịch
+
+  // Màu sắc v4 & Công thức phân loại (Desert Sand A/B, etc.)
+  colorVersion          String?  // "Version A", "Version B", "STD", null
+  colorRecipeSnapshot   String?  // JSON snapshot công thức 3 giàn & MB tại thời điểm tạo đơn
+
+  // Đóng gói v4 (Multi-tier Packing)
+  // primaryPackingType: ROLL (cuộn) | BALE (kiện) | CARTON (thùng carton) | HEMMED (may viền, đóng khuy)
+  primaryPackingType    String   @default("ROLL")
+  subPackingType        String?                       // Quy cách con khi HEMMED: 'CARTON' | 'BALE'
+  hasPaperCore          Boolean  @default(false)      // Lõi giấy — chỉ ROLL mới có; BALE/CARTON = false
+  isHalfFolded          Boolean  @default(false)      // Deprecated: bỏ khỏi UI/Excel, giữ cột an toàn DB
+  outerWrapping         String?  @default("POLYBAG")  // 'POLYBAG' | 'TARPAULIN' | 'NONE'
+  piecesPerCarton       Int?                          // Số tấm đóng chung 1 thùng
+  piecesPerBale         Int?                          // Số tấm đóng chung 1 kiện
+  boxDimensions         String?                       // Kích thước thùng/kiện (D x R x C cm)
+
+  // Quy cách đóng lên Pallet (Áp dụng cho cả ROLL, BALE, CARTON)
+  onPallet              Boolean  @default(false)      // Cờ đóng gói trên pallet
+  secondaryPackingType  String   @default("NONE")     // NONE | WOOD_PALLET | IRON_PALLET | PLASTIC_PALLET
+  palletDimensions      String?                       // Kích thước Pallet (D x R cm)
+  itemsPerPallet        Int?                          // Số cuộn/thùng/kiện trên 1 pallet
+  packingNote           String?                       // Ghi chú đóng gói chi tiết
+
+  // Hàng gia công tráng màng ngoài (Lamination Outsource)
+  isLaminated           Boolean  @default(false)      // Cờ hàng tráng màng ngoài
+  rawFabricGsm          Int?                          // GSM vải mộc dệt xưởng (vd: 325)
+  coatingGsm            Int?                          // GSM màng tráng ngoài (vd: 105)
+  finishedGsm           Int?                          // GSM thành phẩm xuất khẩu (vd: 430)
+
+  // Quản lý Dung sai (Tolerance Management)
+  toleranceQtyPct       Float?   @default(10.0) // Dung sai số lượng ±10%
+  toleranceSpecPct      Float?   @default(5.0)  // Dung sai quy cách/GSM ±5%
+
   // Optional order details (added S2)
   qty             Int?                  // quantity in rolls
   uvPct           Decimal?  @db.Decimal(5, 2) // UV treatment percentage 0-100
@@ -45,7 +81,7 @@ model ProductionOrder {
   description     String?               // free-text order description
   remark          String?               // free-text internal remark
   lineNote        String?               // per-line: ghi chú cho dòng hàng này
-  requiresPacking Boolean   @default(false)   // checkbox đóng gói
+  requiresPacking Boolean   @default(false)   // checkbox đóng gói (kept for backward compat)
   deliveryDate    DateTime?             // shared: ngày giao hàng
   containerSize   String?               // shared: "40HQ x 1", "20FT x 1"
 
@@ -105,6 +141,8 @@ model ProductionOrder {
   @@index([piNumber])
   @@index([orderDate])
   @@index([isDraft])
+  @@index([lifecycleStatus])
+  @@index([isPlaceholder])
   @@map("production_orders")
 }
 
@@ -431,4 +469,22 @@ model PackingDailyOutput {
 
   @@map("packing_daily_outputs")
   @@index([date])
+}
+
+// Sprint V4 — Bảng định mức công thức sợi & Masterbatch theo mã màu (e.g. Desert Sand A/B)
+model ProductColorRecipe {
+  id            String   @id @default(cuid())
+  colorName     String   // Tên màu (e.g. "DESERT SAND A", "DESERT SAND B", "BLACK")
+  colorVersion  String?  // "Version A", "Version B", "STD"
+  standardGsm   Float    // Định lượng GSM tiêu chuẩn
+  firstBarSpec  String?  // Giàn 1: Sợi & Denier (vd "MF 0.22mm UV 4%")
+  middleBarSpec String?  // Giàn giữa: Sợi & Denier
+  backBarSpecs  String?  // Giàn sau: Sợi & Denier
+  mbRate        Float?   // Tỷ lệ % Masterbatch màu (vd 3.5%)
+  notes         String?  // Ghi chú công thức
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([colorName, colorVersion])
+  @@map("product_color_recipes")
 }

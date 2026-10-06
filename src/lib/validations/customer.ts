@@ -12,5 +12,10 @@ export const customerSchema = z.object({
 
 export type CustomerInput = z.infer<typeof customerSchema>
 
-export const updateCustomerSchema = customerSchema.partial()
+// PATCH bắt buộc kèm expectedUpdatedAt để chặn ghi đè bản ghi đã bị
+// sửa ở cửa sổ/tab khác (stale-guard 409). Cùng pattern với
+// updateOrderSchema / PATCH /api/orders/[id].
+export const updateCustomerSchema = customerSchema.partial().extend({
+  expectedUpdatedAt: z.string().min(1, 'Thiếu expectedUpdatedAt'),
+})
 export type UpdateCustomerInput = z.infer<typeof updateCustomerSchema>

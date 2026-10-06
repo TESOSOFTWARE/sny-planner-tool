@@ -62,12 +62,19 @@ export async function PATCH(
     if (orderId && orderId !== existing.orderId) {
       const targetOrder = await prisma.productionOrder.findUnique({
         where: { id: orderId },
-        select: { isDraft: true },
+        select: { isDraft: true, lifecycleStatus: true, isPlaceholder: true },
       });
       if (!targetOrder) {
         return NextResponse.json({ message: "Order not found" }, { status: 404 });
       }
-      isPlaceholder = targetOrder.isDraft;
+      isPlaceholder = Boolean(
+        targetOrder.isDraft ||
+        targetOrder.lifecycleStatus === 'DRAFT' ||
+        targetOrder.lifecycleStatus === 'RESERVED' ||
+        targetOrder.lifecycleStatus === 'RESERVE' ||
+        targetOrder.lifecycleStatus === 'PLACEHOLDER' ||
+        targetOrder.isPlaceholder
+      );
     }
 
     // Overlap check on target machine and date range, excluding current assignment

@@ -34,8 +34,36 @@ export interface SerializedProductionOrder {
   productionGsm: number | null
   color: string | null
   mbCode: string | null
+  itemCode: string | null
 
   isDraft: boolean
+  lifecycleStatus: string
+  isPlaceholder: boolean
+  colorVersion: string | null
+  colorRecipeSnapshot: string | null
+
+  // Packing v4
+  primaryPackingType: string
+  subPackingType?: string | null
+  hasPaperCore: boolean
+  isHalfFolded: boolean
+  outerWrapping?: string | null
+  piecesPerCarton: number | null
+  piecesPerBale: number | null
+  boxDimensions: string | null
+  onPallet: boolean
+  secondaryPackingType: string
+  palletDimensions: string | null
+  itemsPerPallet: number | null
+  packingNote: string | null
+
+  // Dual-GSM & Tolerance
+  isLaminated?: boolean
+  rawFabricGsm?: number | null
+  coatingGsm?: number | null
+  finishedGsm?: number | null
+  toleranceQtyPct?: number | null
+  toleranceSpecPct?: number | null
 
   qty: number | null
   uvPct: string | null
@@ -78,6 +106,12 @@ export interface SerializedProductionOrder {
   }[]
 }
 
+export type PrimaryPackingType = 'ROLL' | 'BALE' | 'CARTON' | 'HEMMED'
+export type SubPackingType = 'CARTON' | 'BALE'
+export type SecondaryPackingType = 'NONE' | 'WOOD_PALLET' | 'IRON_PALLET' | 'PLASTIC_PALLET'
+export type OrderLifecycleStatus = 'DRAFT' | 'RESERVED' | 'RESERVE' | 'PLACEHOLDER' | 'APPROVED'
+// 'RESERVE' | 'PLACEHOLDER' deprecated — chỉ đọc tương thích dữ liệu/file cũ, khi ghi dùng 'RESERVED'.
+
 /**
  * A single row parsed from the ORDER_LIST Excel file.
  * Plain JSON-serializable — travels from server parser → client preview → server confirm.
@@ -93,17 +127,46 @@ export interface ParsedOrder {
   lengthM: number | null
   gsm: number
   color: string
+  colorVersion?: string | null
+  colorRecipeSnapshot?: string | null
   productionGsm?: number | null
   orderType?: 'meters' | 'rolls' | 'pieces'
   qty: number | null
   rollLength?: number | null
   pieceLength?: number | null
-  uvPct: number | null     // stored as-is (0.02 = 2%)
+
+  // v4 Lifecycle & Packing
+  lifecycleStatus?: OrderLifecycleStatus
+  isPlaceholder?: boolean
+  primaryPackingType?: PrimaryPackingType
+  subPackingType?: SubPackingType | null
+  hasPaperCore?: boolean
+  isHalfFolded?: boolean
+  piecesPerCarton?: number | null
+  piecesPerBale?: number | null
+  boxDimensions?: string | null
+  onPallet?: boolean
+  secondaryPackingType?: SecondaryPackingType
+  palletDimensions?: string | null
+  itemsPerPallet?: number | null
+  packingNote?: string | null
+  outerWrapping?: 'POLYBAG' | 'TARPAULIN' | 'NONE' | null
+
+  // Dual-GSM & Tolerance
+  isLaminated?: boolean
+  rawFabricGsm?: number | null
+  coatingGsm?: number | null
+  finishedGsm?: number | null
+  toleranceQtyPct?: number | null
+  toleranceSpecPct?: number | null
+
+  uvPct: number | null     // percentage 0-100 (e.g. 2.0 = 2%)
   frFlag: boolean
   frPct?: number | null
   description: string | null
   remark: string | null
   mbCode?: string | null
+  itemCode?: string | null
   meshType?: string | null
   needleCount?: number | null
   beamCount?: number | null
@@ -124,14 +187,27 @@ export interface ParsedOrder {
 
 export type OrderImportStatus = 'new' | 'identical' | 'conflict' | 'invalid'
 
+/** Primary planner action for a conflict row. UI hint only — `reasons` stays complete. */
+export type OrderImportResolution =
+  | 'DUPLICATE_IN_DB'
+  | 'DRAFT_EXISTS'
+  | 'DUPLICATE_IN_FILE'
+  | 'SPLIT_BY_CUSTOMER'
+  | 'ADD_NO_TO_FILE'
+  | 'CONTENT_DIFFERS'
+
 export interface OrderImportDecision {
   rowIndex: number
   piNumber: string
   subLineIndex: number
   status: OrderImportStatus
   existingOrderId: string | null
+  /** Server-derived values for a supplied code differing from the stored code. */
+  itemCodeChange?: { existing: string | null; incoming: string }
   changedFields: string[]
   reasons: string[]
+  /** Highest-priority action when status is 'conflict'. Undefined otherwise. */
+  resolution?: OrderImportResolution
 }
 
 export interface OrderImportSummary {
@@ -214,4 +290,25 @@ export interface SerializedPackingOutput {
   weightNight: string | null
   dataSource: string
   createdAt: string
+}
+
+export interface OrderTableItem {
+  id: string
+  piNumber: string
+  subLineIndex: number
+  customer: string
+  customerId: string | null
+  orderDate: string
+  widthM: number | null
+  lengthM: number | null
+  gsm: number | null
+  color: string | null
+  itemCode: string | null
+  lifecycleStatus: string
+  isDraft: boolean
+  isPlaceholder: boolean
+  assignments: {
+    startDate: string
+    endDate: string
+  }[]
 }

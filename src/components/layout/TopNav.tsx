@@ -5,10 +5,13 @@
 // Navigation tabs removed — side nav is the single navigation source.
 
 import Link from 'next/link'
+import ToasterProvider from '@/components/ui/ToasterProvider'
 
 export default function TopNav() {
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 h-[64px] bg-surface border-b border-[0.5px] border-outline-variant">
+    <>
+      <ToasterProvider />
+      <header className="fixed top-0 left-0 right-0 z-50 h-[64px] bg-surface border-b border-[0.5px] border-outline-variant">
       <div className="max-w-[1440px] mx-auto px-container-margin h-full flex items-center justify-between">
 
         {/* Left: brand */}
@@ -38,5 +41,6 @@ export default function TopNav() {
         </div>
       </div>
     </header>
+    </>
   )
 }

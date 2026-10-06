@@ -9,71 +9,30 @@ import type { Prisma } from '@prisma/client'
 import type { OrderImportDecision, OrderImportSummary, ParsedOrder } from '@/types'
 import { prisma } from '@/lib/db'
 import { classifyOrderImport } from '@/lib/excel/parseOrderList'
-import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
+import { chunkedCreateManyOrders, mapParsedRowToCreateInput } from '@/lib/orders/importPersist'
+import { resolveCustomerNames } from '@/lib/customers/matching'
 import { MAX_IMPORTED_ORDER_ROWS } from '@/lib/validations/order'
+
+const customerOverrideSchema = z.object({
+  rowName: z.string().min(1).max(100),
+  // `MERGE:<customerId>` reuses an existing customer; 'NEW' forces creation.
+  decision: z.string().regex(/^(MERGE:.+|NEW)$/, 'Override khách hàng không hợp lệ'),
+})
 
 const bulkEnvelopeSchema = z.object({
   rows: z.array(z.unknown()).min(1).max(MAX_IMPORTED_ORDER_ROWS),
+  customerOverrides: z.array(customerOverrideSchema).max(500).optional().default([]),
+  // P0-12: dryRun kiểm tra trước khi ghi — trả decisions + customer
+  // reviews mà không insert, để UI hiện radio chọn rồi mới ghi thật.
+  dryRun: z.boolean().optional().default(false),
 })
 
 function asParsedOrder(value: unknown): ParsedOrder {
   return (value && typeof value === 'object' ? value : {}) as ParsedOrder
 }
 
-function normalizedName(value: string): string {
-  return value.trim().toUpperCase()
-}
-
 function buildCreateData(row: ParsedOrder, customerId: string | null): Prisma.ProductionOrderCreateManyInput {
-  const orderType = row.orderType ?? 'meters'
-  const calculation = calculateOrderWeight({
-    orderType,
-    widthM: row.widthM,
-    lengthM: row.lengthM,
-    gsm: row.gsm,
-    productionGsm: row.productionGsm ?? null,
-    qty: row.qty ?? null,
-    rollLength: row.rollLength ?? null,
-    pieceLength: row.pieceLength ?? null,
-  })
-  return {
-    piNumber: row.piNumber.trim(),
-    subLineIndex: row.subLineIndex,
-    customer: row.customer.trim(),
-    customerId,
-    orderDate: new Date(`${row.orderDate}T00:00:00.000Z`),
-    widthM: row.widthM,
-    lengthM: calculation.totalMeters,
-    gsm: row.gsm,
-    productionGsm: row.productionGsm ?? null,
-    color: row.color,
-    mbCode: row.mbCode ?? null,
-    isDraft: false,
-    qty: row.qty ?? null,
-    uvPct: row.uvPct ?? null,
-    frFlag: row.frFlag ?? false,
-    frPct: row.frPct ?? null,
-    description: row.description ?? null,
-    remark: row.remark ?? null,
-    lineNote: row.lineNote ?? null,
-    requiresPacking: row.requiresPacking ?? false,
-    deliveryDate: row.deliveryDate ? new Date(`${row.deliveryDate}T00:00:00.000Z`) : null,
-    containerSize: row.containerSize ?? null,
-    meshType: row.meshType ?? null,
-    needleCount: row.needleCount ?? null,
-    beamCount: row.beamCount ?? null,
-    orderType,
-    rollLength: row.rollLength ?? null,
-    pieceLength: row.pieceLength ?? null,
-    hasEyelet: row.hasEyelet ?? false,
-    eyeletColor: row.eyeletColor ?? null,
-    eyeletLines: row.eyeletLines ?? null,
-    eyeletSpec: row.eyeletSpec ?? null,
-    qtySqm: calculation.qtySqm,
-    totalWeightKgs: calculation.totalWeightKgs,
-    requiredYarnKg: calculation.requiredYarnKg,
-    dataSource: 'import',
-  }
+  return mapParsedRowToCreateInput(row, customerId)
 }
 
 function summarize(decisions: OrderImportDecision[]): OrderImportSummary {
@@ -110,6 +69,38 @@ export async function POST(req: NextRequest) {
 
   const rows = envelope.data.rows.map(asParsedOrder)
   const pis = Array.from(new Set(rows.map((row) => String(row.piNumber ?? '').trim()).filter(Boolean)))
+  // P0-12: block customer-ambiguous rows in decisions — shared with write path.
+  function blockAmbiguousRows(decisions: OrderImportDecision[], ambiguous: Map<string, string>) {
+    rows.forEach((row, index) => {
+      const key = String(row.customer ?? '').trim()
+      if (ambiguous.has(key) && decisions[index].status !== 'invalid') {
+        decisions[index].status = 'conflict'
+        decisions[index].reasons.push(ambiguous.get(key)!)
+      }
+    })
+  }
+  if (envelope.data.dryRun) {
+    // Read-only check: no transaction, no write. UI shows radios first.
+    const existingOrders = await prisma.productionOrder.findMany({ where: { piNumber: { in: pis, mode: 'insensitive' } } })
+    const decisions = classifyOrderImport(rows, existingOrders)
+    const names = Array.from(new Set(rows
+      .filter((_, index) => decisions[index].status !== 'invalid')
+      .map((row) => String(row.customer ?? '').trim())
+      .filter(Boolean)))
+    const customers = names.length > 0
+      ? await prisma.customer.findMany({ select: { id: true, name: true } })
+      : []
+    const resolution = resolveCustomerNames(names, customers, envelope.data.customerOverrides)
+    blockAmbiguousRows(decisions, resolution.ambiguous)
+    return NextResponse.json({
+      success: true,
+      dryRun: true,
+      decisions,
+      summary: summarize(decisions),
+      customerReviews: resolution.reviews,
+      customerAmbiguous: resolution.blockedAmbiguous,
+    })
+  }
   try {
     const result = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
@@ -123,32 +114,26 @@ export async function POST(req: NextRequest) {
         .map((row) => String(row.customer ?? '').trim())
         .filter(Boolean)))
       const customers = names.length > 0
-        ? await tx.customer.findMany({ where: { name: { in: names, mode: 'insensitive' } }, select: { id: true, name: true } })
+        ? await tx.customer.findMany({ select: { id: true, name: true } })
         : []
-      const customerIds = new Map<string, string>()
-      const ambiguous = new Set<string>()
-      for (const customer of customers) {
-        const key = normalizedName(customer.name)
-        if (customerIds.has(key)) ambiguous.add(key)
-        else customerIds.set(key, customer.id)
-      }
-      rows.forEach((row, index) => {
-        const key = normalizedName(String(row.customer ?? ''))
-        if (ambiguous.has(key) && decisions[index].status !== 'invalid') {
-          decisions[index].status = 'conflict'
-          decisions[index].reasons.push('Có nhiều khách hàng trùng tên sau khi chuẩn hóa; không tự chọn bản ghi')
-        }
-      })
+      // P0-12: same rule as Excel import confirm via shared helper — planner
+      // overrides win, NEEDS_REVIEW without decision conflicts,
+      // AMBIGUOUS never auto-picks.
+      const resolution = resolveCustomerNames(names, customers, envelope.data.customerOverrides)
+      const customerIds = resolution.resolved
+      const ambiguousCustomerReasons = resolution.ambiguous
+      blockAmbiguousRows(decisions, ambiguousCustomerReasons)
       const accepted = decisions.map((decision, index) => decision.status === 'new' ? index : -1).filter((index) => index >= 0)
       for (const index of accepted) {
-        const key = normalizedName(String(rows[index].customer ?? ''))
+        const key = String(rows[index].customer ?? '').trim()
         if (!customerIds.has(key)) {
           const customer = await tx.customer.create({ data: { name: String(rows[index].customer).trim() } })
           customerIds.set(key, customer.id)
         }
       }
-      const data = accepted.map((index) => buildCreateData(rows[index], customerIds.get(normalizedName(String(rows[index].customer ?? ''))) ?? null))
-      if (data.length > 0) await tx.productionOrder.createMany({ data })
+      const data = accepted.map((index) => buildCreateData(rows[index], customerIds.get(String(rows[index].customer ?? '').trim()) ?? null))
+      // P0-13: chunked insert — same param-limit reason as import/confirm.
+      if (data.length > 0) await chunkedCreateManyOrders(tx, data)
       const summary = summarize(decisions)
       return {
         imported: summary.created,
@@ -156,8 +141,10 @@ export async function POST(req: NextRequest) {
         errors: errorsFor(decisions),
         summary,
         decisions,
+        customerReviews: resolution.reviews,
+        customerAmbiguous: resolution.blockedAmbiguous,
       }
-    }, { timeout: 30_000, maxWait: 5_000 })
+    }, { timeout: 60_000, maxWait: 5_000 }) // P0-13: up to 10 chunks + classify on cold Neon
     return NextResponse.json({ success: true, ...result })
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && ['P2028', 'P2034'].includes(String((error as { code?: unknown }).code))) {

@@ -1,11 +1,22 @@
 // src/app/api/materials/rolling/import/confirm/route.ts
-// POST /api/materials/rolling/import/confirm — Saves parsed RollingDailyMetric records to DB.
+// POST /api/materials/rolling/import/confirm — Saves parsed RollingDailyMetric records to DB with Scoped Replacement.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { parseRollingReport } from '@/lib/excel/parseRollingReport'
 import { prisma } from '@/lib/db'
 
+// In-memory Mutex to prevent overlapping concurrent rolling imports
+let isRollingImportInProgress = false
+
 export async function POST(req: NextRequest) {
+  if (isRollingImportInProgress) {
+    return NextResponse.json(
+      { success: false, error: 'Hệ thống đang xử lý một phiên import Rolling khác. Vui lòng đợi trong giây lát.' },
+      { status: 409 }
+    )
+  }
+
+  isRollingImportInProgress = true
   try {
     const formData = await req.formData()
     const file = formData.get('file') as File | null
@@ -50,20 +61,50 @@ export async function POST(req: NextRequest) {
       }
     })
 
-    // Batch insert
-    let insertedCount = 0
-    const batchSize = 500
-    for (let i = 0; i < rollingData.length; i += batchSize) {
-      const batch = rollingData.slice(i, i + batchSize)
-      const res = await prisma.rollingDailyMetric.createMany({
-        data: batch,
+    if (rollingData.length === 0) {
+      return NextResponse.json({
+        success: true,
+        recordsInserted: 0,
+        recordsDeleted: 0,
+        datesScoped: 0,
+        ambiguousOrderCount,
+        fileName: file.name,
+        message: 'File không có bản ghi sản lượng Rolling hợp lệ để nạp.',
       })
-      insertedCount += res.count
     }
+
+    // Scoped Replacement: identify distinct dates strictly present in this payload
+    const targetDates = Array.from(new Set(rollingData.map((m) => m.date.getTime()))).map((t) => new Date(t))
+
+    // Execute deletion of exact scope and batch insertion atomically inside transaction
+    const { deletedCount, insertedCount } = await prisma.$transaction(async (tx) => {
+      const deleteRes = await tx.rollingDailyMetric.deleteMany({
+        where: {
+          date: { in: targetDates },
+        },
+      })
+
+      let count = 0
+      const batchSize = 500
+      for (let i = 0; i < rollingData.length; i += batchSize) {
+        const batch = rollingData.slice(i, i + batchSize)
+        const res = await tx.rollingDailyMetric.createMany({
+          data: batch,
+        })
+        count += res.count
+      }
+
+      return {
+        deletedCount: deleteRes.count,
+        insertedCount: count,
+      }
+    })
 
     return NextResponse.json({
       success: true,
       recordsInserted: insertedCount,
+      recordsDeleted: deletedCount,
+      datesScoped: targetDates.length,
       ambiguousOrderCount,
       fileName: file.name,
     })
@@ -73,5 +114,7 @@ export async function POST(req: NextRequest) {
       { success: false, error: error.message || 'Lỗi khi lưu dữ liệu Rolling vào cơ sở dữ liệu.' },
       { status: 500 }
     )
+  } finally {
+    isRollingImportInProgress = false
   }
 }

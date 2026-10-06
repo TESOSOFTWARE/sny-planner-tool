@@ -9,11 +9,20 @@ import type { Prisma } from '@prisma/client'
 import type { OrderImportDecision, OrderImportSummary, ParsedOrder } from '@/types'
 import { prisma } from '@/lib/db'
 import { classifyOrderImport } from '@/lib/excel/parseOrderList'
-import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
+import { chunkedCreateManyOrders, mapParsedRowToCreateInput } from '@/lib/orders/importPersist'
+import { findCustomerMatch } from '@/lib/customers/matching'
+import { buildRecipeSnapshot, matchRecipe, normalizeColorName } from '@/lib/orders/recipeSnapshot'
 import { MAX_IMPORTED_ORDER_ROWS } from '@/lib/validations/order'
+
+const customerOverrideSchema = z.object({
+  rowName: z.string().min(1).max(100),
+  // `MERGE:<customerId>` reuses an existing customer; 'NEW' forces creation.
+  decision: z.string().regex(/^(MERGE:.+|NEW)$/, 'Override khách hàng không hợp lệ'),
+})
 
 const importEnvelopeSchema = z.object({
   rows: z.array(z.unknown()).min(1).max(MAX_IMPORTED_ORDER_ROWS),
+  customerOverrides: z.array(customerOverrideSchema).max(500).optional().default([]),
 })
 
 function asParsedOrder(value: unknown): ParsedOrder {
@@ -26,61 +35,8 @@ function isRetryableTransactionError(error: unknown): boolean {
   return code === 'P2034' || code === 'P2028'
 }
 
-function normalizedName(value: string): string {
-  return value.trim().toUpperCase()
-}
-
 function buildCreateData(row: ParsedOrder, customerId: string | null): Prisma.ProductionOrderCreateManyInput {
-  const orderType = row.orderType ?? 'meters'
-  const calculation = calculateOrderWeight({
-    orderType,
-    widthM: row.widthM,
-    lengthM: row.lengthM,
-    gsm: row.gsm,
-    productionGsm: row.productionGsm ?? null,
-    qty: row.qty ?? null,
-    rollLength: row.rollLength ?? null,
-    pieceLength: row.pieceLength ?? null,
-  })
-
-  return {
-    piNumber: row.piNumber.trim(),
-    subLineIndex: row.subLineIndex,
-    customer: row.customer.trim(),
-    customerId,
-    orderDate: new Date(`${row.orderDate}T00:00:00.000Z`),
-    widthM: row.widthM,
-    lengthM: calculation.totalMeters,
-    gsm: row.gsm,
-    productionGsm: row.productionGsm ?? null,
-    color: row.color,
-    mbCode: row.mbCode ?? null,
-    isDraft: false,
-    qty: row.qty ?? null,
-    uvPct: row.uvPct ?? null,
-    frFlag: row.frFlag ?? false,
-    frPct: row.frPct ?? null,
-    description: row.description ?? null,
-    remark: row.remark ?? null,
-    lineNote: row.lineNote ?? null,
-    requiresPacking: row.requiresPacking ?? false,
-    deliveryDate: row.deliveryDate ? new Date(`${row.deliveryDate}T00:00:00.000Z`) : null,
-    containerSize: row.containerSize ?? null,
-    meshType: row.meshType ?? null,
-    needleCount: row.needleCount ?? null,
-    beamCount: row.beamCount ?? null,
-    orderType,
-    rollLength: row.rollLength ?? null,
-    pieceLength: row.pieceLength ?? null,
-    hasEyelet: row.hasEyelet ?? false,
-    eyeletColor: row.eyeletColor ?? null,
-    eyeletLines: row.eyeletLines ?? null,
-    eyeletSpec: row.eyeletSpec ?? null,
-    qtySqm: calculation.qtySqm,
-    totalWeightKgs: calculation.totalWeightKgs,
-    requiredYarnKg: calculation.requiredYarnKg,
-    dataSource: 'import',
-  }
+  return mapParsedRowToCreateInput(row, customerId)
 }
 
 function summaryFor(decisions: OrderImportDecision[]): OrderImportSummary {
@@ -142,21 +98,53 @@ export async function POST(req: NextRequest) {
           .map((row) => String(row.customer ?? '').trim())
           .filter(Boolean),
       ))
-      const customers = customerNames.length > 0
-        ? await tx.customer.findMany({ where: { name: { in: customerNames, mode: 'insensitive' } }, select: { id: true, name: true } })
-        : []
-      const customerByName = new Map<string, string>()
-      const ambiguousNames = new Set<string>()
-      for (const customer of customers) {
-        const key = normalizedName(customer.name)
-        if (customerByName.has(key)) ambiguousNames.add(key)
-        else customerByName.set(key, customer.id)
+      const allCustomers = await tx.customer.findMany({ select: { id: true, name: true } })
+      const customerIdSet = new Set(allCustomers.map((c) => c.id))
+      const resolvedCustomerByName = new Map<string, string>()
+      const ambiguousCustomerReasons = new Map<string, string>()
+      // Planner overrides from preview: rowName (trimmed Excel text) -> MERGE:<id> | NEW.
+      const overrideByName = new Map<string, string>()
+      for (const o of envelope.data.customerOverrides) {
+        overrideByName.set(o.rowName.trim(), o.decision)
       }
+
+      for (const name of customerNames) {
+        const override = overrideByName.get(name)
+        if (override && override !== 'NEW') {
+          const mergeId = override.slice('MERGE:'.length)
+          if (customerIdSet.has(mergeId)) {
+            resolvedCustomerByName.set(name, mergeId)
+          } else {
+            ambiguousCustomerReasons.set(
+              name,
+              `Lựa chọn gộp khách hàng "${name}" trỏ tới bản ghi không tồn tại — vui lòng xem trước lại.`,
+            )
+          }
+          continue
+        }
+        const match = findCustomerMatch(name, allCustomers)
+        if (match.status === 'MATCHED' && match.customer) {
+          resolvedCustomerByName.set(name, match.customer.id)
+        } else if (match.status === 'AMBIGUOUS') {
+          ambiguousCustomerReasons.set(
+            name,
+            match.reason || 'Có nhiều khách hàng trùng tên sau khi chuẩn hóa; không tự chọn bản ghi',
+          )
+        } else if (match.status === 'NEEDS_REVIEW' && override !== 'NEW') {
+          // Suffix-stripped candidates are never auto-merged nor auto-created:
+          // without an explicit planner decision the row becomes a conflict.
+          ambiguousCustomerReasons.set(
+            name,
+            match.reason || `Tên "${name}" cần planner xác nhận gộp hay tạo mới`,
+          )
+        }
+      }
+
       rows.forEach((row, index) => {
-        const key = normalizedName(String(row.customer ?? ''))
-        if (ambiguousNames.has(key) && decisions[index].status !== 'invalid') {
+        const name = String(row.customer ?? '').trim()
+        if (ambiguousCustomerReasons.has(name) && decisions[index].status !== 'invalid') {
           decisions[index].status = 'conflict'
-          decisions[index].reasons.push('Có nhiều khách hàng trùng tên sau khi chuẩn hóa; không tự chọn bản ghi')
+          decisions[index].reasons.push(ambiguousCustomerReasons.get(name)!)
         }
       })
 
@@ -165,19 +153,48 @@ export async function POST(req: NextRequest) {
         .filter((index) => index >= 0)
       for (const index of acceptedIndexes) {
         const row = rows[index]
-        const key = normalizedName(String(row.customer ?? ''))
-        if (!customerByName.has(key)) {
-          const customer = await tx.customer.create({ data: { name: String(row.customer).trim() } })
-          customerByName.set(key, customer.id)
+        const name = String(row.customer ?? '').trim()
+        if (!resolvedCustomerByName.has(name) && name) {
+          const created = await tx.customer.create({ data: { name } })
+          resolvedCustomerByName.set(name, created.id)
+          allCustomers.push(created)
         }
       }
 
       const createData = acceptedIndexes.map((index) => {
         const row = rows[index]
-        const customerId = customerByName.get(normalizedName(String(row.customer ?? ''))) ?? null
+        const name = String(row.customer ?? '').trim()
+        const customerId = resolvedCustomerByName.get(name) ?? null
         return buildCreateData(row, customerId)
       })
-      if (createData.length > 0) await tx.productionOrder.createMany({ data: createData })
+      // P0-13: chunked insert — one createMany = one multi-row INSERT capped
+      // by the Postgres 65,535 bind-param limit (~1,191 rows at ~55 cols).
+      if (createData.length > 0) await chunkedCreateManyOrders(tx, createData)
+
+      // P0-2: Build colorRecipeSnapshot for imported orders (same as approve route)
+      if (createData.length > 0) {
+        const createdKeys = createData.map((d) => ({ piNumber: d.piNumber, subLineIndex: d.subLineIndex }))
+        const importedOrders = await tx.productionOrder.findMany({
+          where: {
+            OR: createdKeys.map((k) => ({ piNumber: k.piNumber, subLineIndex: k.subLineIndex })),
+          },
+          select: { id: true, piNumber: true, subLineIndex: true, color: true, colorVersion: true },
+        })
+        const piColors = Array.from(new Set(importedOrders.map((o) => normalizeColorName(o.color)).filter(Boolean)))
+        const recipes = piColors.length > 0
+          ? await tx.productColorRecipe.findMany({ where: { colorName: { in: piColors, mode: 'insensitive' } } })
+          : []
+        const nowIso = new Date().toISOString()
+        for (const order of importedOrders) {
+          const recipe = matchRecipe(order.color, order.colorVersion, recipes)
+          if (recipe) {
+            await tx.productionOrder.update({
+              where: { id: order.id },
+              data: { colorRecipeSnapshot: buildRecipeSnapshot(recipe, nowIso) },
+            })
+          }
+        }
+      }
 
       const summary = summaryFor(decisions)
       return {
@@ -187,7 +204,7 @@ export async function POST(req: NextRequest) {
         summary,
         decisions,
       }
-    }, { timeout: 30_000, maxWait: 5_000 })
+    }, { timeout: 60_000, maxWait: 5_000 }) // P0-13: up to 10 chunks + classify on cold Neon
 
     return NextResponse.json({ success: true, ...result })
   } catch (error) {
