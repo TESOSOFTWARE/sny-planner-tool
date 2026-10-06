@@ -105,15 +105,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "Order not found" }, { status: 404 });
     }
 
-    // AC-03: Block assignment for pure DRAFT orders
-    const isOrderDraft = targetOrder.lifecycleStatus === 'DRAFT' || (targetOrder.isDraft && targetOrder.lifecycleStatus !== 'PLACEHOLDER' && !targetOrder.isPlaceholder);
-    if (isOrderDraft) {
-      return NextResponse.json(
-        { message: "Không thể xếp lịch máy dệt cho đơn hàng ở trạng thái Bản Nháp (Draft). Vui lòng hoàn thiện thông số hoặc chuyển sang Giữ Chỗ (Placeholder) trước khi xếp lịch." },
-        { status: 422 }
-      );
-    }
-
     // Overlap check (applies equally to draft placeholders and official assignments)
     console.log("OVERLAP CHECK TRIGGERED");
     const existing = await prisma.machineAssignment.findFirst({
@@ -131,8 +122,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // AC-04: Set isPlaceholder = true for PLACEHOLDER orders (dashed border on 40 loom grid)
-    const isPlaceholder = targetOrder.lifecycleStatus === 'PLACEHOLDER' || targetOrder.isPlaceholder;
+    // Đơn nháp hoặc đơn giữ chỗ lên máy dệt với cờ isPlaceholder = true như nhánh cũ
+    const isPlaceholder = Boolean(
+      targetOrder.isDraft ||
+      targetOrder.lifecycleStatus === 'DRAFT' ||
+      targetOrder.lifecycleStatus === 'RESERVED' ||
+      targetOrder.lifecycleStatus === 'RESERVE' ||
+      targetOrder.lifecycleStatus === 'PLACEHOLDER' ||
+      targetOrder.isPlaceholder
+    );
 
     const assignment = await prisma.machineAssignment.create({
       data: {

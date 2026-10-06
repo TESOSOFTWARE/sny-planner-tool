@@ -4,11 +4,27 @@
 // Comprehensive Master-Detail Editor for Proforma Invoice (PI).
 // Allows editing all sub-lines belonging to the same PI atomically.
 
-import React, { useState, useCallback, useMemo, useEffect } from 'react'
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
-import { deriveOrderTypeFromPacking } from '@/lib/validations/order'
+import { deriveOrderTypeFromPacking, lineSchema, draftLineSchema, cleanSubLineForValidation } from '@/lib/validations/order'
+import { FACTORY_COLOR_PRESETS } from '@/lib/colors'
+import { itemCodeWarnings } from '@/lib/orders/itemCodeHint'
+import { computeItemCodePrefillPatch } from '@/lib/orders/itemCodePrefill'
+import type { ItemCodeOption } from '@/lib/orders/itemCodeCatalog'
+import { toast } from 'sonner'
+
+export interface LineValidationIssue {
+  field: string
+  message: string
+}
+
+export interface LineValidationError {
+  line: number // 1-indexed (NO / subLineIndex)
+  errors: string[]
+  issues?: LineValidationIssue[]
+}
 
 export interface RelatedPiItem {
   piNumber: string
@@ -34,7 +50,8 @@ export interface SubLineItem {
   rollLength: number | ''
   pieceLength: number | ''
 
-  primaryPackingType: 'ROLL' | 'BALE' | 'CARTON'
+  primaryPackingType: 'ROLL' | 'BALE' | 'CARTON' | 'HEMMED'
+  subPackingType?: 'CARTON' | 'BALE' | ''
   hasPaperCore: boolean
   isHalfFolded: boolean
   piecesPerCarton: number | ''
@@ -64,6 +81,7 @@ export interface SubLineItem {
   needleCount: number | ''
   beamCount: number | ''
   mbCode: string
+  itemCode: string
 
   hasEyelet: boolean
   eyeletColor: string
@@ -94,6 +112,8 @@ export interface PiMasterDetailEditorProps {
   // F1 (R4): mốc updatedAt mới nhất lúc mở PI — gửi kèm PUT để server phát hiện ghi đè (409).
   initialUpdatedAt?: string | null
   relatedPis?: RelatedPiItem[]
+  // B-server: dự đoán số dòng khớp công thức màu (tính ở server như logic approve).
+  recipeCoverage?: { matched: number; total: number; missingColors: string[] }
 }
 
 export default function PiMasterDetailEditor({
@@ -110,10 +130,12 @@ export default function PiMasterDetailEditor({
   initialLines,
   initialUpdatedAt = null,
   relatedPis = [],
+  recipeCoverage,
 }: PiMasterDetailEditorProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const targetLineParam = searchParams.get('line')
+  const targetLineId = searchParams.get('lineId')
 
   // Header State
   const [customer, setCustomer] = useState(initialCustomer)
@@ -122,13 +144,52 @@ export default function PiMasterDetailEditor({
   const [containerSize, setContainerSize] = useState(initialContainerSize || '')
   const [description, setDescription] = useState(initialDescription || '')
   const [remark, setRemark] = useState(initialRemark || '')
-  const [lifecycleStatus, setLifecycleStatus] = useState<'APPROVED' | 'PLACEHOLDER' | 'DRAFT'>(
-    (initialLifecycleStatus as any) || 'APPROVED'
+  const [lifecycleStatus, setLifecycleStatus] = useState<'APPROVED' | 'RESERVED' | 'DRAFT'>(
+    initialLifecycleStatus === 'PLACEHOLDER' || (initialLifecycleStatus as string) === 'RESERVE' ? 'RESERVED' : ((initialLifecycleStatus as any) || 'APPROVED')
   )
 
   // Sub-lines State
   const [lines, setLines] = useState<SubLineItem[]>(initialLines)
   const [activeExpandedLine, setActiveExpandedLine] = useState<number | null>(null)
+  const [activeColorDropdownIdx, setActiveColorDropdownIdx] = useState<number | null>(null)
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null)
+  const colorDropdownRef = useRef<HTMLDivElement | null>(null)
+
+  // Auto-close dropdown when scrolling table or page, but ALLOW scrolling inside the dropdown itself
+  useEffect(() => {
+    if (activeColorDropdownIdx === null) return
+    const handleScroll = (e: Event) => {
+      const target = e.target as HTMLElement | null
+      if (target && colorDropdownRef.current && colorDropdownRef.current.contains(target)) {
+        // Scrolling inside color dropdown menu -> do NOT close
+        return
+      }
+      setActiveColorDropdownIdx(null)
+    }
+    window.addEventListener('scroll', handleScroll, true)
+    return () => window.removeEventListener('scroll', handleScroll, true)
+  }, [activeColorDropdownIdx])
+
+  // Item Code Suggestions (DB history + MasterData catalog)
+  const [itemCodeOptions, setItemCodeOptions] = useState<ItemCodeOption[]>([])
+
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        const url = initialPiNumber?.trim()
+          ? `/api/orders/item-codes?pi=${encodeURIComponent(initialPiNumber.trim())}`
+          : '/api/orders/item-codes'
+        const res = await fetch(url)
+        if (res.ok) {
+          const data = await res.json()
+          setItemCodeOptions(data)
+        }
+      } catch {
+        setItemCodeOptions([])
+      }
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [initialPiNumber])
 
   // Dirty Guard State
   const [pendingTargetPi, setPendingTargetPi] = useState<string | null>(null)
@@ -186,6 +247,7 @@ export default function PiMasterDetailEditor({
         l.needleCount !== init.needleCount ||
         l.beamCount !== init.beamCount ||
         l.mbCode !== init.mbCode ||
+  l.itemCode !== init.itemCode ||
         l.hasEyelet !== init.hasEyelet ||
         l.eyeletColor !== init.eyeletColor ||
         l.eyeletLines !== init.eyeletLines ||
@@ -214,35 +276,128 @@ export default function PiMasterDetailEditor({
     initialLines,
   ])
 
-  // Highlight and auto-expand line from ?line= query param
+  // Highlight and auto-expand line from ?line= or ?lineId= query param ONCE on initial load
+  const handledTargetKeyRef = useRef<string | null>(null)
+
   useEffect(() => {
-    if (targetLineParam) {
-      const lineNum = Number(targetLineParam)
-      const foundIdx = lines.findIndex((l) => l.subLineIndex === lineNum)
-      if (foundIdx !== -1) {
-        setActiveExpandedLine(foundIdx)
-        setTimeout(() => {
-          const el = document.getElementById(`subline-row-${lineNum}`)
-          if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          }
-        }, 300)
-      }
+    const currentKey = targetLineId ? `id:${targetLineId}` : targetLineParam ? `num:${targetLineParam}` : null
+    if (!currentKey) return
+    if (handledTargetKeyRef.current === currentKey) return
+    if (!lines || lines.length === 0) return
+
+    const foundIdx = targetLineId
+      ? lines.findIndex((l) => l.id === targetLineId)
+      : lines.findIndex((l) => l.subLineIndex === Number(targetLineParam))
+    const lineNum = lines[foundIdx]?.subLineIndex
+    if (foundIdx !== -1) {
+      handledTargetKeyRef.current = currentKey
+      setActiveExpandedLine(foundIdx)
+      setTimeout(() => {
+        const el = document.getElementById(`subline-row-${lineNum}`)
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }
+      }, 300)
     }
-  }, [targetLineParam, lines])
+  }, [targetLineId, targetLineParam, lines])
 
   // UI state
   const [saving, setSaving] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [lineErrors, setLineErrors] = useState<LineValidationError[]>([])
+  const [headerErrors, setHeaderErrors] = useState<{ customer?: string; orderDate?: string }>({})
 
+  // Clear error banner when all errors are resolved
+  useEffect(() => {
+    if (lineErrors.length === 0 && Object.keys(headerErrors).length === 0 && errorMessage?.includes('không hợp lệ')) {
+      setErrorMessage(null)
+    }
+  }, [lineErrors, headerErrors, errorMessage])
 
+  const isDrawerField = (fieldName?: string) => {
+    if (!fieldName) return false
+    const drawerFields = [
+      'productionGsm', 'mbCode', 'itemCode', 'uvPct', 'frFlag', 'frPct', 'meshType', 'needleCount', 'lineNote',
+      'isLaminated', 'rawFabricGsm', 'coatingGsm', 'finishedGsm',
+      'hasEyelet', 'eyeletColor', 'eyeletLines', 'eyeletSpec',
+      'outerWrapping', 'hasPaperCore', 'isHalfFolded', 'subPackingType',
+      'piecesPerCarton', 'piecesPerBale', 'boxDimensions',
+      'onPallet', 'secondaryPackingType', 'palletDimensions', 'itemsPerPallet',
+      'toleranceQtyPct', 'toleranceSpecPct', 'packingNote',
+    ]
+    return drawerFields.some((f) => fieldName === f || fieldName.startsWith(f))
+  }
+
+  const scrollToAndExpandLine = useCallback((subLineIndex: number, lineIdx: number, issues?: LineValidationIssue[]) => {
+    const shouldExpand = issues && issues.length > 0 ? issues.some((i) => isDrawerField(i.field)) : true
+    if (shouldExpand) {
+      setActiveExpandedLine(lineIdx)
+    }
+    setTimeout(() => {
+      const el = document.getElementById(`subline-row-${subLineIndex}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        // Auto-focus first invalid input inside this row or drawer
+        setTimeout(() => {
+          const invalidInput = el.querySelector('input.border-error, select.border-error') as HTMLElement
+          if (invalidInput) {
+            invalidInput.focus()
+          } else if (shouldExpand) {
+            const nextRow = el.nextElementSibling
+            const drawerInput = nextRow?.querySelector('input.border-error, select.border-error') as HTMLElement
+            drawerInput?.focus()
+          }
+        }, 150)
+      }
+    }, 100)
+  }, [])
+
+  const getLineError = useCallback((subLineIndex: number) => {
+    return lineErrors.find((e) => e.line === subLineIndex)
+  }, [lineErrors])
+
+  const LENGTH_GROUP = useMemo(() => ['lengthM', 'rollLength', 'pieceLength', 'qty'], [])
+  const COLOR_GROUP = useMemo(() => ['color', 'colorVersion'], [])
+  const LAMINATE_GROUP = useMemo(() => ['rawFabricGsm', 'finishedGsm', 'coatingGsm', 'isLaminated'], [])
+  const PACKING_GROUP = useMemo(() => ['primaryPackingType', 'piecesPerCarton', 'piecesPerBale'], [])
+  const PALLET_GROUP = useMemo(() => ['onPallet', 'palletDimensions', 'secondaryPackingType'], [])
+
+  const isFieldMatch = useCallback((issueField: string, targetField: string): boolean => {
+    if (issueField === targetField || issueField.startsWith(targetField)) return true
+    if (LENGTH_GROUP.includes(issueField) && LENGTH_GROUP.includes(targetField)) return true
+    if (COLOR_GROUP.includes(issueField) && COLOR_GROUP.includes(targetField)) return true
+    if (LAMINATE_GROUP.includes(issueField) && LAMINATE_GROUP.includes(targetField)) return true
+    if (PACKING_GROUP.includes(issueField) && PACKING_GROUP.includes(targetField)) return true
+    if (PALLET_GROUP.includes(issueField) && PALLET_GROUP.includes(targetField)) return true
+    return false
+  }, [LENGTH_GROUP, COLOR_GROUP, LAMINATE_GROUP, PACKING_GROUP, PALLET_GROUP])
+
+  const getFieldErrorMsg = useCallback((subLineIndex: number, fieldName: string): string | undefined => {
+    const lineErr = lineErrors.find((e) => e.line === subLineIndex)
+    if (!lineErr) return undefined
+    const matchedIssue = lineErr.issues?.find((issue) => isFieldMatch(issue.field, fieldName))
+    return matchedIssue?.message
+  }, [lineErrors, isFieldMatch])
+
+  const hasFieldError = useCallback((subLineIndex: number, fieldName: string) => {
+    const lineErr = lineErrors.find((e) => e.line === subLineIndex)
+    if (!lineErr) return false
+    if (lineErr.issues && lineErr.issues.length > 0) {
+      return lineErr.issues.some((issue) => isFieldMatch(issue.field, fieldName))
+    }
+    return false
+  }, [lineErrors, isFieldMatch])
 
   const handleConfirmDiscardAndSwitch = () => {
     if (pendingTargetPi) {
       const dest = pendingTargetPi
       setPendingTargetPi(null)
-      router.push(`/orders/pi/${encodeURIComponent(dest)}`)
+      if (dest.startsWith('/')) {
+        router.push(dest)
+      } else {
+        router.push(`/orders/pi/${encodeURIComponent(dest)}`)
+      }
     }
   }
 
@@ -252,7 +407,11 @@ export default function PiMasterDetailEditor({
     const success = await handleSaveAll()
     if (success) {
       setPendingTargetPi(null)
-      router.push(`/orders/pi/${encodeURIComponent(dest)}`)
+      if (dest.startsWith('/')) {
+        router.push(dest)
+      } else {
+        router.push(`/orders/pi/${encodeURIComponent(dest)}`)
+      }
     }
   }
 
@@ -265,6 +424,13 @@ export default function PiMasterDetailEditor({
       // Auto-update orderType when packingType changes
       if (field === 'primaryPackingType') {
         current.orderType = deriveOrderTypeFromPacking(value, null)
+        if (value === 'HEMMED') {
+          current.piecesPerCarton = ''
+          current.piecesPerBale = ''
+          current.boxDimensions = ''
+        } else {
+          current.subPackingType = ''
+        }
       }
       // If color changes and doesn't contain DESERT, reset colorVersion to STD
       if (field === 'color') {
@@ -276,7 +442,10 @@ export default function PiMasterDetailEditor({
       next[index] = current
       return next
     })
-  }, [])
+
+    // Reactive error clearing: Clear error for this subline when user modifies it
+    setLineErrors((prev) => prev.filter((e) => e.line !== (lines[index]?.subLineIndex ?? (index + 1))))
+  }, [lines])
 
   // Add line
   const handleAddLine = useCallback(() => {
@@ -289,6 +458,7 @@ export default function PiMasterDetailEditor({
             subLineIndex: prev.length + 1,
             color: lastLine.color,
             colorVersion: lastLine.colorVersion || 'STD',
+            itemCode: '',
             assignments: [],
           }
         : {
@@ -331,6 +501,7 @@ export default function PiMasterDetailEditor({
             needleCount: 18,
             beamCount: '',
             mbCode: '',
+  itemCode: '',
             hasEyelet: false,
             eyeletColor: '',
             eyeletLines: '',
@@ -421,6 +592,60 @@ export default function PiMasterDetailEditor({
     setSaving(true)
     setErrorMessage(null)
     setSuccessMessage(null)
+    setLineErrors([])
+    setHeaderErrors({})
+
+    // 0. Header Pre-validation (Khách hàng & Ngày đặt hàng)
+    const hErrors: { customer?: string; orderDate?: string } = {}
+    if (!customer || !customer.trim()) {
+      hErrors.customer = 'Tên khách hàng là bắt buộc.'
+    }
+    if (!orderDate || !/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) {
+      hErrors.orderDate = 'Ngày đặt hàng không hợp lệ (YYYY-MM-DD).'
+    }
+
+    if (Object.keys(hErrors).length > 0) {
+      setHeaderErrors(hErrors)
+      setErrorMessage('Vui lòng điền đầy đủ thông tin Khách hàng và Ngày đặt hàng ở phía trên.')
+      setSaving(false)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      const firstId = hErrors.customer ? 'header-customer' : 'header-order-date'
+      setTimeout(() => document.getElementById(firstId)?.focus(), 150)
+      return false
+    }
+
+    // 1. Client-Side Pre-validation (Sub-lines)
+    const schemaToUse = lifecycleStatus === 'DRAFT' ? draftLineSchema : lineSchema
+    const clientIssues: LineValidationError[] = []
+
+    lines.forEach((l, idx) => {
+      const lineNum = l.subLineIndex ?? (idx + 1)
+      const sanitized = cleanSubLineForValidation(l)
+      const parseRes = schemaToUse.safeParse(sanitized)
+      if (!parseRes.success) {
+        clientIssues.push({
+          line: lineNum,
+          errors: parseRes.error.issues.map((i) => i.message),
+          issues: parseRes.error.issues.map((i) => ({
+            field: i.path.join('.'),
+            message: i.message,
+          })),
+        })
+      }
+    })
+
+    if (clientIssues.length > 0) {
+      setLineErrors(clientIssues)
+      setErrorMessage(`Dữ liệu không hợp lệ tại ${clientIssues.length} dòng sản phẩm. Vui lòng kiểm tra các ô được đánh dấu đỏ.`)
+      setSaving(false)
+
+      const firstErr = clientIssues[0]
+      const firstIdx = lines.findIndex((l) => (l.subLineIndex ?? 0) === firstErr.line)
+      if (firstIdx !== -1) {
+        scrollToAndExpandLine(firstErr.line, firstIdx, firstErr.issues)
+      }
+      return false
+    }
 
     try {
       const payload = {
@@ -432,9 +657,9 @@ export default function PiMasterDetailEditor({
         description: description || null,
         remark: remark || null,
         lifecycleStatus,
-        isPlaceholder: lifecycleStatus === 'PLACEHOLDER',
+        isPlaceholder: lifecycleStatus === 'RESERVED',
         expectedUpdatedAt: initialUpdatedAt ?? undefined,
-        lines,
+        lines: lines.map(cleanSubLineForValidation),
       }
 
       const res = await fetch(`/api/orders/pi/${encodeURIComponent(initialPiNumber)}`, {
@@ -445,14 +670,24 @@ export default function PiMasterDetailEditor({
 
       const data = await res.json()
       if (!res.ok || !data.success) {
+        if (data.details && Array.isArray(data.details)) {
+          setLineErrors(data.details)
+          const firstErr = data.details[0]
+          const firstIdx = lines.findIndex((l) => (l.subLineIndex ?? 0) === firstErr.line)
+          if (firstIdx !== -1) {
+            scrollToAndExpandLine(firstErr.line, firstIdx, firstErr.issues)
+          }
+        }
         throw new Error(data.error || 'Có lỗi xảy ra khi lưu đơn hàng.')
       }
 
-      setSuccessMessage(data.message || 'Lưu đơn hàng PI thành công!')
+      toast.success(data.message || 'Lưu đơn hàng PI thành công!')
+      setSuccessMessage(null)
       router.refresh()
       return true
     } catch (err: any) {
       setErrorMessage(err.message || 'Lỗi khi lưu đơn hàng.')
+      toast.error(err.message || 'Lỗi khi lưu đơn hàng.')
       return false
     } finally {
       setSaving(false)
@@ -461,6 +696,15 @@ export default function PiMasterDetailEditor({
 
   return (
     <div className="max-w-[1440px] mx-auto px-4 sm:px-6 py-6 space-y-6">
+      {/* Native datalist for Item Code autocomplete */}
+      <datalist id="pme-itemcode-options">
+        {itemCodeOptions.map((opt) => (
+          <option key={opt.code} value={opt.code}>
+            {opt.label}
+          </option>
+        ))}
+      </datalist>
+
       {/* Breadcrumb Navigation */}
       <nav className="flex items-center gap-2 text-sm text-on-surface-variant font-medium">
         <Link href="/orders" onClick={handleBackToOrders} className="hover:text-primary transition-colors">
@@ -469,35 +713,66 @@ export default function PiMasterDetailEditor({
         <span className="material-symbols-outlined text-[16px]">chevron_right</span>
         <span className="font-mono text-on-surface">{initialPiNumber}</span>
         <span className="material-symbols-outlined text-[16px]">chevron_right</span>
-        <span className="text-primary font-semibold">Chỉnh sửa toàn diện (Master-Detail)</span>
+        <span className="text-primary font-semibold">Chỉnh sửa đơn hàng</span>
       </nav>
-
-
 
       {/* Alerts */}
       {errorMessage && (
-        <div className="p-4 bg-error/10 border border-error/30 text-error rounded-lg flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined">error</span>
-            <span className="font-medium text-sm">{errorMessage}</span>
+        <div className="p-4 bg-error/10 border border-error/30 text-error rounded-xl shadow-xs space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-[22px]">error</span>
+              <span className="font-bold text-sm">{errorMessage}</span>
+            </div>
+            <button
+              onClick={() => {
+                setErrorMessage(null)
+                setLineErrors([])
+              }}
+              className="text-xs font-semibold hover:underline px-2 py-1 rounded hover:bg-error/10 transition-colors cursor-pointer"
+            >
+              Đóng
+            </button>
           </div>
-          <button onClick={() => setErrorMessage(null)} className="text-sm font-semibold hover:underline">
-            Đóng
-          </button>
+
+          {/* Cards chi tiết theo từng dòng lỗi */}
+          {lineErrors.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 pt-2 border-t border-error/20">
+              {lineErrors.map((err) => {
+                const lineIdx = lines.findIndex((l) => (l.subLineIndex ?? 0) === err.line)
+                return (
+                  <div
+                    key={err.line}
+                    className="bg-surface/90 border border-error/40 rounded-lg p-3 text-xs space-y-1.5 shadow-xs"
+                  >
+                    <div className="flex items-center justify-between font-bold text-error">
+                      <span className="flex items-center gap-1">
+                        <span className="material-symbols-outlined text-[15px]">report_problem</span>
+                        Dòng #{err.line}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => scrollToAndExpandLine(err.line, lineIdx, err.issues)}
+                        className="px-2 py-0.5 bg-error/15 hover:bg-error/25 text-error font-semibold rounded text-[11px] transition-colors flex items-center gap-1 cursor-pointer"
+                      >
+                        Đi tới dòng này
+                        <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
+                      </button>
+                    </div>
+                    <ul className="list-disc pl-4 space-y-0.5 text-on-surface-variant font-normal">
+                      {err.errors.map((msg, i) => (
+                        <li key={i} className="leading-snug">{msg}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
 
-      {successMessage && (
-        <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 rounded-lg flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined">check_circle</span>
-            <span className="font-medium text-sm">{successMessage}</span>
-          </div>
-          <button onClick={() => setSuccessMessage(null)} className="text-sm font-semibold hover:underline">
-            Đóng
-          </button>
-        </div>
-      )}
+
 
       {/* HEADER CARD: PI & Customer Information */}
       <div className="bg-surface border border-outline-variant rounded-xl p-6 shadow-sm space-y-4">
@@ -514,133 +789,170 @@ export default function PiMasterDetailEditor({
               className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
                 lifecycleStatus === 'APPROVED'
                   ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
-                  : lifecycleStatus === 'PLACEHOLDER'
+                  : lifecycleStatus === 'RESERVED' || (lifecycleStatus as string) === 'RESERVE' || (lifecycleStatus as string) === 'PLACEHOLDER'
                   ? 'bg-amber-500/15 text-amber-600 border border-amber-500/30'
                   : 'bg-zinc-500/15 text-zinc-600 border border-zinc-500/30'
               }`}
             >
-              {lifecycleStatus === 'APPROVED' ? 'Chính thức (Approved)' : lifecycleStatus === 'PLACEHOLDER' ? 'Giữ chỗ máy (Placeholder)' : 'Bản nháp (Draft)'}
+              {lifecycleStatus === 'APPROVED' ? 'Đã chốt — sản xuất (APPROVED)' : (lifecycleStatus === 'RESERVED' || (lifecycleStatus as string) === 'RESERVE' || (lifecycleStatus as string) === 'PLACEHOLDER') ? 'Giữ chỗ máy (RESERVED)' : 'Đơn nháp (DRAFT)'}
             </span>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            {/* Nút Quay lại - Đặt ở đầu thanh tác vụ kèm icon */}
+            <Link
+              href="/orders"
+              onClick={handleBackToOrders}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-outline-variant bg-surface hover:bg-surface-variant text-on-surface rounded-lg text-sm font-medium transition-colors shadow-xs whitespace-nowrap"
+            >
+              <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+              <span>Quay lại</span>
+            </Link>
+
+            {lineErrors.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const firstErr = lineErrors[0]
+                  const firstIdx = lines.findIndex((l) => (l.subLineIndex ?? 0) === firstErr.line)
+                  if (firstIdx !== -1) {
+                    scrollToAndExpandLine(firstErr.line, firstIdx, firstErr.issues)
+                  }
+                }}
+                className="hidden sm:inline-flex items-center gap-1.5 text-xs text-error bg-error/10 hover:bg-error/20 border border-error/30 px-3 py-1.5 rounded-full font-bold transition-colors cursor-pointer whitespace-nowrap"
+                title="Bấm để cuộn đến dòng lỗi đầu tiên"
+              >
+                <span className="material-symbols-outlined text-[15px]">error</span>
+                <span>{lineErrors.length} dòng có lỗi</span>
+              </button>
+            )}
+
             {isDirty && (
-              <span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-amber-600 bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded-full font-medium">
+              <span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-amber-700 bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded-full font-medium whitespace-nowrap">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
                 Chưa lưu thay đổi
               </span>
             )}
-            <Link
-              href="/orders"
-              onClick={handleBackToOrders}
-              className="px-4 py-2 border border-outline-variant rounded-lg text-sm font-medium hover:bg-surface-variant transition-colors"
-            >
-              Quay lại
-            </Link>
+
             <button
               onClick={handleSaveAll}
               disabled={saving}
-              className="px-5 py-2 bg-primary hover:bg-primary/90 text-on-primary font-medium text-sm rounded-lg shadow-sm flex items-center gap-2 transition-all disabled:opacity-60"
+              className="inline-flex items-center gap-2 px-4 sm:px-5 py-2 bg-primary hover:bg-primary/90 text-on-primary font-semibold text-sm rounded-lg shadow-sm transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap"
             >
               {saving ? (
                 <>
                   <span className="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
-                  Đang lưu...
+                  <span>Đang lưu...</span>
                 </>
               ) : (
                 <>
                   <span className="material-symbols-outlined text-[18px]">save</span>
-                  Lưu tất cả thay đổi
+                  <span>Lưu tất cả thay đổi</span>
                 </>
               )}
             </button>
           </div>
         </div>
 
-        {/* Header Fields Form */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-4 pt-4 pb-1">
-          <div>
+        {/* Header Fields Form - Lưới 12 cột cân đối tỷ lệ */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-x-5 gap-y-4 pt-4 pb-1">
+          {/* Khách hàng (4/12 cột) */}
+          <div className="lg:col-span-4">
             <label className="block text-xs font-semibold text-on-surface-variant mb-1.5 flex items-center gap-1">
               <span>Khách hàng</span>
               <span className="text-red-500">*</span>
             </label>
             <input
+              id="header-customer"
               type="text"
               value={customer}
-              onChange={(e) => setCustomer(e.target.value)}
-              className="w-full bg-surface-variant/40 border border-outline-variant rounded-lg px-3.5 py-2.5 text-sm font-medium focus:border-primary focus:bg-surface focus:outline-none transition-all shadow-xs"
+              onChange={(e) => {
+                setCustomer(e.target.value)
+                if (headerErrors.customer) {
+                  setHeaderErrors((prev) => ({ ...prev, customer: undefined }))
+                }
+              }}
+              className={`w-full bg-surface border rounded-lg px-3.5 py-2.5 text-sm font-medium focus:outline-none transition-all shadow-xs ${
+                headerErrors.customer
+                  ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                  : 'border-outline-variant focus:border-primary focus:ring-1 focus:ring-primary/20'
+              }`}
               required
             />
+            {headerErrors.customer && (
+              <p className="text-[11px] text-error mt-1 font-medium flex items-center gap-1">
+                <span className="material-symbols-outlined text-[13px]">error</span>
+                {headerErrors.customer}
+              </p>
+            )}
           </div>
 
-          <div>
+          {/* Ngày đặt hàng (2/12 cột) */}
+          <div className="lg:col-span-2">
             <label className="block text-xs font-semibold text-on-surface-variant mb-1.5 flex items-center gap-1">
               <span>Ngày đặt hàng</span>
               <span className="text-red-500">*</span>
             </label>
             <input
+              id="header-order-date"
               type="date"
               value={orderDate}
-              onChange={(e) => setOrderDate(e.target.value)}
-              className="w-full bg-surface-variant/40 border border-outline-variant rounded-lg px-3.5 py-2.5 text-sm font-medium focus:border-primary focus:bg-surface focus:outline-none transition-all shadow-xs"
+              onChange={(e) => {
+                setOrderDate(e.target.value)
+                if (headerErrors.orderDate) {
+                  setHeaderErrors((prev) => ({ ...prev, orderDate: undefined }))
+                }
+              }}
+              className={`w-full bg-surface border rounded-lg px-3.5 py-2.5 text-sm font-medium focus:outline-none transition-all shadow-xs ${
+                headerErrors.orderDate
+                  ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                  : 'border-outline-variant focus:border-primary focus:ring-1 focus:ring-primary/20'
+              }`}
               required
             />
+            {headerErrors.orderDate && (
+              <p className="text-[11px] text-error mt-1 font-medium flex items-center gap-1">
+                <span className="material-symbols-outlined text-[13px]">error</span>
+                {headerErrors.orderDate}
+              </p>
+            )}
           </div>
 
-          <div>
+          {/* Ngày giao hàng (2/12 cột) */}
+          <div className="lg:col-span-2">
             <label className="block text-xs font-semibold text-on-surface-variant mb-1.5">Ngày giao hàng</label>
             <input
               type="date"
               value={deliveryDate}
               onChange={(e) => setDeliveryDate(e.target.value)}
-              className="w-full bg-surface-variant/40 border border-outline-variant rounded-lg px-3.5 py-2.5 text-sm focus:border-primary focus:bg-surface focus:outline-none transition-all shadow-xs"
+              className="w-full bg-surface border border-outline-variant rounded-lg px-3.5 py-2.5 text-sm focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none transition-all shadow-xs"
             />
           </div>
 
-          <div>
+          {/* Container Size (4/12 cột) */}
+          <div className="lg:col-span-4">
             <label className="block text-xs font-semibold text-on-surface-variant mb-1.5">Container Size</label>
             <input
               type="text"
               value={containerSize}
               onChange={(e) => setContainerSize(e.target.value)}
               placeholder="VD: 40HQ x 1, 20FT x 1"
-              className="w-full bg-surface-variant/40 border border-outline-variant rounded-lg px-3.5 py-2.5 text-sm focus:border-primary focus:bg-surface focus:outline-none transition-all shadow-xs"
+              className="w-full bg-surface border border-outline-variant rounded-lg px-3.5 py-2.5 text-sm focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none transition-all shadow-xs"
             />
           </div>
 
-          {/* Row 2: Lifecycle Status (1 col) + Ghi chú chung (3 cols with multi-line textarea) */}
-          <div className="flex flex-col justify-start">
-            <label className="block text-xs font-semibold text-on-surface-variant mb-1.5 flex items-center gap-1">
-              <span>Trạng thái vòng đời</span>
-              <span className="text-red-500">*</span>
-            </label>
-            <select
-              value={lifecycleStatus}
-              onChange={(e) => setLifecycleStatus(e.target.value as any)}
-              className="w-full bg-surface-variant/40 border border-outline-variant rounded-lg px-3.5 py-2.5 text-sm font-semibold text-primary focus:border-primary focus:bg-surface focus:outline-none transition-all shadow-xs"
-            >
-              <option value="APPROVED">APPROVED — Đơn chính thức</option>
-              <option value="PLACEHOLDER">PLACEHOLDER — Đơn giữ chỗ</option>
-              <option value="DRAFT">DRAFT — Bản nháp</option>
-            </select>
-            <p className="text-[11px] text-on-surface-variant/75 mt-1.5 leading-tight">
-              {lifecycleStatus === 'APPROVED' && 'Đủ điều kiện phân bổ vào 40 máy dệt.'}
-              {lifecycleStatus === 'PLACEHOLDER' && 'Đơn giữ chỗ dệt (viền nét đứt).'}
-              {lifecycleStatus === 'DRAFT' && 'Bản nháp tạm chặn đưa vào dệt.'}
-            </p>
-          </div>
-
-          <div className="lg:col-span-3">
+          {/* Row 2: Ghi chú chung (Remark) - Mở rộng toàn bộ 12 cột, loại bỏ dropdown vòng đời trùng lặp */}
+          <div className="lg:col-span-12">
             <label className="block text-xs font-semibold text-on-surface-variant mb-1.5 flex items-center justify-between">
               <span>Ghi chú chung đơn hàng (Remark / Description)</span>
-              <span className="text-[11px] font-normal text-on-surface-variant/60">Nhiều dòng · Tối đa 200 ký tự</span>
+              <span className="text-[11px] font-normal text-on-surface-variant/60">Tối đa 200 ký tự</span>
             </label>
             <textarea
               rows={2}
               value={remark}
               onChange={(e) => setRemark(e.target.value)}
               placeholder="Nhập ghi chú điều hành sản xuất xuất khẩu (tiến độ xuất cont, yêu cầu tem nhãn barcode, đóng gói riêng, lưu ý khách hàng...)"
-              className="w-full bg-surface-variant/40 border border-outline-variant rounded-lg px-3.5 py-2 text-sm focus:border-primary focus:bg-surface focus:outline-none transition-all shadow-xs resize-y min-h-[74px]"
+              className="w-full bg-surface border border-outline-variant rounded-lg px-3.5 py-2 text-sm focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none transition-all shadow-xs resize-y min-h-[64px]"
             />
           </div>
         </div>
@@ -703,6 +1015,7 @@ export default function PiMasterDetailEditor({
             <thead>
               <tr className="bg-surface-variant/60 text-on-surface-variant text-xs font-semibold uppercase border-b border-outline-variant">
                 <th className="py-3 px-2 w-10 text-center">NO</th>
+                <th className="py-3 px-3 min-w-[170px]">Item Code</th>
                 <th className="py-3 px-3 min-w-[160px]">Màu & Phiên bản</th>
                 <th className="py-3 px-2 min-w-[80px]">Khổ (m)</th>
                 <th className="py-3 px-2 min-w-[80px]">GSM</th>
@@ -733,29 +1046,112 @@ export default function PiMasterDetailEditor({
                 })
 
                 const isExpanded = activeExpandedLine === idx
-                const isHighlighted = targetLineParam != null && line.subLineIndex === Number(targetLineParam)
+                const isHighlighted =
+                  (targetLineParam != null && line.subLineIndex === Number(targetLineParam)) ||
+                  (targetLineId != null && line.id === targetLineId)
+                const lineErr = getLineError(line.subLineIndex)
+                const isError = Boolean(lineErr)
 
                 return (
-                  <React.Fragment key={idx}>
+                  <React.Fragment key={line.id || `subline-${line.subLineIndex}`}>
                     <tr
                       id={`subline-row-${line.subLineIndex}`}
                       className={`hover:bg-surface-variant/20 transition-colors ${
-                        isExpanded ? 'bg-primary/5 font-medium' : ''
+                        isError
+                          ? 'bg-error/5 border-l-4 border-l-error font-medium'
+                          : isExpanded
+                          ? 'bg-primary/5 font-medium'
+                          : ''
                       } ${isHighlighted ? 'ring-2 ring-primary ring-inset bg-primary/10' : ''}`}
                     >
                       {/* NO */}
                       <td className="py-2.5 px-2 font-mono font-bold text-center text-primary text-xs">
-                        <button
-                          type="button"
-                          onClick={() => setActiveExpandedLine(isExpanded ? null : idx)}
-                          title="Bấm để mở rộng/thu gọn chi tiết"
-                          className="hover:underline flex items-center justify-center gap-1 mx-auto"
-                        >
-                          <span className="material-symbols-outlined text-[14px] text-secondary">
-                            {isExpanded ? 'expand_less' : 'expand_more'}
-                          </span>
-                          {line.subLineIndex}
-                        </button>
+                        <div className="flex items-center justify-center gap-1">
+                          {isError && (
+                            <span
+                              className="material-symbols-outlined text-error text-[16px] animate-pulse shrink-0"
+                              title={lineErr?.errors.join('\n')}
+                            >
+                              error
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setActiveExpandedLine(isExpanded ? null : idx)}
+                            title="Bấm để mở rộng/thu gọn chi tiết"
+                            className="hover:underline flex items-center justify-center gap-0.5 mx-auto"
+                          >
+                            <span className="material-symbols-outlined text-[14px] text-secondary">
+                              {isExpanded ? 'expand_less' : 'expand_more'}
+                            </span>
+                            {line.subLineIndex}
+                          </button>
+                        </div>
+                      </td>
+
+                      {/* Item Code (bên trái Màu & Phiên bản - đồng bộ với Create) */}
+                      <td className="py-2.5 px-3">
+                        {(() => {
+                          const allCodes = lines.map((l) => l.itemCode || '')
+                          const matched = itemCodeOptions.find((opt) => opt.code.toUpperCase() === (line.itemCode || '').trim().toUpperCase())
+                          const conflict = matched ? computeItemCodePrefillPatch(line, matched).conflictWarning : undefined
+                          const warns = itemCodeWarnings(allCodes, idx, conflict)
+                          const hasWarn = warns.length > 0
+                          return (
+                            <div className="relative">
+                              <input
+                                type="text"
+                                list="pme-itemcode-options"
+                                value={line.itemCode}
+                                onChange={(e) => {
+                                  const val = e.target.value
+                                  const matchedOpt = itemCodeOptions.find((opt) => opt.code.toUpperCase() === val.trim().toUpperCase())
+                                  if (matchedOpt) {
+                                    const { patch } = computeItemCodePrefillPatch(line, matchedOpt)
+                                    setLines((prev) => {
+                                      const next = [...prev]
+                                      const updated = { ...next[idx], itemCode: val }
+                                      if (patch.color) {
+                                        updated.color = patch.color
+                                        updated.colorVersion = patch.colorVersion || 'STD'
+                                      }
+                                      if (patch.uvPct != null) {
+                                        updated.uvPct = typeof patch.uvPct === 'number' ? patch.uvPct : Number(patch.uvPct)
+                                      }
+                                      if (patch.meshType) {
+                                        updated.meshType = patch.meshType
+                                      }
+                                      if (patch.mbCode) {
+                                        updated.mbCode = patch.mbCode
+                                      }
+                                      next[idx] = updated
+                                      return next
+                                    })
+                                  } else {
+                                    updateLineField(idx, 'itemCode', val)
+                                  }
+                                }}
+                                placeholder="e.g. GBN1GRE..."
+                                title={warns.length > 0 ? warns.join('; ') : "Item Code theo dòng"}
+                                className={`w-full font-mono bg-surface-variant/30 border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
+                                  hasWarn
+                                    ? 'border-amber-500/60 bg-amber-500/5 focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30'
+                                    : 'border-outline-variant/70 focus:border-primary'
+                                }`}
+                              />
+                              {hasWarn && (
+                                <div className="mt-1 space-y-0.5">
+                                  {warns.map((w, wi) => (
+                                    <p key={wi} className="text-[10px] text-amber-700 dark:text-amber-300 font-medium flex items-center gap-1 leading-tight">
+                                      <span className="material-symbols-outlined text-[12px] text-amber-600 dark:text-amber-400 shrink-0">warning</span>
+                                      <span>{w}</span>
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </td>
 
                       {/* Color & Version */}
@@ -763,21 +1159,121 @@ export default function PiMasterDetailEditor({
                         <input
                           type="text"
                           value={line.color}
-                          onChange={(e) => updateLineField(idx, 'color', e.target.value.toUpperCase())}
+                          onChange={(e) => {
+                            const val = e.target.value.toUpperCase()
+                            updateLineField(idx, 'color', val)
+                            if (val.includes('DESERT')) {
+                              if (line.colorVersion !== 'Version A' && line.colorVersion !== 'Version B') {
+                                updateLineField(idx, 'colorVersion', 'Version A')
+                              }
+                            } else {
+                              updateLineField(idx, 'colorVersion', 'STD')
+                            }
+                          }}
+                          onFocus={(e) => {
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            setDropdownPos({ top: rect.bottom + 4, left: rect.left })
+                            setActiveColorDropdownIdx(idx)
+                          }}
+                          onBlur={() => setTimeout(() => setActiveColorDropdownIdx(null), 250)}
                           placeholder="Màu sắc"
-                          className="w-full bg-surface-variant/30 border border-outline-variant/70 rounded px-2 py-1 text-xs font-semibold focus:border-primary focus:outline-none uppercase"
+                          className={`w-full bg-surface-variant/30 border rounded px-2 py-1 text-xs font-semibold focus:outline-none uppercase transition-colors ${
+                            hasFieldError(line.subLineIndex, 'color')
+                              ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                              : 'border-outline-variant/70 focus:border-primary'
+                          }`}
                         />
-                        {line.color?.toUpperCase().includes('DESERT') && (
-                          <div className="mt-1">
-                            <select
-                              value={line.colorVersion || 'STD'}
-                              onChange={(e) => updateLineField(idx, 'colorVersion', e.target.value)}
-                              className="w-full bg-surface-variant/30 border border-outline-variant/70 rounded px-1.5 py-0.5 text-[11px] text-primary font-medium focus:outline-none"
+
+                        {/* Autocomplete dropdown: Gợi ý màu công thức xưởng tiêu chuẩn */}
+                        {activeColorDropdownIdx === idx && dropdownPos && (() => {
+                          const search = (line.color || '').trim().toUpperCase()
+                          const filteredPresets = FACTORY_COLOR_PRESETS.filter((p) => {
+                            if (!search) return true
+                            return (
+                              p.color.includes(search) ||
+                              p.name.toUpperCase().includes(search) ||
+                              (p.mbCode && p.mbCode.toUpperCase().includes(search)) ||
+                              (p.tags && p.tags.some((t) => t.includes(search)))
+                            )
+                          })
+
+                          return (
+                            <div
+                              ref={colorDropdownRef}
+                              onMouseDown={(e) => {
+                                // Prevent input from losing focus / blurring when clicking scrollbar or popover body
+                                e.preventDefault()
+                              }}
+                              style={{
+                                position: 'fixed',
+                                top: `${dropdownPos.top}px`,
+                                left: `${dropdownPos.left}px`,
+                              }}
+                              className="z-[9999] bg-surface-container-lowest border border-outline-variant rounded-md shadow-2xl p-1.5 text-left w-64 divide-y divide-outline-variant/30"
                             >
-                              <option value="STD">Tiêu chuẩn (STD)</option>
-                              <option value="Version A">Version A (MB Korea)</option>
-                              <option value="Version B">Version B (MB Arirang)</option>
-                            </select>
+                              <div>
+                                <div className="px-1.5 py-0.5 text-[10px] font-semibold text-secondary uppercase tracking-wider mb-1 flex items-center justify-between">
+                                  <span>Màu công thức xưởng</span>
+                                  <span className="text-[9px] font-mono text-secondary/70">({filteredPresets.length})</span>
+                                </div>
+                                <div className="max-h-56 overflow-y-auto space-y-1 pr-0.5 overscroll-contain">
+                                  {filteredPresets.length > 0 ? (
+                                    filteredPresets.map((preset) => (
+                                      <button
+                                        key={preset.name}
+                                        type="button"
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={() => {
+                                          updateLineField(idx, 'color', preset.color)
+                                          updateLineField(idx, 'colorVersion', preset.version)
+                                          setActiveColorDropdownIdx(null)
+                                        }}
+                                        className="w-full px-2 py-1.5 text-left rounded hover:bg-primary/10 transition-colors border border-outline-variant/40 flex flex-col"
+                                      >
+                                        <span className="font-semibold text-xs text-primary">{preset.name}</span>
+                                        <span className="text-[9px] text-secondary font-mono">{preset.subText}</span>
+                                      </button>
+                                    ))
+                                  ) : (
+                                    <div className="py-3 px-2 text-center text-xs text-secondary">
+                                      <div>Màu tùy biến: <span className="font-semibold text-on-surface">&quot;{search}&quot;</span></div>
+                                      <div className="text-[10px] text-secondary/70 mt-0.5">Sẽ lưu phiên bản STD</div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })()}
+
+                        {line.color?.toUpperCase().includes('DESERT') && (
+                          <div className={`mt-1 flex items-center gap-1 p-0.5 rounded transition-all ${
+                            hasFieldError(line.subLineIndex, 'colorVersion') ? 'ring-1 ring-error bg-error/5' : ''
+                          }`}>
+                            <button
+                              type="button"
+                              onClick={() => updateLineField(idx, 'colorVersion', 'Version A')}
+                              title="Bản A: MB Korea (Dark Beige 3160-2, MB 3.0%)"
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors flex-1 text-center ${
+                                line.colorVersion === 'Version A'
+                                  ? 'bg-primary text-on-primary border-primary font-bold shadow-xs'
+                                  : 'bg-surface hover:bg-surface-variant text-secondary border-outline-variant'
+                              }`}
+                            >
+                              Ver A (Korea)
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateLineField(idx, 'colorVersion', 'Version B')}
+                              title="Bản B: MB Arirang (Beige 8005A, MB 3.0%)"
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors flex-1 text-center ${
+                                line.colorVersion === 'Version B'
+                                  ? 'bg-primary text-on-primary border-primary font-bold shadow-xs'
+                                  : 'bg-surface hover:bg-surface-variant text-secondary border-outline-variant'
+                              }`}
+                            >
+                              Ver B (Arirang)
+                            </button>
                           </div>
                         )}
                       </td>
@@ -789,7 +1285,12 @@ export default function PiMasterDetailEditor({
                           step="0.01"
                           value={line.widthM}
                           onChange={(e) => updateLineField(idx, 'widthM', e.target.value === '' ? '' : Number(e.target.value))}
-                          className="w-full font-mono bg-surface-variant/30 border border-outline-variant/70 rounded px-2 py-1 text-xs focus:border-primary focus:outline-none"
+                          title={getFieldErrorMsg(line.subLineIndex, 'widthM') || 'Khổ rộng (m)'}
+                          className={`w-full font-mono bg-surface-variant/30 border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
+                            hasFieldError(line.subLineIndex, 'widthM')
+                              ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                              : 'border-outline-variant/70 focus:border-primary'
+                          }`}
                         />
                       </td>
 
@@ -800,21 +1301,41 @@ export default function PiMasterDetailEditor({
                           value={line.gsm}
                           onChange={(e) => updateLineField(idx, 'gsm', e.target.value === '' ? '' : Number(e.target.value))}
                           placeholder="GSM"
-                          title="GSM theo đơn đặt hàng"
-                          className="w-full font-mono bg-surface-variant/30 border border-outline-variant/70 rounded px-2 py-1 text-xs focus:border-primary focus:outline-none"
+                          title={getFieldErrorMsg(line.subLineIndex, 'gsm') || 'GSM theo đơn đặt hàng'}
+                          className={`w-full font-mono bg-surface-variant/30 border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
+                            hasFieldError(line.subLineIndex, 'gsm')
+                              ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                              : 'border-outline-variant/70 focus:border-primary'
+                          }`}
                         />
                       </td>
 
                       {/* Packing Type (ROLL / BALE / CARTON) */}
-                      <td className="py-2.5 px-3">
+                      <td className="py-2.5 px-3 min-w-[176px]">
                         <select
                           value={line.primaryPackingType}
-                          onChange={(e) => updateLineField(idx, 'primaryPackingType', e.target.value)}
-                          className="w-full bg-surface-variant/50 border border-outline-variant rounded px-2 py-1 text-xs font-semibold text-primary focus:outline-none"
+                          onChange={(e) => {
+                            const val = e.target.value
+                            updateLineField(idx, 'primaryPackingType', val)
+                            if (val === 'HEMMED') {
+                              updateLineField(idx, 'piecesPerCarton', '')
+                              updateLineField(idx, 'piecesPerBale', '')
+                              updateLineField(idx, 'boxDimensions', '')
+                            } else {
+                              updateLineField(idx, 'subPackingType', '')
+                            }
+                          }}
+                          title={getFieldErrorMsg(line.subLineIndex, 'primaryPackingType') || 'Kiểu đóng gói'}
+                          className={`w-full bg-surface-variant/50 border rounded px-2 py-1 text-xs font-semibold text-primary focus:outline-none transition-colors ${
+                            hasFieldError(line.subLineIndex, 'primaryPackingType')
+                              ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                              : 'border-outline-variant'
+                          }`}
                         >
                           <option value="ROLL">Theo cuộn (ROLL)</option>
                           <option value="CARTON">Thùng (CARTON)</option>
                           <option value="BALE">Kiện nén (BALE)</option>
+                          <option value="HEMMED">May viền (HEMMED)</option>
                         </select>
                       </td>
 
@@ -825,7 +1346,12 @@ export default function PiMasterDetailEditor({
                           value={line.qty}
                           onChange={(e) => updateLineField(idx, 'qty', e.target.value === '' ? '' : Number(e.target.value))}
                           placeholder={line.primaryPackingType === 'CARTON' ? 'Số tấm' : 'Số cuộn'}
-                          className="w-full font-mono bg-surface-variant/30 border border-outline-variant/70 rounded px-2 py-1 text-xs focus:border-primary focus:outline-none"
+                          title={getFieldErrorMsg(line.subLineIndex, 'qty') || (line.primaryPackingType === 'CARTON' ? 'Số tấm' : 'Số cuộn')}
+                          className={`w-full font-mono bg-surface-variant/30 border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
+                            hasFieldError(line.subLineIndex, 'qty')
+                              ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                              : 'border-outline-variant/70 focus:border-primary'
+                          }`}
                         />
                       </td>
 
@@ -860,13 +1386,40 @@ export default function PiMasterDetailEditor({
                               ? 'Dài tấm (m)'
                               : 'Tổng mét'
                           }
-                          className="w-full font-mono bg-surface-variant/30 border border-outline-variant/70 rounded px-2 py-1 text-xs focus:border-primary focus:outline-none"
+                          title={
+                            getFieldErrorMsg(line.subLineIndex, 'lengthM') ||
+                            (line.primaryPackingType === 'ROLL'
+                              ? 'Chiều dài cuộn (m/cuộn)'
+                              : line.primaryPackingType === 'CARTON'
+                              ? 'Chiều dài tấm (m)'
+                              : 'Tổng chiều dài (m)')
+                          }
+                          className={`w-full font-mono bg-surface-variant/30 border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
+                            hasFieldError(line.subLineIndex, 'lengthM')
+                              ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                              : 'border-outline-variant/70 focus:border-primary'
+                          }`}
                         />
                       </td>
 
                       {/* Badges Summary */}
                       <td className="py-2.5 px-3">
                         <div className="flex flex-wrap items-center gap-1">
+                          {isError && (
+                            <button
+                              type="button"
+                              onClick={() => scrollToAndExpandLine(line.subLineIndex, idx, lineErr?.issues)}
+                              className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
+                                isExpanded
+                                  ? 'text-error bg-error/20 border border-error/50 ring-1 ring-error/50 font-bold'
+                                  : 'text-error bg-error/10 hover:bg-error/20 border border-error/30'
+                              }`}
+                              title={isExpanded ? 'Đang mở ngăn chi tiết dòng này' : 'Bấm để xem và sửa chi tiết lỗi'}
+                            >
+                              <span className="material-symbols-outlined text-[12px]">warning</span>
+                              Lỗi kỹ thuật ({lineErr?.errors.length})
+                            </button>
+                          )}
                           {line.isLaminated && (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
                               Tráng màng
@@ -879,7 +1432,7 @@ export default function PiMasterDetailEditor({
                           )}
                           {line.hasEyelet && (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-500/15 text-blue-600 border border-blue-500/30">
-                              Khoen {line.eyeletLines ? `${line.eyeletLines}L` : ''}
+                              Eyelet {line.eyeletLines ? `${line.eyeletLines}L` : ''}
                             </span>
                           )}
                           {line.onPallet && (
@@ -941,7 +1494,7 @@ export default function PiMasterDetailEditor({
                     {/* EXPANDED SUB-LINE INSPECTOR DRAWER */}
                     {isExpanded && (
                       <tr className="bg-surface-variant/15 border-b border-outline-variant">
-                        <td colSpan={11} className="p-4">
+                        <td colSpan={12} className="p-4">
                           <div className="bg-surface border border-outline-variant/80 rounded-xl p-4 shadow-sm space-y-4">
                             <div className="flex items-center justify-between pb-2 border-b border-outline-variant/40">
                               <div className="text-xs font-bold font-inter text-primary uppercase tracking-wider flex items-center gap-2">
@@ -957,6 +1510,21 @@ export default function PiMasterDetailEditor({
                                 Đóng ngăn chi tiết
                               </button>
                             </div>
+
+                            {/* Alert Box nếu dòng này có thông số chưa hợp lệ (kể cả trên bảng chính) */}
+                            {lineErr && (
+                              <div className="bg-error/10 border border-error/30 rounded-xl p-3.5 space-y-2 text-xs">
+                                <div className="flex items-center gap-2 font-bold text-error">
+                                  <span className="material-symbols-outlined text-[18px]">report_problem</span>
+                                  Dòng #{line.subLineIndex} có {lineErr.errors.length} thông số cần hoàn thiện hoặc sửa lỗi:
+                                </div>
+                                <ul className="list-disc pl-5 space-y-1 text-on-surface font-medium">
+                                  {lineErr.errors.map((msg, i) => (
+                                    <li key={i} className="leading-snug">{msg}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
 
                             {/* 3 Khối Tiến trình Xưởng */}
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -976,9 +1544,18 @@ export default function PiMasterDetailEditor({
                                       value={line.productionGsm ?? ''}
                                       onChange={(e) => updateLineField(idx, 'productionGsm', e.target.value === '' ? '' : Number(e.target.value))}
                                       placeholder="GSM dệt thực tế"
-                                      title="GSM thực tế dệt chạy (nếu khác GSM đơn)"
-                                      className="w-full font-mono bg-surface border border-outline-variant rounded px-2 py-1 text-xs text-primary focus:border-primary focus:outline-none"
+                                      title={getFieldErrorMsg(line.subLineIndex, 'productionGsm') || 'GSM thực tế dệt chạy (nếu khác GSM đơn)'}
+                                      className={`w-full font-mono bg-surface border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
+                                        hasFieldError(line.subLineIndex, 'productionGsm')
+                                          ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                                          : 'border-outline-variant text-primary focus:border-primary'
+                                      }`}
                                     />
+                                    {hasFieldError(line.subLineIndex, 'productionGsm') && (
+                                      <p className="text-[10px] text-error mt-0.5 font-medium">
+                                        {getFieldErrorMsg(line.subLineIndex, 'productionGsm')}
+                                      </p>
+                                    )}
                                   </div>
                                   <div>
                                     <label className="block text-[11px] font-medium text-secondary mb-1">Mã màu (MB Code)</label>
@@ -987,8 +1564,77 @@ export default function PiMasterDetailEditor({
                                       value={line.mbCode}
                                       onChange={(e) => updateLineField(idx, 'mbCode', e.target.value)}
                                       placeholder="e.g. MYD4501A"
-                                      className="w-full font-mono bg-surface border border-outline-variant rounded px-2 py-1 text-xs focus:border-primary focus:outline-none"
+                                      title={getFieldErrorMsg(line.subLineIndex, 'mbCode') || 'Mã masterbatch màu'}
+                                      className={`w-full font-mono bg-surface border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
+                                        hasFieldError(line.subLineIndex, 'mbCode')
+                                          ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                                          : 'border-outline-variant focus:border-primary'
+                                      }`}
                                     />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[11px] font-medium text-secondary mb-1">Item Code</label>
+                                    {(() => {
+                                      const allCodes = lines.map((l) => l.itemCode || '')
+                                      const matched = itemCodeOptions.find((opt) => opt.code.toUpperCase() === (line.itemCode || '').trim().toUpperCase())
+                                      const conflict = matched ? computeItemCodePrefillPatch(line, matched).conflictWarning : undefined
+                                      const warns = itemCodeWarnings(allCodes, idx, conflict)
+                                      const hasWarn = warns.length > 0
+                                      return (
+                                        <>
+                                          <input
+                                            type="text"
+                                            list="pme-itemcode-options"
+                                            value={line.itemCode}
+                                            onChange={(e) => {
+                                              const val = e.target.value
+                                              const matchedOpt = itemCodeOptions.find((opt) => opt.code.toUpperCase() === val.trim().toUpperCase())
+                                              if (matchedOpt) {
+                                                const { patch } = computeItemCodePrefillPatch(line, matchedOpt)
+                                                setLines((prev) => {
+                                                  const next = [...prev]
+                                                  const updated = { ...next[idx], itemCode: val }
+                                                  if (patch.color) {
+                                                    updated.color = patch.color
+                                                    updated.colorVersion = patch.colorVersion || 'STD'
+                                                  }
+                                                  if (patch.uvPct != null) {
+                                                    updated.uvPct = typeof patch.uvPct === 'number' ? patch.uvPct : Number(patch.uvPct)
+                                                  }
+                                                  if (patch.meshType) {
+                                                    updated.meshType = patch.meshType
+                                                  }
+                                                  if (patch.mbCode) {
+                                                    updated.mbCode = patch.mbCode
+                                                  }
+                                                  next[idx] = updated
+                                                  return next
+                                                })
+                                              } else {
+                                                updateLineField(idx, 'itemCode', val)
+                                              }
+                                            }}
+                                            placeholder="e.g. GBN1GRE260205054"
+                                            title="Item Code tự do theo dòng"
+                                            className={`w-full font-mono bg-surface border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
+                                              hasWarn
+                                                ? 'border-amber-500/60 bg-amber-500/5 focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30'
+                                                : 'border-outline-variant focus:border-primary'
+                                            }`}
+                                          />
+                                          {hasWarn && (
+                                            <div className="mt-1 space-y-0.5">
+                                              {warns.map((w, wi) => (
+                                                <p key={wi} className="text-[11px] text-amber-700 dark:text-amber-300 font-medium flex items-center gap-1">
+                                                  <span className="material-symbols-outlined text-[13px] text-amber-600 dark:text-amber-400 shrink-0">warning</span>
+                                                  <span>{w}</span>
+                                                </p>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </>
+                                      )
+                                    })()}
                                   </div>
                                 </div>
                                 <div>
@@ -1001,7 +1647,12 @@ export default function PiMasterDetailEditor({
                                     value={line.uvPct}
                                     onChange={(e) => updateLineField(idx, 'uvPct', e.target.value === '' ? '' : Number(e.target.value))}
                                     placeholder="e.g. 2.5"
-                                    className="w-full font-mono bg-surface border border-outline-variant rounded px-2 py-1 text-xs focus:border-primary focus:outline-none"
+                                    title={getFieldErrorMsg(line.subLineIndex, 'uvPct') || 'Tỷ lệ UV (%)'}
+                                    className={`w-full font-mono bg-surface border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
+                                      hasFieldError(line.subLineIndex, 'uvPct')
+                                        ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                                        : 'border-outline-variant focus:border-primary'
+                                    }`}
                                   />
                                 </div>
 
@@ -1078,7 +1729,7 @@ export default function PiMasterDetailEditor({
                               <div className="bg-surface-variant/20 border border-outline-variant/50 rounded-lg p-3 space-y-3">
                                 <div className="text-xs font-semibold text-primary uppercase tracking-wide flex items-center gap-1.5">
                                   <span className="material-symbols-outlined text-[16px]">layers</span>
-                                  2. Tráng màng & Gia công Khoen
+                                  2. Tráng màng & Gia công Eyelet
                                 </div>
 
                                 {/* Tráng màng ngoài */}
@@ -1090,43 +1741,60 @@ export default function PiMasterDetailEditor({
                                       onChange={(e) => updateLineField(idx, 'isLaminated', e.target.checked)}
                                       className="rounded text-primary focus:ring-0 cursor-pointer"
                                     />
-                                    <span>Hàng tráng màng ngoài (Dual-GSM)</span>
+                                    <span>Tráng màng (COATING)</span>
                                   </label>
 
                                   {line.isLaminated && (
                                     <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-2.5 space-y-2">
                                       <div className="grid grid-cols-3 gap-2">
                                         <div>
-                                          <label className="block text-[10px] font-medium text-secondary mb-0.5">GSM mộc *</label>
+                                          <label className="block text-[10px] font-medium text-secondary mb-0.5">GSM mộc (RAW FABRIC GSM) *</label>
                                           <input
                                             type="number"
                                             value={line.rawFabricGsm ?? ''}
                                             onChange={(e) => updateLineField(idx, 'rawFabricGsm', e.target.value === '' ? '' : Number(e.target.value))}
                                             placeholder="Mộc (325)"
-                                            className="w-full font-mono bg-surface border border-outline-variant rounded px-1.5 py-1 text-xs focus:border-primary focus:outline-none"
+                                            title={getFieldErrorMsg(line.subLineIndex, 'rawFabricGsm') || 'GSM vải mộc'}
+                                            className={`w-full font-mono bg-surface border rounded px-1.5 py-1 text-xs focus:outline-none transition-colors ${
+                                              hasFieldError(line.subLineIndex, 'rawFabricGsm')
+                                                ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                                                : 'border-outline-variant focus:border-primary'
+                                            }`}
                                           />
                                         </div>
                                         <div>
-                                          <label className="block text-[10px] font-medium text-secondary mb-0.5">GSM tráng</label>
+                                          <label className="block text-[10px] font-medium text-secondary mb-0.5">GSM màng tráng (COATING GSM)</label>
                                           <input
                                             type="number"
                                             value={line.coatingGsm ?? ''}
                                             onChange={(e) => updateLineField(idx, 'coatingGsm', e.target.value === '' ? '' : Number(e.target.value))}
                                             placeholder="Tráng (105)"
+                                            title="GSM lớp keo tráng"
                                             className="w-full font-mono bg-surface border border-outline-variant rounded px-1.5 py-1 text-xs focus:border-primary focus:outline-none"
                                           />
                                         </div>
                                         <div>
-                                          <label className="block text-[10px] font-medium text-secondary mb-0.5">GSM TP *</label>
+                                          <label className="block text-[10px] font-medium text-secondary mb-0.5">GSM thành phẩm (FINISHED GSM) *</label>
                                           <input
                                             type="number"
                                             value={line.finishedGsm ?? ''}
                                             onChange={(e) => updateLineField(idx, 'finishedGsm', e.target.value === '' ? '' : Number(e.target.value))}
                                             placeholder="TP (430)"
-                                            className="w-full font-mono bg-surface border border-outline-variant rounded px-1.5 py-1 text-xs text-primary font-semibold focus:border-primary focus:outline-none"
+                                            title={getFieldErrorMsg(line.subLineIndex, 'finishedGsm') || 'GSM thành phẩm sau tráng'}
+                                            className={`w-full font-mono bg-surface border rounded px-1.5 py-1 text-xs font-semibold focus:outline-none transition-colors ${
+                                              hasFieldError(line.subLineIndex, 'finishedGsm') || hasFieldError(line.subLineIndex, 'rawFabricGsm')
+                                                ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                                                : 'border-outline-variant text-primary focus:border-primary'
+                                            }`}
                                           />
                                         </div>
                                       </div>
+                                      {(hasFieldError(line.subLineIndex, 'rawFabricGsm') || hasFieldError(line.subLineIndex, 'finishedGsm')) && (
+                                        <p className="text-[10px] text-error font-medium flex items-center gap-1">
+                                          <span className="material-symbols-outlined text-[12px]">error</span>
+                                          {getFieldErrorMsg(line.subLineIndex, 'rawFabricGsm') || getFieldErrorMsg(line.subLineIndex, 'finishedGsm') || 'GSM mộc và GSM thành phẩm là bắt buộc khi tráng màng.'}
+                                        </p>
+                                      )}
                                       {line.rawFabricGsm && line.coatingGsm && line.finishedGsm &&
                                        Number(line.rawFabricGsm) + Number(line.coatingGsm) !== Number(line.finishedGsm) && (
                                         <div className="text-[11px] text-amber-600 dark:text-amber-400 flex items-center gap-1 font-medium">
@@ -1147,13 +1815,13 @@ export default function PiMasterDetailEditor({
                                       onChange={(e) => updateLineField(idx, 'hasEyelet', e.target.checked)}
                                       className="rounded text-primary focus:ring-0 cursor-pointer"
                                     />
-                                    <span>Có eyelet (khoen viền)</span>
+                                    <span>Có eyelet</span>
                                   </label>
 
                                   {line.hasEyelet && (
                                     <div className="grid grid-cols-3 gap-2 pl-1">
                                       <div>
-                                        <label className="block text-[10px] font-medium text-secondary mb-0.5">Màu khoen</label>
+                                        <label className="block text-[10px] font-medium text-secondary mb-0.5">Màu Eyelet</label>
                                         <input
                                           type="text"
                                           value={line.eyeletColor}
@@ -1163,7 +1831,7 @@ export default function PiMasterDetailEditor({
                                         />
                                       </div>
                                       <div>
-                                        <label className="block text-[10px] font-medium text-secondary mb-0.5">Số lines khoen</label>
+                                        <label className="block text-[10px] font-medium text-secondary mb-0.5">Số lines Eyelet</label>
                                         <input
                                           type="number"
                                           value={line.eyeletLines}
@@ -1173,7 +1841,7 @@ export default function PiMasterDetailEditor({
                                         />
                                       </div>
                                       <div>
-                                        <label className="block text-[10px] font-medium text-secondary mb-0.5">Mô tả khoen</label>
+                                        <label className="block text-[10px] font-medium text-secondary mb-0.5">Mô tả Eyelet</label>
                                         <input
                                           type="text"
                                           value={line.eyeletSpec}
@@ -1219,16 +1887,59 @@ export default function PiMasterDetailEditor({
                                         />
                                         <span>Lõi giấy</span>
                                       </label>
-                                      <label className="flex items-center gap-1.5 text-xs text-on-surface cursor-pointer">
-                                        <input
-                                          type="checkbox"
-                                          checked={line.isHalfFolded}
-                                          onChange={(e) => updateLineField(idx, 'isHalfFolded', e.target.checked)}
-                                          className="rounded text-primary focus:ring-0 cursor-pointer"
-                                        />
-                                        <span>Gấp đôi khổ</span>
-                                      </label>
+                                      
                                     </div>
+                                  </div>
+                                )}
+
+                                                                {line.primaryPackingType === 'HEMMED' && (
+                                  <div className="bg-surface border border-outline-variant/60 rounded-lg p-2.5 space-y-2 shadow-xs">
+                                    <div className="space-y-1.5">
+                                      <span className="text-[11px] font-semibold text-on-surface">Kiểu đóng gói phụ *</span>
+                                      <div
+                                        role="radiogroup"
+                                        aria-label="Kiểu đóng gói phụ"
+                                        className="inline-flex rounded p-0.5 bg-surface-container border border-outline-variant/40"
+                                        onKeyDown={(e) => {
+                                          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+                                          e.preventDefault()
+                                          updateLineField(idx, 'subPackingType', line.subPackingType === 'CARTON' ? 'BALE' : 'CARTON')
+                                        }}
+                                      >
+                                        <button
+                                          type="button"
+                                          role="radio"
+                                          aria-checked={line.subPackingType === 'CARTON'}
+                                          onClick={() => updateLineField(idx, 'subPackingType', 'CARTON')}
+                                          className={`px-2.5 py-0.5 text-xs font-medium rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                                            line.subPackingType === 'CARTON'
+                                              ? 'bg-primary text-on-primary shadow-xs'
+                                              : 'text-secondary hover:text-on-surface'
+                                          }`}
+                                        >
+                                          Đóng Thùng (CARTON)
+                                        </button>
+                                        <button
+                                          type="button"
+                                          role="radio"
+                                          aria-checked={line.subPackingType === 'BALE'}
+                                          onClick={() => updateLineField(idx, 'subPackingType', 'BALE')}
+                                          className={`px-2.5 py-0.5 text-xs font-medium rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                                            line.subPackingType === 'BALE'
+                                              ? 'bg-primary text-on-primary shadow-xs'
+                                              : 'text-secondary hover:text-on-surface'
+                                          }`}
+                                        >
+                                          Đóng Kiện (BALE)
+                                        </button>
+                                      </div>
+                                    </div>
+                                    {hasFieldError(line.subLineIndex, 'subPackingType') && (
+                                      <p className="text-[10px] text-error mt-0.5 font-medium flex items-center gap-0.5">
+                                        <span className="material-symbols-outlined text-[12px]">error</span>
+                                        {getFieldErrorMsg(line.subLineIndex, 'subPackingType') || 'Chọn quy cách con (CARTON hoặc BALE).'}
+                                      </p>
+                                    )}
                                   </div>
                                 )}
 
@@ -1241,7 +1952,28 @@ export default function PiMasterDetailEditor({
                                         value={line.piecesPerCarton}
                                         onChange={(e) => updateLineField(idx, 'piecesPerCarton', e.target.value === '' ? '' : Number(e.target.value))}
                                         placeholder="VD: 5"
-                                        className="w-full font-mono bg-surface border border-outline-variant rounded px-2 py-1 text-xs focus:border-primary focus:outline-none"
+                                        title={getFieldErrorMsg(line.subLineIndex, 'piecesPerCarton') || 'Số tấm đóng gói mỗi thùng carton'}
+                                        className={`w-full font-mono bg-surface border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
+                                          hasFieldError(line.subLineIndex, 'piecesPerCarton')
+                                            ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                                            : 'border-outline-variant focus:border-primary'
+                                        }`}
+                                      />
+                                      {hasFieldError(line.subLineIndex, 'piecesPerCarton') && (
+                                        <p className="text-[10px] text-error mt-1 font-medium flex items-center gap-1">
+                                          <span className="material-symbols-outlined text-[12px]">error</span>
+                                          {getFieldErrorMsg(line.subLineIndex, 'piecesPerCarton') || 'Vui lòng nhập số tấm/thùng.'}
+                                        </p>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <label className="block text-[11px] font-medium text-secondary mb-1">Kích thước thùng</label>
+                                      <input
+                                        type="text"
+                                        value={line.boxDimensions || ''}
+                                        onChange={(e) => updateLineField(idx, 'boxDimensions', e.target.value)}
+                                        placeholder="VD: 60x40x30 cm"
+                                        className="w-full bg-surface border border-outline-variant rounded px-2 py-1 text-xs focus:border-primary focus:outline-none"
                                       />
                                     </div>
                                   </div>
@@ -1256,12 +1988,22 @@ export default function PiMasterDetailEditor({
                                         value={line.piecesPerBale}
                                         onChange={(e) => updateLineField(idx, 'piecesPerBale', e.target.value === '' ? '' : Number(e.target.value))}
                                         placeholder="VD: 50"
-                                        className="w-full font-mono bg-surface border border-outline-variant rounded px-2 py-1 text-xs focus:border-primary focus:outline-none"
+                                        title={getFieldErrorMsg(line.subLineIndex, 'piecesPerBale') || 'Số tấm đóng gói mỗi kiện bale'}
+                                        className={`w-full font-mono bg-surface border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
+                                          hasFieldError(line.subLineIndex, 'piecesPerBale')
+                                            ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                                            : 'border-outline-variant focus:border-primary'
+                                        }`}
                                       />
+                                      {hasFieldError(line.subLineIndex, 'piecesPerBale') && (
+                                        <p className="text-[10px] text-error mt-1 font-medium flex items-center gap-1">
+                                          <span className="material-symbols-outlined text-[12px]">error</span>
+                                          {getFieldErrorMsg(line.subLineIndex, 'piecesPerBale') || 'Vui lòng nhập số tấm/kiện.'}
+                                        </p>
+                                      )}
                                     </div>
                                   </div>
                                 )}
-
                                 {/* Pallet Option */}
                                 <div className="pt-2 border-t border-outline-variant/30 space-y-2">
                                   <label className="flex items-center gap-2 text-xs font-medium text-on-surface cursor-pointer select-none">
@@ -1289,7 +2031,11 @@ export default function PiMasterDetailEditor({
                                         <select
                                           value={line.secondaryPackingType}
                                           onChange={(e) => updateLineField(idx, 'secondaryPackingType', e.target.value as any)}
-                                          className="w-full bg-surface border border-outline-variant rounded px-1.5 py-1 text-xs focus:border-primary focus:outline-none"
+                                          className={`w-full bg-surface border rounded px-1.5 py-1 text-xs focus:outline-none transition-colors ${
+                                            hasFieldError(line.subLineIndex, 'secondaryPackingType')
+                                              ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                                              : 'border-outline-variant focus:border-primary'
+                                          }`}
                                         >
                                           <option value="WOOD_PALLET">Gỗ</option>
                                           <option value="PLASTIC_PALLET">Nhựa</option>
@@ -1297,14 +2043,25 @@ export default function PiMasterDetailEditor({
                                         </select>
                                       </div>
                                       <div>
-                                        <label className="block text-[10px] font-medium text-secondary mb-0.5">KT Pallet *</label>
+                                        <label className="block text-[10px] font-medium text-secondary mb-0.5">KT Pallet (tùy chọn)</label>
                                         <input
                                           type="text"
                                           value={line.palletDimensions}
                                           onChange={(e) => updateLineField(idx, 'palletDimensions', e.target.value)}
                                           placeholder="110 x 110 cm"
-                                          className="w-full bg-surface border border-outline-variant rounded px-1.5 py-1 text-xs focus:border-primary focus:outline-none"
+                                          title={getFieldErrorMsg(line.subLineIndex, 'palletDimensions') || 'Kích thước Pallet'}
+                                          className={`w-full bg-surface border rounded px-1.5 py-1 text-xs focus:outline-none transition-colors ${
+                                            hasFieldError(line.subLineIndex, 'palletDimensions')
+                                              ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
+                                              : 'border-outline-variant focus:border-primary'
+                                          }`}
                                         />
+                                        {hasFieldError(line.subLineIndex, 'palletDimensions') && (
+                                          <p className="text-[10px] text-error mt-0.5 font-medium flex items-center gap-0.5">
+                                            <span className="material-symbols-outlined text-[11px]">error</span>
+                                            {getFieldErrorMsg(line.subLineIndex, 'palletDimensions') || 'Nhập kích thước pallet.'}
+                                          </p>
+                                        )}
                                       </div>
                                       <div>
                                         <label className="block text-[10px] font-medium text-secondary mb-0.5">SL/Pallet</label>
@@ -1374,17 +2131,36 @@ export default function PiMasterDetailEditor({
       </div>
 
       {/* BOTTOM ACTION BAR */}
-      <div className="flex items-center justify-end gap-3 p-4 bg-surface border border-outline-variant rounded-xl shadow-sm">
-        {isDirty && (
-          <span className="inline-flex items-center gap-1.5 text-xs text-amber-600 bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded-full font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-            Chưa lưu thay đổi
-          </span>
-        )}
+      <div className="flex items-center justify-end p-4 bg-surface border border-outline-variant rounded-xl shadow-sm">
+        <div className="flex items-center gap-3">
+          {lineErrors.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                const firstErr = lineErrors[0]
+                const firstIdx = lines.findIndex((l) => (l.subLineIndex ?? 0) === firstErr.line)
+                if (firstIdx !== -1) {
+                  scrollToAndExpandLine(firstErr.line, firstIdx, firstErr.issues)
+                }
+              }}
+              className="inline-flex items-center gap-1.5 text-xs text-error bg-error/10 hover:bg-error/20 border border-error/30 px-3 py-1.5 rounded-lg font-semibold transition-colors cursor-pointer"
+              title="Bấm để cuộn đến dòng lỗi đầu tiên"
+            >
+              <span className="material-symbols-outlined text-[16px]">error</span>
+              <span>{lineErrors.length} dòng có lỗi cần sửa</span>
+              <span className="material-symbols-outlined text-[14px]">arrow_upward</span>
+            </button>
+          )}
+          {isDirty && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-amber-600 bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded-full font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+              Chưa lưu thay đổi
+            </span>
+          )}
           <button
             onClick={handleSaveAll}
             disabled={saving}
-            className="px-6 py-2 bg-primary hover:bg-primary/90 text-on-primary font-semibold text-sm rounded-lg shadow-sm flex items-center gap-2 transition-all disabled:opacity-60"
+            className="px-6 py-2 bg-primary hover:bg-primary/90 text-on-primary font-semibold text-sm rounded-lg shadow-sm flex items-center gap-2 transition-all disabled:opacity-60 cursor-pointer"
           >
             {saving ? (
               <>
@@ -1399,6 +2175,7 @@ export default function PiMasterDetailEditor({
             )}
           </button>
         </div>
+      </div>
 
       {/* DIRTY GUARD CONFIRMATION MODAL */}
       {pendingTargetPi && (
@@ -1446,7 +2223,7 @@ export default function PiMasterDetailEditor({
                 className="w-full py-2.5 px-4 border border-error/40 text-error hover:bg-error/10 font-medium text-xs rounded-xl transition-all flex items-center justify-center gap-2"
               >
                 <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
-                Hủy thay đổi & Chuyển ngay
+                Hủy thay đổi & {pendingTargetPi === '/orders' ? 'Quay lại danh sách' : `Chuyển sang ${pendingTargetPi}`}
               </button>
 
               <button

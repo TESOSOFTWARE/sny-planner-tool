@@ -6,10 +6,11 @@
 // Searchable by PI Number or Customer (case-insensitive).
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import Link from 'next/link'
 import type { SerializedProductionOrder } from '@/types'
 import { OrderStatus, calcOrderStatus } from '@/lib/orderStatus'
 import OrderStatusBadge from './OrderStatusBadge'
-import DraftBadge from './DraftBadge'
+import DraftBadge, { MachinePlanBadge } from './DraftBadge'
 import BulkEditPOModal from '@/components/orders/BulkEditPOModal'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -29,6 +30,7 @@ interface PIGroup {
   totalRequiredYarnKg: number | null
   status: OrderStatus
   hasDraft: boolean
+  hasPlaceholder: boolean
   hasLaminated: boolean // Đ4: PI có đơn tráng màng → tổng PO theo GSM thành phẩm, sợi theo GSM mộc
 }
 
@@ -74,7 +76,8 @@ function groupOrders(orders: SerializedProductionOrder[]): PIGroup[] {
       }
     }
 
-    const hasDraft = subLines.some(s => s.isDraft)
+    const hasDraft = subLines.some(s => s.isDraft || s.lifecycleStatus === 'DRAFT')
+    const hasPlaceholder = subLines.some(s => s.isPlaceholder || s.lifecycleStatus === 'RESERVED' || s.lifecycleStatus === 'RESERVE' || s.lifecycleStatus === 'PLACEHOLDER')
     const hasLaminated = subLines.some(s => s.isLaminated)
     const allAssignments = subLines.flatMap(s => s.assignments || [])
     const status = calcOrderStatus(allAssignments)
@@ -85,7 +88,7 @@ function groupOrders(orders: SerializedProductionOrder[]): PIGroup[] {
     const remark = subLines[0].remark
     const customerId = subLines[0].customerId || null
 
-    groups.push({ piNumber, customers, customerId, orderDate, deliveryDate, containerSize, description, remark, subLines, totalQtySqm, totalWeightKgs, totalRequiredYarnKg, status, hasDraft, hasLaminated })
+    groups.push({ piNumber, customers, customerId, orderDate, deliveryDate, containerSize, description, remark, subLines, totalQtySqm, totalWeightKgs, totalRequiredYarnKg, status, hasDraft, hasPlaceholder, hasLaminated })
   }
 
   // Sort groups by most recent orderDate descending
@@ -126,7 +129,8 @@ function SubLineTable({
       <table className="w-full text-xs font-inter border-collapse">
         <thead>
           <tr className="bg-surface-container-low border-b border-outline-variant text-secondary uppercase tracking-wider">
-            <th className="px-3 py-2 text-left font-medium">#</th>
+            <th className="px-3 py-2 text-center font-medium w-12">#</th>
+            <th className="px-3 py-2 text-left font-medium whitespace-nowrap">Kế hoạch dệt</th>
             <th className="px-3 py-2 text-left font-medium">Màu</th>
             <th className="px-3 py-2 text-left font-medium">Khổ (m)</th>
             <th className="px-3 py-2 text-left font-medium">GSM</th>
@@ -157,11 +161,30 @@ function SubLineTable({
               key={s.id}
               className="border-b border-outline-variant/50 hover:bg-surface-container-lowest transition-colors"
             >
-              <td className="px-3 py-2 font-mono text-outline flex items-center gap-1">
-                {s.isDraft && <DraftBadge />}
-                <span>{s.subLineIndex}</span>
+              <td className="px-3 py-2 font-mono text-center">
+                <Link
+                  href={`/orders/${s.id}`}
+                  className="inline-flex items-center justify-center font-semibold text-primary hover:text-primary-hover hover:underline bg-surface-container/60 hover:bg-primary/10 px-1.5 py-0.5 rounded text-xs transition-colors"
+                  title={`Xem chi tiết dòng ${s.subLineIndex} của đơn ${s.piNumber}`}
+                >
+                  #{s.subLineIndex}
+                </Link>
               </td>
-              <td className="px-3 py-2 font-medium text-on-surface">{s.color || '—'}</td>
+              <td className="px-3 py-2 whitespace-nowrap">
+                <div className="flex items-center gap-1.5">
+                  <MachinePlanBadge
+                    lifecycleStatus={s.lifecycleStatus}
+                    isPlaceholder={s.isPlaceholder}
+                    calculatedStatus={calcOrderStatus(s.assignments)}
+                  />
+                  {s.isDraft && (
+                    <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 border border-amber-500/30">
+                      Nháp
+                    </span>
+                  )}
+                </div>
+              </td>
+              <td className="px-3 py-2 font-medium text-on-surface whitespace-nowrap">{s.color || '—'}</td>
               <td className="px-3 py-2 font-mono text-on-surface">{s.widthM != null ? Number(s.widthM).toFixed(1) : '—'}</td>
               <td className="px-3 py-2 font-mono text-on-surface">{s.gsm != null ? s.gsm : '—'}</td>
               <td className="px-3 py-2 text-secondary">{orderTypeLabel(s.orderType)}</td>
@@ -388,8 +411,10 @@ export default function POSummaryTable({ orders }: Props) {
                     <span className="font-mono font-semibold text-sm text-primary">
                       {group.piNumber}
                     </span>
-                    {group.hasDraft && <DraftBadge />}
-                    <OrderStatusBadge status={group.status} />
+                    <MachinePlanBadge
+                      isPlaceholder={group.hasPlaceholder}
+                      calculatedStatus={group.status}
+                    />
                     {group.customers.length > 1 && (
                       <span
                         title="PI Number này có nhiều customer khác nhau — kiểm tra lại dữ liệu"

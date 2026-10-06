@@ -33,11 +33,40 @@ export function normalizeRecipeKey(value: string | null | undefined): string {
 }
 
 /**
- * Normalize color name by stripping order code suffixes.
- * Examples: "DESERT SAND#467" → "DESERT SAND", "DESERT SAND 123" → "DESERT SAND"
+ * Normalize color name by stripping order code prefixes/suffixes and standardizing
+ * common factory shorthand/typos found in actual production logs and orders.
+ * Examples:
+ *   "DESERT SAND#467" → "DESERT SAND"
+ *   "#467 Desert Sand" → "DESERT SAND"
+ *   "D.sand #467" → "DESERT SAND"
+ *   "D.GREEN" → "DARK GREEN"
+ *   "S.WHITE" → "SNOW WHITE"
  */
 export function normalizeColorName(value: string | null | undefined): string {
-  return (value ?? '').replace(/[#\s]*\d+$/, '').trim().toUpperCase()
+  if (!value) return ''
+  let v = value.trim().toUpperCase()
+  // 1. Strip leading order code / swatch prefix (e.g. "#467 DESERT SAND", "#293 AQUA BLUE")
+  v = v.replace(/^#\s*\d+[\s-]*/, '')
+  // 2. Strip trailing order code / swatch suffix (e.g. "DESERT SAND #467", "STEEL GREY #421")
+  v = v.replace(/[#\s]*\d+$/, '')
+  // 3. Strip trailing auxiliary notes in parentheses (e.g. "(WATERPROOF)", "(BEIGE)")
+  v = v.replace(/\s*\((?:WATERPROOF|BEIGE)\)\s*$/, '')
+  v = v.trim()
+
+  // 4. Map common factory shorthand & aliases
+  if (v === 'D.SAND' || v === 'D. SAND' || v === 'DESSERT SAND' || v === 'DESERT') {
+    return 'DESERT SAND'
+  }
+  if (v === 'D.GREEN' || v === 'D. GREEN' || v === 'DGREEN') {
+    return 'DARK GREEN'
+  }
+  if (v === 'S.WHITE' || v === 'S. WHITE' || v === 'SWHITE') {
+    return 'SNOW WHITE'
+  }
+  if (v === 'BEGIE' || v === 'BIEGE') {
+    return 'BEIGE'
+  }
+  return v
 }
 
 /** Find the recipe for an order line, or null when there is none. */

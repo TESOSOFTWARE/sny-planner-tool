@@ -4,7 +4,7 @@
 
 import * as XLSX from 'xlsx'
 import type { OrderImportDecision, OrderImportResolution, ParsedOrder, ProductionOrder } from '@/types'
-import { importedOrderRowSchema, isValidISODate } from '@/lib/validations/order'
+import { importedOrderRowSchema, draftOrderStateSchema, isValidISODate } from '@/lib/validations/order'
 
 // ── Value coercion helpers ────────────────────────────────────────────────────
 
@@ -18,7 +18,7 @@ function safeNum(v: unknown): number | null {
   if (v == null) return null
   if (v instanceof Date) return null
   if (typeof v === 'string') {
-    const s = v.trim()
+    const s = v.replace('%', '').trim()
     if (s === '') return null
     const n = Number(s)
     return isNaN(n) ? null : n
@@ -79,6 +79,33 @@ function safeBool(v: unknown): boolean {
   if (s === 'true' || s === 'yes' || s === 'y' || s === 'x' || s === '1' || s === 'có') return true
   const n = Number(v)
   return !isNaN(n) && n !== 0
+}
+
+export function deduplicateValidationErrors(errors: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+
+  for (const err of errors) {
+    let key = err.trim()
+    if (/Màu/i.test(key)) key = 'Màu'
+    else if (/GSM/i.test(key)) key = 'GSM'
+    else if (/Khổ/i.test(key)) key = 'Khổ'
+    else if (/PI Number/i.test(key)) key = 'PI Number'
+    else if (/Khách hàng/i.test(key)) key = 'Khách hàng'
+    else if (/Ngày đặt/i.test(key)) key = 'Ngày đặt'
+    else if (/chiều dài|tổng mét/i.test(key)) key = 'Chiều dài'
+    else if (/Carton/i.test(key)) key = 'Carton'
+    else if (/BALE|kiện/i.test(key)) key = 'Bale'
+    else if (/Pallet/i.test(key)) key = 'Pallet'
+    else if (/tráng màng|laminate/i.test(key)) key = 'Laminated'
+    else if (/chống cháy|FR/i.test(key)) key = 'FR'
+
+    if (!seen.has(key)) {
+      seen.add(key)
+      result.push(err)
+    }
+  }
+  return result
 }
 
 // ── Column detector ───────────────────────────────────────────────────────────
@@ -163,6 +190,8 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       h.toUpperCase().includes('SỐ LƯỢNG'),
   )
   const packingTypeColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('ĐÓNG GÓI') || h.toUpperCase().includes('PACKING TYPE') || (h.toUpperCase().includes('KIỂU') && (h.toUpperCase().includes('ĐƠN') || h.toUpperCase().includes('GÓI'))))
+  // UNIT fallback (01/10): file SNY thật dùng cột UNIT thay cho PACKING TYPE/ORDER TYPE.
+  const unitColIdx = findColIdx(headers, (h) => h.trim().toUpperCase() === 'UNIT' || h.toUpperCase().includes('ĐƠN VỊ'))
   const orderTypeColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('ORDER TYPE') || (h.toUpperCase().includes('TYPE') && !h.toUpperCase().includes('MESH') && !h.toUpperCase().includes('PACKING') && !h.toUpperCase().includes('PALLET')))
   const rollLenColIdx = findColIdx(headers, (h) => (h.toUpperCase().includes('ROLL') && h.toUpperCase().includes('LEN')) || (h.toUpperCase().includes('MÉT') && h.toUpperCase().includes('CUỘN')))
   const pieceLenColIdx = findColIdx(headers, (h) => (h.toUpperCase().includes('PIECE') && h.toUpperCase().includes('LEN')) || (h.toUpperCase().includes('DÀI') && h.toUpperCase().includes('TẤM')))
@@ -182,6 +211,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
   const descColIdx = findColIdx(headers, (h) => h.toUpperCase() === 'DESCRIPTION')
   const remarkColIdx = findColIdx(headers, (h) => h.toUpperCase() === 'REMARK')
   const mbCodeColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('MB') && h.toUpperCase().includes('CODE'))
+  const itemCodeColIdx = findColIdx(headers, (h) => (h.toUpperCase().includes('ITEM') && h.toUpperCase().includes('CODE')) || h.toUpperCase() === 'MÃ HÀNG' || h.toUpperCase().includes('MÃ SẢN PHẨM'))
   const meshTypeColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('MESH') || h.toUpperCase().includes('THỂ LOẠI LƯỚI'))
   const needleCountColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('NEEDLE') || h.toUpperCase().includes('SỐ KIM'))
   const beamCountColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('BEAM') || h.toUpperCase().includes('SỐ DÀN'))
@@ -189,7 +219,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
   const requiresPackingColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('PACK') && (h.toUpperCase().includes('REQUIRE') || h.toUpperCase().includes('PACKING')))
   const deliveryDateColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('DELIVERY') && h.toUpperCase().includes('DATE') || h.toUpperCase().includes('GIAO HÀNG'))
   const containerSizeColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('CONTAINER'))
-  const lifecycleColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('LIFECYCLE') || h.toUpperCase() === 'STATUS' || h.toUpperCase().includes('TRẠNG THÁI'))
+  const lifecycleColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('LIFECYCLE') || h.toUpperCase() === 'STATUS' || h.toUpperCase().includes('TRẠNG THÁI') || h.toUpperCase().includes('TÌNH TRẠNG'))
   const hasEyeletColIdx = findColIdx(headers, (h) => h.toUpperCase() === 'EYELET' || (h.toUpperCase().includes('HAS') && h.toUpperCase().includes('EYELET')))
   const eyeletColorColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('EYELET') && h.toUpperCase().includes('COLOR') || h.toUpperCase().includes('MÀU KHOEN'))
   const eyeletLinesColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('EYELET') && h.toUpperCase().includes('LINE') || h.toUpperCase().includes('DÒNG KHOEN'))
@@ -197,8 +227,8 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
 
   // Outer wrapping, Lamination & Tolerance finders
   const outerWrappingColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('VỎ BỌC') || h.toUpperCase().includes('WRAPPING'))
-  const isLaminatedColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('TRÁNG MÀNG') || h.toUpperCase().includes('LAMINAT'))
-  const rawFabricGsmColIdx = findColIdx(headers, (h) => (h.toUpperCase().includes('GSM') && h.toUpperCase().includes('MỘC')) || h.toUpperCase().includes('RAW GSM') || h.toUpperCase().includes('RAW_GSM') || h.toUpperCase().includes('BASE GSM'))
+  const isLaminatedColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('TRÁNG MÀNG') || h.toUpperCase().includes('LAMINAT') || h.toUpperCase() === 'COATING' || h.toUpperCase().includes('COATING'))
+  const rawFabricGsmColIdx = findColIdx(headers, (h) => (h.toUpperCase().includes('GSM') && h.toUpperCase().includes('MỘC')) || h.toUpperCase().includes('RAW GSM') || h.toUpperCase().includes('RAW FABRIC GSM') || h.toUpperCase().includes('RAW_GSM') || h.toUpperCase().includes('BASE GSM'))
   const coatingGsmColIdx = findColIdx(headers, (h) => (h.toUpperCase().includes('GSM') && h.toUpperCase().includes('TRÁNG')) || h.toUpperCase().includes('COATING GSM'))
   const finishedGsmColIdx = findColIdx(headers, (h) => (h.toUpperCase().includes('GSM') && h.toUpperCase().includes('THÀNH PHẨM')) || h.toUpperCase().includes('FINISHED GSM'))
   const toleranceQtyColIdx = findColIdx(headers, (h) => (h.toUpperCase().includes('DUNG SAI') && h.toUpperCase().includes('SL')) || (h.toUpperCase().includes('TOLERANCE') && h.toUpperCase().includes('QTY')) || h.toUpperCase().includes('QTY TOLERANCE'))
@@ -272,6 +302,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
     const description = safeStr(get(descColIdx))
     const remark = safeStr(get(remarkColIdx))
     const mbCode = safeStr(get(mbCodeColIdx))
+    const itemCode = safeStr(get(itemCodeColIdx))
     const productionGsm = safeInt(get(prodGsmColIdx))
     let rollLength = safeNum(get(rollLenColIdx))
     let pieceLength = safeNum(get(pieceLenColIdx))
@@ -291,20 +322,42 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
     const colorVersion = safeStr(get(colorVersionColIdx))
 
     const rawLifecycle = safeStr(get(lifecycleColIdx))?.toUpperCase() || ''
-    let lifecycleStatus: 'DRAFT' | 'PLACEHOLDER' | 'APPROVED' = 'APPROVED'
+    let lifecycleStatus: 'DRAFT' | 'RESERVED' | 'APPROVED' = 'APPROVED'
     if (rawLifecycle.includes('DRAFT') || rawLifecycle.includes('NHÁP')) lifecycleStatus = 'DRAFT'
-    else if (rawLifecycle.includes('PLACEHOLDER') || rawLifecycle.includes('GIỮ')) lifecycleStatus = 'PLACEHOLDER'
-    else lifecycleStatus = 'APPROVED'
-    const isPlaceholder = lifecycleStatus === 'PLACEHOLDER'
+    else if (rawLifecycle.includes('RESERVED') || rawLifecycle.includes('RESERVE') || rawLifecycle.includes('PLACEHOLDER') || rawLifecycle.includes('GIỮ')) lifecycleStatus = 'RESERVED'
+    const isPlaceholder = lifecycleStatus === 'RESERVED'
 
     const rawPacking = safeStr(get(packingTypeColIdx))?.toUpperCase() || ''
-    let primaryPackingType: 'ROLL' | 'BALE' | 'CARTON' = 'ROLL'
-    if (rawPacking.includes('CARTON') || rawPacking.includes('THÙNG')) {
+    let primaryPackingType: 'ROLL' | 'BALE' | 'CARTON' | 'HEMMED' = 'ROLL'
+    // H4 (01/10): từ khóa chốt từ dữ liệu thật SNY (ORDER LIST 2023-2026, WI SEDCO26-1):
+    // HEMMED / HEMMED EDGES / REINFORCED HEMMED / WEBBING HEM / HEM (thuật ngữ xưởng may).
+    // Check HEMMED TRƯỚC CARTON/BALE để chuỗi như "HEMMED CARTON" không bị nhận nhầm.
+    // "HEM" đứng một mình phải match word-boundary (tránh CHEMICAL / SCHEME / THEME).
+    const isHemmed = rawPacking.includes('HEMMED')
+      || rawPacking.includes('WEBBING HEM')
+      || rawPacking.includes('MAY VIỀN')
+      || rawPacking.includes('MAY VIEN')
+      || rawPacking.includes('ĐÓNG KHUY')
+      || rawPacking.includes('DONG KHUY')
+      || /\bHEM\b/.test(rawPacking)
+    if (isHemmed) {
+      primaryPackingType = 'HEMMED'
+    } else if (rawPacking.includes('CARTON') || rawPacking.includes('THÙNG')) {
       primaryPackingType = 'CARTON'
     } else if (rawPacking.includes('BALE') || rawPacking.includes('KIỆN')) {
       primaryPackingType = 'BALE'
     } else if (rawPacking.includes('ROLL') || rawPacking.includes('CUỘN')) {
       primaryPackingType = 'ROLL'
+    }
+
+    // UNIT fallback (01/10): file SNY thật (ORDER LIST 2023-2026, 3345 dòng) dùng cột UNIT,
+    // cột PACKING bỏ trống 3297/3345. Chỉ suy từ UNIT khi PACKING trống — PACKING tường minh thắng.
+    // PCS/PANEL/BOX/PACK → CARTON (hàng tấm đóng thùng); BALE/BALES → BALE; còn lại giữ ROLL.
+    // orderType phía dưới tự suy đúng từ packing (CARTON→pieces, BALE→meters, ROLL→rolls).
+    if (rawPacking === '') {
+      const rawUnit = safeStr(get(unitColIdx))?.toUpperCase() || ''
+      if (/\b(BOX|PACK|PCS|PANEL)\b/.test(rawUnit)) primaryPackingType = 'CARTON'
+      else if (/\bBALES?\b/.test(rawUnit)) primaryPackingType = 'BALE'
     }
 
     const rawPaperCore = get(hasPaperCoreColIdx)
@@ -315,6 +368,15 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
     const piecesPerCarton = safeInt(get(piecesPerCartonColIdx))
     const piecesPerBale = safeInt(get(piecesPerBaleColIdx))
     const boxDimensions = safeStr(get(boxDimensionsColIdx))
+
+    let subPackingType: 'CARTON' | 'BALE' | null = null
+    if (primaryPackingType === 'HEMMED') {
+      if (piecesPerCarton != null && piecesPerCarton > 0) subPackingType = 'CARTON'
+      else if (piecesPerBale != null && piecesPerBale > 0) subPackingType = 'BALE'
+      else if (rawPacking.includes('CARTON') || rawPacking.includes('THÙNG')) subPackingType = 'CARTON'
+      else if (rawPacking.includes('BALE') || rawPacking.includes('KIỆN')) subPackingType = 'BALE'
+      else subPackingType = 'CARTON'
+    }
 
     const onPallet = safeBool(get(onPalletColIdx))
     let secondaryPackingType: 'NONE' | 'WOOD_PALLET' | 'IRON_PALLET' | 'PLASTIC_PALLET' = 'NONE'
@@ -371,54 +433,57 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
     }
 
     // ── Row-Level Mandatory Validation ───────────────────────────────────────
-    const validationErrors: string[] = []
+    const rawValidationErrors: string[] = []
 
-    if (!rawPi) validationErrors.push('Thiếu PI Number')
-    if (!customer) validationErrors.push('Thiếu Khách hàng')
-    if (!orderDate) validationErrors.push('Thiếu Ngày đặt hàng (YYYY-MM-DD)')
-    if (!color) validationErrors.push('Thiếu Màu')
-    if (widthM <= 0) validationErrors.push('Thiếu Khổ m (>0)')
-    if (effectiveGsm <= 0) validationErrors.push('Thiếu GSM (>0)')
+    if (!rawPi) rawValidationErrors.push('Thiếu PI Number')
+    if (!customer) rawValidationErrors.push('Thiếu Khách hàng')
+    if (!orderDate) rawValidationErrors.push('Thiếu Ngày đặt hàng (YYYY-MM-DD)')
 
-    if (orderType === 'meters' && (lengthM == null || lengthM <= 0)) {
-      validationErrors.push('Thiếu Chiều dài mét (>0)')
-    }
-    if (orderType === 'rolls') {
-      if (qty == null || qty <= 0) validationErrors.push('Thiếu Số cuộn (>0)')
-      if (rollLength == null || rollLength <= 0) validationErrors.push('Thiếu Mét/cuộn (>0)')
-    }
-    if (orderType === 'pieces') {
-      if (qty == null || qty <= 0) validationErrors.push('Thiếu Số tấm (>0)')
-      if (pieceLength == null || pieceLength <= 0) validationErrors.push('Thiếu Chiều dài tấm (>0)')
+    if (lifecycleStatus !== 'DRAFT') {
+      if (!color) rawValidationErrors.push('Thiếu Màu')
+      if (widthM <= 0) rawValidationErrors.push('Thiếu Khổ m (>0)')
+      if (effectiveGsm <= 0) rawValidationErrors.push('Thiếu GSM (>0)')
+
+      if (orderType === 'meters' && (lengthM == null || lengthM <= 0)) {
+        rawValidationErrors.push('Thiếu Chiều dài mét (>0)')
+      }
+      if (orderType === 'rolls') {
+        if (qty == null || qty <= 0) rawValidationErrors.push('Thiếu Số cuộn (>0)')
+        if (rollLength == null || rollLength <= 0) rawValidationErrors.push('Thiếu Mét/cuộn (>0)')
+      }
+      if (orderType === 'pieces') {
+        if (qty == null || qty <= 0) rawValidationErrors.push('Thiếu Số tấm (>0)')
+        if (pieceLength == null || pieceLength <= 0) rawValidationErrors.push('Thiếu Chiều dài tấm (>0)')
+      }
+
+      if (frFlag && (frPct == null || frPct <= 0)) {
+        rawValidationErrors.push('Thiếu % chống cháy (FR% > 0)')
+      }
+
+      if (primaryPackingType === 'CARTON' && (piecesPerCarton == null || piecesPerCarton <= 0)) {
+        rawValidationErrors.push('Thiếu số tấm/thùng khi chọn đóng thùng Carton (piecesPerCarton > 0)')
+      }
+      if (primaryPackingType === 'BALE' && (piecesPerBale == null || piecesPerBale <= 0)) {
+        rawValidationErrors.push('Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)')
+      }
+      if (onPallet && (!palletDimensions || !palletDimensions.trim())) {
+        rawValidationErrors.push('Thiếu kích thước Pallet khi chọn đóng trên Pallet')
+      }
+      if (isLaminated && (rawFabricGsm == null || rawFabricGsm <= 0 || (finishedGsm == null && effectiveGsm <= 0))) {
+        rawValidationErrors.push('Hàng tráng màng ngoài bắt buộc có GSM dệt mộc và GSM thành phẩm')
+      }
     }
 
-    if (frFlag && (frPct == null || frPct <= 0)) {
-      validationErrors.push('Thiếu % chống cháy (FR% > 0)')
-    }
-
-    if (primaryPackingType === 'CARTON' && (piecesPerCarton == null || piecesPerCarton <= 0)) {
-      validationErrors.push('Thiếu số tấm/thùng khi chọn đóng thùng Carton (piecesPerCarton > 0)')
-    }
-    if (primaryPackingType === 'BALE' && (piecesPerBale == null || piecesPerBale <= 0)) {
-      validationErrors.push('Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)')
-    }
-    if (onPallet && (!palletDimensions || !palletDimensions.trim())) {
-      validationErrors.push('Thiếu kích thước Pallet khi chọn đóng trên Pallet')
-    }
-    if (isLaminated && (rawFabricGsm == null || rawFabricGsm <= 0 || (finishedGsm == null && effectiveGsm <= 0))) {
-      validationErrors.push('Hàng tráng màng ngoài bắt buộc có GSM dệt mộc và GSM thành phẩm')
-    }
-
-    const schemaResult = importedOrderRowSchema.safeParse({
+    const payloadForValidation = {
       piNumber,
       subLineIndex,
       customer,
       orderDate,
-      widthM,
+      widthM: lifecycleStatus === 'DRAFT' && widthM <= 0 ? null : widthM,
       lengthM,
-      gsm: effectiveGsm,
+      gsm: lifecycleStatus === 'DRAFT' && effectiveGsm <= 0 ? null : effectiveGsm,
       productionGsm,
-      color,
+      color: lifecycleStatus === 'DRAFT' && !color ? null : color,
       colorVersion,
       colorRecipeSnapshot: null,
       lifecycleStatus,
@@ -428,6 +493,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       rollLength,
       pieceLength,
       primaryPackingType,
+      subPackingType,
       hasPaperCore,
       isHalfFolded,
       outerWrapping,
@@ -451,6 +517,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       description,
       remark,
       mbCode,
+      itemCode,
       meshType,
       needleCount,
       beamCount,
@@ -462,13 +529,17 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       eyeletColor,
       eyeletLines,
       eyeletSpec,
-    })
+    }
+
+    const schemaToUse = lifecycleStatus === 'DRAFT' ? draftOrderStateSchema : importedOrderRowSchema
+    const schemaResult = schemaToUse.safeParse(payloadForValidation)
     if (!schemaResult.success) {
       for (const issue of schemaResult.error.issues) {
-        if (!validationErrors.includes(issue.message)) validationErrors.push(issue.message)
+        rawValidationErrors.push(issue.message)
       }
     }
 
+    const validationErrors = deduplicateValidationErrors(rawValidationErrors)
     const isValid = validationErrors.length === 0
 
     results.push({
@@ -490,6 +561,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       rollLength,
       pieceLength,
       primaryPackingType,
+      subPackingType,
       hasPaperCore,
       isHalfFolded,
       outerWrapping,
@@ -513,6 +585,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       description,
       remark,
       mbCode,
+      itemCode,
       meshType,
       needleCount,
       beamCount,
@@ -570,6 +643,7 @@ const IMPORT_COMPARISON_FIELDS = [
   'needleCount',
   'beamCount',
   'mbCode',
+  'itemCode',
   'hasEyelet',
   'eyeletColor',
   'eyeletLines',
@@ -657,6 +731,7 @@ function comparisonValues(row: ParsedOrder | ProductionOrder): Record<ImportComp
     needleCount: normalizedNumber(row.needleCount),
     beamCount: normalizedNumber(row.beamCount),
     mbCode: normalizedText(row.mbCode),
+    itemCode: safeStr((row as any).itemCode),
     hasEyelet: row.hasEyelet === true,
     eyeletColor: normalizedText(row.eyeletColor),
     eyeletLines: normalizedNumber(row.eyeletLines),
@@ -678,10 +753,28 @@ function isSameComparisonValue(left: unknown, right: unknown): boolean {
 function changedComparisonFields(row: ParsedOrder, existing: ProductionOrder): string[] {
   const left = comparisonValues(row)
   const right = comparisonValues(existing)
-  return IMPORT_COMPARISON_FIELDS.filter((field) => !isSameComparisonValue(left[field], right[field]))
+  return IMPORT_COMPARISON_FIELDS.filter((field) => {
+    // Missing/blank code in import does not request clearing the stored code.
+    if (field === 'itemCode' && left.itemCode == null) return false
+    return !isSameComparisonValue(left[field], right[field])
+  })
 }
 
 function validParsedOrder(row: ParsedOrder): boolean {
+  if (row.isValid === false) return false
+  const pi = String(row.piNumber ?? '').trim()
+  if (!pi || pi === 'CHƯA_CÓ_PI') return false
+
+  if (row.lifecycleStatus === 'DRAFT') {
+    const draftPayload = {
+      ...row,
+      widthM: row.widthM > 0 ? row.widthM : null,
+      gsm: row.gsm > 0 ? row.gsm : null,
+      color: row.color && row.color.trim() ? row.color.trim() : null,
+    }
+    const result = draftOrderStateSchema.safeParse(draftPayload)
+    return result.success
+  }
   const result = importedOrderRowSchema.safeParse(row)
   return result.success
 }
@@ -771,6 +864,7 @@ export function classifyOrderImport(
   }))
 
   rowsByPi.forEach((indexes, pi) => {
+    if (!pi || pi === 'CHƯA_CÓ_PI') return
     const customers = new Set(
       indexes
         .filter((index: number) => validParsedOrder(rows[index]))
@@ -834,6 +928,11 @@ export function classifyOrderImport(
       if (decision.status === 'invalid' || decision.status === 'conflict') return
       if (dbMatch) {
         decision.existingOrderId = dbMatch.id
+        const incomingCode = safeStr(rows[index].itemCode)
+        const storedCode = safeStr(dbMatch.itemCode)
+        if (incomingCode != null && incomingCode !== storedCode) {
+          decision.itemCodeChange = { existing: storedCode, incoming: incomingCode }
+        }
         if (dbMatch.isDraft) {
           decision.status = 'conflict'
           decision.reasons.push('Đơn nháp đã tồn tại; không tự phê duyệt bằng import')

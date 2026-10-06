@@ -185,7 +185,7 @@ export async function POST(req: NextRequest) {
             piNumber:     pi,
             customer:     'Chưa xác định (import từ lịch máy)',
             isDraft:      false,
-            lifecycleStatus: 'PLACEHOLDER',
+            lifecycleStatus: 'RESERVED',
             isPlaceholder: true,
             dataSource:   'import',
             subLineIndex: 0,
@@ -233,6 +233,8 @@ export async function POST(req: NextRequest) {
             id: { in: Array.from(piToId.values()) },
             OR: [
               { isDraft: true },
+              { lifecycleStatus: 'RESERVED' },
+              { lifecycleStatus: 'RESERVE' },
               { lifecycleStatus: 'PLACEHOLDER' },
               { isPlaceholder: true },
             ],
@@ -241,11 +243,11 @@ export async function POST(req: NextRequest) {
         })).map(order => order.id)
       )
 
-      // Promote any pure DRAFT orders to PLACEHOLDER so they match AC-03 / AC-04 guard
+      // Promote any pure DRAFT orders to RESERVED so they match AC-03 / AC-04 guard
       if (draftOrderIds.size > 0) {
         await tx.productionOrder.updateMany({
           where: { id: { in: Array.from(draftOrderIds) }, lifecycleStatus: 'DRAFT' },
-          data: { lifecycleStatus: 'PLACEHOLDER', isPlaceholder: true, isDraft: false },
+          data: { lifecycleStatus: 'RESERVED', isPlaceholder: true, isDraft: false },
         })
       }
 

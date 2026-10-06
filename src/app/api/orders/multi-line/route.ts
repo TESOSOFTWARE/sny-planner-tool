@@ -11,6 +11,8 @@ import {
   draftOrderStateSchema,
   multiLineOrderSchema,
   resolveLifecycle,
+  cleanSubLineForValidation,
+  clearHemmedFields,
 } from '@/lib/validations/order'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
 import { buildRecipeSnapshot, matchRecipe } from '@/lib/orders/recipeSnapshot'
@@ -47,7 +49,7 @@ export async function POST(req: NextRequest) {
     }
     if (rawLifecycle === 'PLACEHOLDER' && rawIsDraft === true) {
       return NextResponse.json(
-        { success: false, error: 'LIFECYCLE_CONFLICT: Đơn giữ chỗ (PLACEHOLDER) không thể là isDraft=true.' },
+        { success: false, error: 'LIFECYCLE_CONFLICT: Đơn giữ chỗ (RESERVED) không thể là isDraft=true.' },
         { status: 422 }
       )
     }
@@ -68,7 +70,13 @@ export async function POST(req: NextRequest) {
 
   // Select schema strictly based on canonical lifecycle
   const schema = lifecycle.lifecycleStatus === 'DRAFT' ? draftMultiLineOrderSchema : multiLineOrderSchema
-  const parsed = schema.safeParse(body)
+  const sanitizedBody = body && typeof body === 'object' && Array.isArray((body as Record<string, unknown>).lines)
+    ? {
+        ...(body as Record<string, unknown>),
+        lines: ((body as { lines: unknown[] }).lines).map(cleanSubLineForValidation),
+      }
+    : body
+  const parsed = schema.safeParse(sanitizedBody)
   if (!parsed.success) {
     const messages = parsed.error.issues.map((issue) => `${String(issue.path.join('.'))}: ${issue.message}`).join('; ')
     return NextResponse.json({ success: false, error: `Validation failed — ${messages}` }, { status: 422 })
@@ -93,7 +101,9 @@ export async function POST(req: NextRequest) {
       const validatedLines: Array<{ line: typeof lines[number]; subLineIndex: number; state: ParsedOrder }> = []
       const validationErrors: string[] = []
       lines.forEach((line, index) => {
-        const state: ParsedOrder = {
+        // H2 (01/10): HEMMED không lưu field dư — clear trước validate để
+        // result.data và create bên dưới kế thừa.
+        const state: ParsedOrder = clearHemmedFields({
           piNumber,
           subLineIndex: nextIndex + index,
           customer,
@@ -113,6 +123,7 @@ export async function POST(req: NextRequest) {
           description: description ?? null,
           remark: remark ?? null,
           mbCode: line.mbCode ?? null,
+          itemCode: line.itemCode ?? null,
           meshType: line.meshType ?? null,
           needleCount: line.needleCount ?? null,
           beamCount: line.beamCount ?? null,
@@ -127,6 +138,7 @@ export async function POST(req: NextRequest) {
           // V4.1 passthrough — lineSchema/draftLineSchema already validate these.
           colorVersion: (line as any).colorVersion ?? null,
           primaryPackingType: (line as any).primaryPackingType ?? 'ROLL',
+          subPackingType: (line as any).subPackingType ?? null,
           hasPaperCore: (line as any).hasPaperCore ?? false,
           isHalfFolded: (line as any).isHalfFolded ?? false,
           outerWrapping: (line as any).outerWrapping ?? 'POLYBAG',
@@ -144,7 +156,7 @@ export async function POST(req: NextRequest) {
           finishedGsm: (line as any).finishedGsm ?? null,
           toleranceQtyPct: (line as any).toleranceQtyPct ?? 10.0,
           toleranceSpecPct: (line as any).toleranceSpecPct ?? 5.0,
-        }
+        })
         const result = (lifecycle.lifecycleStatus === 'DRAFT' ? draftOrderStateSchema : approvedOrderStateSchema).safeParse(state)
         if (!result.success) {
           result.error.issues.forEach((issue) => validationErrors.push(`Dòng ${index + 1}: ${String(issue.path.join('.'))}: ${issue.message}`))
@@ -209,6 +221,7 @@ export async function POST(req: NextRequest) {
             eyeletSpec: state.eyeletSpec ?? null,
             colorVersion: (state as any).colorVersion ?? null,
             primaryPackingType: (state as any).primaryPackingType ?? 'ROLL',
+            subPackingType: (state as any).subPackingType ?? null,
             hasPaperCore: (state as any).hasPaperCore ?? false,
             isHalfFolded: Boolean((state as any).isHalfFolded),
             outerWrapping: (state as any).outerWrapping ?? 'POLYBAG',

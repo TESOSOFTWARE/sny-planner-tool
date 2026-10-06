@@ -7,7 +7,7 @@
 import type { Prisma } from '@prisma/client'
 import type { ParsedOrder } from '@/types'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
-import { IMPORT_INSERT_CHUNK_SIZE } from '@/lib/validations/order'
+import { IMPORT_INSERT_CHUNK_SIZE, clearHemmedFields } from '@/lib/validations/order'
 
 type Row = ParsedOrder & Record<string, unknown>
 
@@ -58,26 +58,29 @@ export function mapParsedRowToCreateInput(row: ParsedOrder, customerId: string |
     finishedGsm: (r.finishedGsm as number | null) ?? null,
   })
 
-  return {
+  // H2 (01/10): HEMMED không lưu field dư (số tấm / kích thước thùng kiện).
+  const raw = {
     piNumber: row.piNumber.trim(),
     subLineIndex: row.subLineIndex,
     customer: row.customer.trim(),
     customerId,
     orderDate: new Date(`${row.orderDate}T00:00:00.000Z`),
-    widthM: row.widthM,
+    widthM: row.widthM && row.widthM > 0 ? row.widthM : (r.lifecycleStatus === 'DRAFT' ? null : row.widthM),
     lengthM: calculation.totalMeters,
-    gsm: row.gsm,
+    gsm: row.gsm && row.gsm > 0 ? row.gsm : (r.lifecycleStatus === 'DRAFT' ? null : row.gsm),
     productionGsm: row.productionGsm ?? null,
-    color: row.color,
+    color: row.color && row.color.trim() ? row.color.trim() : (r.lifecycleStatus === 'DRAFT' ? null : row.color),
+    mbCode: (r.mbCode as string | null) ?? null,
+    itemCode: (r.itemCode as string | null) ?? null,
     // Single State of Truth: lifecycleStatus -> suy ra isDraft, isPlaceholder
-    lifecycleStatus: (r.lifecycleStatus === 'APPROVED' || r.lifecycleStatus === 'PLACEHOLDER' || r.lifecycleStatus === 'DRAFT')
-      ? (r.lifecycleStatus as string)
+    lifecycleStatus: (r.lifecycleStatus === 'APPROVED' || r.lifecycleStatus === 'RESERVED' || r.lifecycleStatus === 'RESERVE' || r.lifecycleStatus === 'PLACEHOLDER' || r.lifecycleStatus === 'DRAFT')
+      ? (r.lifecycleStatus === 'PLACEHOLDER' || r.lifecycleStatus === 'RESERVE' ? 'RESERVED' : r.lifecycleStatus as string)
       : 'DRAFT',
-    isDraft: r.lifecycleStatus !== 'APPROVED' && r.lifecycleStatus !== 'PLACEHOLDER',
-    isPlaceholder: r.lifecycleStatus === 'PLACEHOLDER',
+    isDraft: r.lifecycleStatus !== 'APPROVED' && r.lifecycleStatus !== 'RESERVED' && r.lifecycleStatus !== 'RESERVE' && r.lifecycleStatus !== 'PLACEHOLDER',
+    isPlaceholder: r.lifecycleStatus === 'RESERVED' || r.lifecycleStatus === 'RESERVE' || r.lifecycleStatus === 'PLACEHOLDER',
     qty: row.qty ?? null,
     uvPct: row.uvPct ?? null,
-    frFlag: row.frFlag ?? false,
+    frFlag: ((row.frPct ?? 0) > 0) || (row.frFlag ?? false),
     frPct: row.frPct ?? null,
     description: row.description ?? null,
     remark: row.remark ?? null,
@@ -95,9 +98,10 @@ export function mapParsedRowToCreateInput(row: ParsedOrder, customerId: string |
     eyeletColor: row.eyeletColor ?? null,
     eyeletLines: row.eyeletLines ?? null,
     eyeletSpec: row.eyeletSpec ?? null,
-    // V4.1 — must persist, never silently fall back except documented defaults.
+    // V4.1 & V4.2 — must persist, never silently fall back except documented defaults.
     colorVersion: (r.colorVersion as string | null) ?? null,
     primaryPackingType: (r.primaryPackingType as string | null) ?? 'ROLL',
+    subPackingType: (r.subPackingType as string | null) ?? null,
     hasPaperCore: r.hasPaperCore === true,
     isHalfFolded: Boolean(r.isHalfFolded),
     outerWrapping: (r.outerWrapping as string | null) ?? 'POLYBAG',
@@ -120,4 +124,7 @@ export function mapParsedRowToCreateInput(row: ParsedOrder, customerId: string |
     requiredYarnKg: calculation.requiredYarnKg,
     dataSource: 'import',
   }
+  return clearHemmedFields(raw)
 }
+
+export type { CreateManyTx }

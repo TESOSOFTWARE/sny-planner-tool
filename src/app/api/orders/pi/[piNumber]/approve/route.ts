@@ -1,7 +1,7 @@
-// src/app/api/orders/[id]/approve/route.ts
-// POST /api/orders/[id]/approve
-// Validates every sub-line in the PI as an approved order before changing any
-// draft flag or placeholder assignment.
+// src/app/api/orders/pi/[piNumber]/approve/route.ts
+// POST /api/orders/pi/[piNumber]/approve
+// Validates every sub-line in the PI as an approved order before atomically
+// transitioning all lines from RESERVED (compat: RESERVE) / DRAFT / PLACEHOLDER to APPROVED.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
@@ -20,7 +20,7 @@ function numberOrNull(value: unknown): number | null {
   return Number.isFinite(number) ? number : null
 }
 
-function stateFor(line: Awaited<ReturnType<typeof prisma.productionOrder.findUniqueOrThrow>>): ParsedOrder {
+function stateFor(line: Awaited<ReturnType<typeof prisma.productionOrder.findFirstOrThrow>>): ParsedOrder {
   return {
     piNumber: line.piNumber,
     subLineIndex: line.subLineIndex,
@@ -77,18 +77,23 @@ function stateFor(line: Awaited<ReturnType<typeof prisma.productionOrder.findUni
 
 export async function POST(
   _req: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: { piNumber: string } },
 ) {
+  const piNumber = decodeURIComponent(params.piNumber)
+
   try {
     const result = await prisma.$transaction(async (tx) => {
-      const target = await tx.productionOrder.findUnique({ where: { id: params.id } })
-      if (!target) return { notFound: true as const }
-      if (target.lifecycleStatus === 'APPROVED' && !target.isDraft && !target.isPlaceholder) return { alreadyApproved: true as const }
-
       const lines = await tx.productionOrder.findMany({
-        where: { piNumber: target.piNumber },
+        where: { piNumber },
         orderBy: { subLineIndex: 'asc' },
       })
+      if (!lines || lines.length === 0) return { notFound: true as const }
+
+      const allAlreadyApproved = lines.every(
+        (l) => l.lifecycleStatus === 'APPROVED' && !l.isDraft && !l.isPlaceholder
+      )
+      if (allAlreadyApproved) return { alreadyApproved: true as const }
+
       const missingFields = new Set<string>()
       const validated = lines.map((line, index) => {
         const parsed = approvedOrderStateSchema.safeParse(stateFor(line))
@@ -104,17 +109,17 @@ export async function POST(
       }
 
       const subLineIds = lines.map((line) => line.id)
-      // R6: load catalog once for the whole PI; freeze happens per line below.
       const piColors = Array.from(new Set(lines.map((l) => normalizeColorName(l.color)).filter(Boolean)))
       const recipes = piColors.length > 0
         ? await tx.productColorRecipe.findMany({ where: { colorName: { in: piColors, mode: 'insensitive' } } })
         : []
       const approvedAt = new Date().toISOString()
+
       for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index]
         const data = validated[index]
         if (!data) return { invalid: ['Dòng không hợp lệ'] }
-        // R6: snapshot only when a recipe matches; never clear existing history.
+
         const recipe = matchRecipe(line.color, line.colorVersion, recipes)
         const calculation = calculateOrderWeight({
           orderType: data.orderType ?? 'meters',
@@ -130,11 +135,11 @@ export async function POST(
           coatingGsm: data.coatingGsm ?? null,
           finishedGsm: data.finishedGsm ?? null,
         })
+
         await tx.productionOrder.update({
           where: { id: line.id },
           data: {
             isDraft: false,
-            // P0-3: duyệt = chuyển sang APPROVED, không để lifecycleStatus kẹt ở DRAFT
             lifecycleStatus: 'APPROVED',
             isPlaceholder: false,
             lengthM: calculation.totalMeters,
@@ -145,16 +150,35 @@ export async function POST(
           },
         })
       }
-      await tx.machineAssignment.updateMany({ where: { orderId: { in: subLineIds } }, data: { isPlaceholder: false } })
-      return { count: lines.length, piNumber: target.piNumber }
+
+      await tx.machineAssignment.updateMany({
+        where: { orderId: { in: subLineIds } },
+        data: { isPlaceholder: false },
+      })
+
+      return { count: lines.length, piNumber }
     }, { timeout: 30_000, maxWait: 5_000 })
 
-    if ('notFound' in result && result.notFound) return NextResponse.json({ success: false, error: 'Đơn hàng không tồn tại.' }, { status: 404 })
-    if ('alreadyApproved' in result && result.alreadyApproved) return NextResponse.json({ success: true, message: 'Đơn hàng đã được duyệt trước đó.' })
-    if (result.invalid) return NextResponse.json({ success: false, error: `Chưa thể duyệt đơn nháp do thiếu hoặc sai thông tin: ${result.invalid.join(', ')}`, missingFields: result.invalid }, { status: 422 })
-    return NextResponse.json({ success: true, message: `Đã duyệt thành công ${result.count} dòng hàng của PI [${result.piNumber}].` })
+    if ('notFound' in result && result.notFound) {
+      return NextResponse.json({ success: false, error: `Không tìm thấy đơn hàng với mã PI "${piNumber}".` }, { status: 404 })
+    }
+    if ('alreadyApproved' in result && result.alreadyApproved) {
+      return NextResponse.json({ success: true, message: `Toàn bộ các dòng hàng của PI [${piNumber}] đã được duyệt trước đó.` })
+    }
+    if (result.invalid) {
+      return NextResponse.json({
+        success: false,
+        error: `Chưa thể duyệt đơn do thiếu hoặc sai thông tin: ${result.invalid.join(', ')}`,
+        missingFields: result.invalid,
+      }, { status: 422 })
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: `Đã duyệt thành công ${result.count} dòng hàng của PI [${result.piNumber}]. Trạng thái: APPROVED.`,
+    })
   } catch (err) {
-    console.error('[POST /api/orders/[id]/approve]', err)
-    return NextResponse.json({ success: false, error: 'Lỗi server khi duyệt đơn nháp.' }, { status: 500 })
+    console.error(`[POST /api/orders/pi/${piNumber}/approve]`, err)
+    return NextResponse.json({ success: false, error: 'Lỗi server khi duyệt PI.' }, { status: 500 })
   }
 }

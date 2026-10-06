@@ -34,6 +34,7 @@ export interface SerializedProductionOrder {
   productionGsm: number | null
   color: string | null
   mbCode: string | null
+  itemCode: string | null
 
   isDraft: boolean
   lifecycleStatus: string
@@ -43,6 +44,7 @@ export interface SerializedProductionOrder {
 
   // Packing v4
   primaryPackingType: string
+  subPackingType?: string | null
   hasPaperCore: boolean
   isHalfFolded: boolean
   outerWrapping?: string | null
@@ -104,9 +106,11 @@ export interface SerializedProductionOrder {
   }[]
 }
 
-export type PrimaryPackingType = 'ROLL' | 'BALE' | 'CARTON'
+export type PrimaryPackingType = 'ROLL' | 'BALE' | 'CARTON' | 'HEMMED'
+export type SubPackingType = 'CARTON' | 'BALE'
 export type SecondaryPackingType = 'NONE' | 'WOOD_PALLET' | 'IRON_PALLET' | 'PLASTIC_PALLET'
-export type OrderLifecycleStatus = 'DRAFT' | 'PLACEHOLDER' | 'APPROVED'
+export type OrderLifecycleStatus = 'DRAFT' | 'RESERVED' | 'RESERVE' | 'PLACEHOLDER' | 'APPROVED'
+// 'RESERVE' | 'PLACEHOLDER' deprecated — chỉ đọc tương thích dữ liệu/file cũ, khi ghi dùng 'RESERVED'.
 
 /**
  * A single row parsed from the ORDER_LIST Excel file.
@@ -135,6 +139,7 @@ export interface ParsedOrder {
   lifecycleStatus?: OrderLifecycleStatus
   isPlaceholder?: boolean
   primaryPackingType?: PrimaryPackingType
+  subPackingType?: SubPackingType | null
   hasPaperCore?: boolean
   isHalfFolded?: boolean
   piecesPerCarton?: number | null
@@ -161,6 +166,7 @@ export interface ParsedOrder {
   description: string | null
   remark: string | null
   mbCode?: string | null
+  itemCode?: string | null
   meshType?: string | null
   needleCount?: number | null
   beamCount?: number | null
@@ -196,6 +202,8 @@ export interface OrderImportDecision {
   subLineIndex: number
   status: OrderImportStatus
   existingOrderId: string | null
+  /** Server-derived values for a supplied code differing from the stored code. */
+  itemCodeChange?: { existing: string | null; incoming: string }
   changedFields: string[]
   reasons: string[]
   /** Highest-priority action when status is 'conflict'. Undefined otherwise. */
@@ -282,4 +290,25 @@ export interface SerializedPackingOutput {
   weightNight: string | null
   dataSource: string
   createdAt: string
+}
+
+export interface OrderTableItem {
+  id: string
+  piNumber: string
+  subLineIndex: number
+  customer: string
+  customerId: string | null
+  orderDate: string
+  widthM: number | null
+  lengthM: number | null
+  gsm: number | null
+  color: string | null
+  itemCode: string | null
+  lifecycleStatus: string
+  isDraft: boolean
+  isPlaceholder: boolean
+  assignments: {
+    startDate: string
+    endDate: string
+  }[]
 }

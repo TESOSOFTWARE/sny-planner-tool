@@ -34,7 +34,7 @@ function formatOrderLabel(o: Order): string {
   const gsmStr = o.gsm != null ? `${o.gsm}gsm` : '—'
   const isDraft = o.lifecycleStatus === 'DRAFT' || (o.isDraft && o.lifecycleStatus !== 'PLACEHOLDER' && !o.isPlaceholder)
   const isPlaceholder = o.lifecycleStatus === 'PLACEHOLDER' || o.isPlaceholder
-  const tag = isDraft ? '⛔ [NHÁP - CHẶN DỆT] ' : isPlaceholder ? '⏳ [GIỮ CHỖ TẠM] ' : ''
+  const tag = isDraft ? '📌 [Nháp] ' : isPlaceholder ? '⏳ [Giữ chỗ] ' : ''
   const base = `${tag}${o.piNumber} · Dòng ${o.subLineIndex + 1} — ${widthStr} · ${colorStr} · ${gsmStr}`
   return o.meshType ? `${base} · ${o.meshType}` : base
 }
@@ -72,8 +72,8 @@ function SubLineDetailPanel({ o }: { o: Order }) {
           {o.piNumber} · Dòng {o.subLineIndex + 1}
         </p>
         {isDraft ? (
-          <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-error/15 text-error border border-error/30 uppercase">
-            Bản nháp (Chặn dệt)
+          <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/15 text-amber-700 border border-amber-500/30 uppercase">
+            Bản nháp
           </span>
         ) : isPlaceholder ? (
           <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/15 text-amber-600 border border-amber-500/30 uppercase">
@@ -87,8 +87,8 @@ function SubLineDetailPanel({ o }: { o: Order }) {
       </div>
 
       {isDraft && (
-        <div className="p-2 rounded bg-error/10 border border-error/20 text-error text-xs font-medium">
-          ⛔ Đơn hàng đang ở trạng thái Bản Nháp. Không thể xếp máy dệt. Vui lòng mở trang Đơn hàng để hoàn thiện hoặc chuyển thành Đơn Giữ Chỗ.
+        <div className="p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-800 text-xs font-medium">
+          📌 Đơn hàng đang ở trạng thái Bản Nháp. Sẽ được xếp lịch tạm thời (isPlaceholder) trên sơ đồ máy dệt.
         </div>
       )}
 
@@ -143,18 +143,10 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
 
   // Derived: the full Order object for the currently-selected id
   const selectedOrder = orders.find(o => o.id === selectedOrderId) ?? null
-  const isSelectedDraft = Boolean(
-    selectedOrder && (selectedOrder.lifecycleStatus === 'DRAFT' || (selectedOrder.isDraft && selectedOrder.lifecycleStatus !== 'PLACEHOLDER' && !selectedOrder.isPlaceholder))
-  )
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-
-    if (isSelectedDraft) {
-      setError('Hệ thống chặn không cho phép xếp lịch cho Đơn Nháp (Draft).')
-      return
-    }
 
     setIsLoading(true)
 
@@ -244,6 +236,7 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
                 Đơn hàng — Dòng hàng
               </label>
               <select
+                id="assign-order-select"
                 required
                 value={selectedOrderId}
                 onChange={e => setSelectedOrderId(e.target.value)}
@@ -330,10 +323,10 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
             </button>
             <button
               type="submit"
-              disabled={isLoading || !selectedOrderId || isSelectedDraft}
+              disabled={isLoading || !selectedOrderId}
               className="inline-flex items-center justify-center gap-sm bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors"
             >
-              {isLoading ? 'Đang lưu...' : isSelectedDraft ? 'Đơn Nháp (Bị Chặn)' : 'Xếp máy'}
+              {isLoading ? 'Đang lưu...' : 'Xếp máy'}
             </button>
           </div>
         </form>

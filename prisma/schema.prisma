@@ -46,10 +46,11 @@ model ProductionOrder {
   colorRecipeSnapshot   String?  // JSON snapshot công thức 3 giàn & MB tại thời điểm tạo đơn
 
   // Đóng gói v4 (Multi-tier Packing)
-  // primaryPackingType: ROLL (cuộn) | BALE (kiện) | CARTON (thùng carton)
+  // primaryPackingType: ROLL (cuộn) | BALE (kiện) | CARTON (thùng carton) | HEMMED (may viền, đóng khuy)
   primaryPackingType    String   @default("ROLL")
+  subPackingType        String?                       // Quy cách con khi HEMMED: 'CARTON' | 'BALE'
   hasPaperCore          Boolean  @default(false)      // Lõi giấy — chỉ ROLL mới có; BALE/CARTON = false
-  isHalfFolded          Boolean  @default(false)      // Gấp đôi (half-fold) trước khi cuộn
+  isHalfFolded          Boolean  @default(false)      // Deprecated: bỏ khỏi UI/Excel, giữ cột an toàn DB
   outerWrapping         String?  @default("POLYBAG")  // 'POLYBAG' | 'TARPAULIN' | 'NONE'
   piecesPerCarton       Int?                          // Số tấm đóng chung 1 thùng
   piecesPerBale         Int?                          // Số tấm đóng chung 1 kiện

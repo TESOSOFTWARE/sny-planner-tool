@@ -112,7 +112,7 @@ export default async function OrderDetailPage({ params }: Props) {
           className="px-4 py-2 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all shadow-sm"
         >
           <span className="material-symbols-outlined text-[18px]">table_rows</span>
-          Chỉnh sửa Toàn bộ PI (Master-Detail)
+          Chỉnh sửa Toàn bộ PI
         </Link>
       </div>
 

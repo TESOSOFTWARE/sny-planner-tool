@@ -67,13 +67,14 @@ export async function PATCH(
       if (!targetOrder) {
         return NextResponse.json({ message: "Order not found" }, { status: 404 });
       }
-      if (targetOrder.lifecycleStatus === 'DRAFT') {
-        return NextResponse.json(
-          { message: "Không thể chuyển lịch sang đơn hàng ở trạng thái Bản Nháp (Draft)." },
-          { status: 422 }
-        );
-      }
-      isPlaceholder = targetOrder.lifecycleStatus === 'PLACEHOLDER' || targetOrder.isPlaceholder;
+      isPlaceholder = Boolean(
+        targetOrder.isDraft ||
+        targetOrder.lifecycleStatus === 'DRAFT' ||
+        targetOrder.lifecycleStatus === 'RESERVED' ||
+        targetOrder.lifecycleStatus === 'RESERVE' ||
+        targetOrder.lifecycleStatus === 'PLACEHOLDER' ||
+        targetOrder.isPlaceholder
+      );
     }
 
     // Overlap check on target machine and date range, excluding current assignment

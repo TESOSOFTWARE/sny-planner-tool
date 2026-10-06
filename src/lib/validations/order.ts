@@ -16,6 +16,22 @@ export function isValidISODate(value: string): boolean {
 const isoDateSchema = (message: string) => z.string().refine(isValidISODate, message)
 
 /**
+ * H2 (01/10): HEMMED không lưu số tấm / kích thước thùng/kiện.
+ * Gọi ở mọi điểm persist để đảm bảo DB không chứa field dư.
+ */
+export function clearHemmedFields<T extends {
+  primaryPackingType?: string | null
+  piecesPerCarton?: number | null
+  piecesPerBale?: number | null
+  boxDimensions?: string | null
+}>(data: T): T {
+  if (data.primaryPackingType === 'HEMMED') {
+    return { ...data, piecesPerCarton: null, piecesPerBale: null, boxDimensions: null }
+  }
+  return data
+}
+
+/**
  * P0-3: Chuẩn hóa lifecycleStatus + isPlaceholder từ mọi entry point.
  * Ưu tiên: lifecycleStatus tường minh > isPlaceholder > isDraft > APPROVED.
  * Trước P0-3, 3 route (multi-line, [id] PATCH, POST) không ghi lifecycleStatus
@@ -23,12 +39,13 @@ const isoDateSchema = (message: string) => z.string().refine(isValidISODate, mes
  */
 export function resolveLifecycle(
   input: { lifecycleStatus?: string | null; isPlaceholder?: boolean | null; isDraft?: boolean | null },
-): { lifecycleStatus: 'DRAFT' | 'PLACEHOLDER' | 'APPROVED'; isPlaceholder: boolean } {
-  const explicit = input.lifecycleStatus
-  if (explicit === 'DRAFT' || explicit === 'PLACEHOLDER' || explicit === 'APPROVED') {
-    return { lifecycleStatus: explicit, isPlaceholder: explicit === 'PLACEHOLDER' }
+): { lifecycleStatus: 'DRAFT' | 'RESERVED' | 'APPROVED'; isPlaceholder: boolean } {
+  let explicit = input.lifecycleStatus
+  if (explicit === 'PLACEHOLDER' || explicit === 'RESERVE') explicit = 'RESERVED'
+  if (explicit === 'DRAFT' || explicit === 'RESERVED' || explicit === 'APPROVED') {
+    return { lifecycleStatus: explicit, isPlaceholder: explicit === 'RESERVED' }
   }
-  if (input.isPlaceholder === true) return { lifecycleStatus: 'PLACEHOLDER', isPlaceholder: true }
+  if (input.isPlaceholder === true) return { lifecycleStatus: 'RESERVED', isPlaceholder: true }
   if (input.isDraft === true) return { lifecycleStatus: 'DRAFT', isPlaceholder: false }
   return { lifecycleStatus: 'APPROVED', isPlaceholder: false }
 }
@@ -124,7 +141,17 @@ export const createOrderSchema = z.object({
     .optional(),
 
   frFlag: z.boolean().default(false),
-  frPct: z.number().finite().min(0, 'FR% must be between 0 and 100').max(100, 'FR% must be between 0 and 100').nullable().optional(),
+  frPct: z.preprocess((val) => {
+    if (val === null || val === undefined || val === '') return null
+    if (typeof val === 'number') return val <= 0 ? null : val
+    if (typeof val === 'string') {
+      const cleaned = val.replace('%', '').trim()
+      if (!cleaned) return null
+      const num = Number(cleaned)
+      return Number.isFinite(num) && num > 0 ? num : null
+    }
+    return val
+  }, z.number().finite().min(0, 'FR% must be between 0 and 100').max(100, 'FR% must be between 0 and 100').nullable().optional()),
 
   description: z
     .string()
@@ -180,11 +207,20 @@ export const createOrderSchema = z.object({
     .transform((v) => v.trim())
     .nullable()
     .optional(),
+  itemCode: z
+    .string()
+    .max(100, 'Item Code must be 100 characters or fewer')
+    .transform((v) => {
+      const t = v.trim()
+      return t === '' ? null : t
+    })
+    .nullable()
+    .optional(),
   colorVersion: z.string().max(50).nullable().optional(),
   colorRecipeSnapshot: z.string().nullable().optional(),
 
   // Lifecycle v4
-  lifecycleStatus: z.enum(['DRAFT', 'PLACEHOLDER', 'APPROVED']).optional(),
+  lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).optional(),
   isPlaceholder: z.boolean().optional(),
 
 
@@ -193,7 +229,8 @@ export const createOrderSchema = z.object({
   rollLength: z.number().finite().positive('Số mét/cuộn phải lớn hơn 0').nullable().optional(),
   pieceLength: z.number().finite().positive('Chiều dài tấm phải lớn hơn 0').nullable().optional(),
 
-  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON']).default('ROLL'),
+  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).default('ROLL'),
+  subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
   hasPaperCore: z.boolean().default(false),
   isHalfFolded: z.boolean().default(false),
   outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).default('POLYBAG').nullable().optional(),
@@ -220,6 +257,30 @@ export const createOrderSchema = z.object({
   eyeletLines: z.number().int('Số lines eyelet phải là số nguyên').positive('Số lines eyelet phải > 0').nullable().optional(),
   eyeletSpec: z.string().max(200, 'Eyelet spec must be 200 characters or fewer').nullable().optional(),
 })
+  .refine(
+    (data) => data.primaryPackingType !== 'CARTON' || (data.piecesPerCarton != null && data.piecesPerCarton > 0),
+    { message: 'Thiếu số tấm/thùng khi chọn đóng thùng Carton (piecesPerCarton > 0)', path: ['piecesPerCarton'] },
+  )
+  .refine(
+    (data) => data.primaryPackingType !== 'BALE' || (data.piecesPerBale != null && data.piecesPerBale > 0),
+    { message: 'Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)', path: ['piecesPerBale'] },
+  )
+  .refine(
+    (data) => data.primaryPackingType !== 'HEMMED' || (data.subPackingType === 'CARTON' || data.subPackingType === 'BALE'),
+    { message: 'Thiếu quy cách đóng gói con (Thùng Carton hoặc Kiện nén BALE) khi chọn May viền, đóng khuy (HEMMED)', path: ['subPackingType'] },
+  )
+  .refine(
+    (data) => data.onPallet !== true || (data.secondaryPackingType != null && data.secondaryPackingType !== 'NONE'),
+    { message: 'Chưa chọn loại Pallet (Gỗ/Nhựa/Sắt) khi đóng trên Pallet', path: ['secondaryPackingType'] },
+  )
+  .refine(
+    (data) => data.isLaminated !== true || (data.rawFabricGsm != null && data.rawFabricGsm > 0 && data.finishedGsm != null && data.finishedGsm > 0),
+    { message: 'Hàng tráng màng ngoài bắt buộc có GSM dệt mộc và GSM thành phẩm', path: ['rawFabricGsm'] },
+  )
+  .refine(desertSandVersionOk, {
+    message: 'Màu Desert Sand bắt buộc chọn tường minh Version A hoặc Version B (không tự gán)',
+    path: ['colorVersion'],
+  })
 
 export type CreateOrderInput = z.input<typeof createOrderSchema>
 
@@ -363,11 +424,20 @@ export const updateOrderSchema = z.object({
     .transform((v) => v.trim())
     .nullable()
     .optional(),
+  itemCode: z
+    .string()
+    .max(100, 'Item Code must be 100 characters or fewer')
+    .transform((v) => {
+      const t = v.trim()
+      return t === '' ? null : t
+    })
+    .nullable()
+    .optional(),
   colorVersion: z.string().max(50).nullable().optional(),
   colorRecipeSnapshot: z.string().nullable().optional(),
 
   // Lifecycle v4
-  lifecycleStatus: z.enum(['DRAFT', 'PLACEHOLDER', 'APPROVED']).optional(),
+  lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).optional(),
   isPlaceholder: z.boolean().optional(),
 
   // Kiểu đơn hàng & Đóng gói v4
@@ -375,7 +445,8 @@ export const updateOrderSchema = z.object({
   rollLength: z.number().finite().positive('Số mét/cuộn phải lớn hơn 0').nullable().optional(),
   pieceLength: z.number().finite().positive('Chiều dài tấm phải lớn hơn 0').nullable().optional(),
 
-  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON']).optional(),
+  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).optional(),
+  subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
   hasPaperCore: z.boolean().optional(),
   isHalfFolded: z.boolean().optional(),
   outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).optional(),
@@ -414,8 +485,8 @@ export const updateOrderSchema = z.object({
     { message: 'Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)', path: ['piecesPerBale'] },
   )
   .refine(
-    (data) => data.onPallet !== true || (data.palletDimensions != null && data.palletDimensions.trim().length > 0),
-    { message: 'Thiếu kích thước Pallet khi chọn đóng trên Pallet', path: ['palletDimensions'] },
+    (data) => data.primaryPackingType !== 'HEMMED' || (data.subPackingType === 'CARTON' || data.subPackingType === 'BALE'),
+    { message: 'Thiếu quy cách đóng gói con (Thùng Carton hoặc Kiện nén BALE) khi chọn May viền, đóng khuy (HEMMED)', path: ['subPackingType'] },
   )
   // G2: partial-update nên chỉ bắt khi loại pallet xuất hiện tường minh là NONE
   // (vắng mặt = giữ giá trị cũ trong DB). Form edit luôn gửi đủ nên vẫn chặn được.
@@ -433,6 +504,12 @@ export const updateOrderSchema = z.object({
     message: 'Màu Desert Sand bắt buộc chọn tường minh Version A hoặc Version B (không tự gán)',
     path: ['colorVersion'],
   })
+  // FR: partial-update nên chỉ bắt khi frFlag xuất hiện tường minh là true
+  // (vắng mặt = giữ giá trị cũ trong DB). Form edit luôn gửi đủ nên vẫn chặn được.
+  .refine(
+    (data) => data.frFlag !== true || (data.frPct != null && data.frPct > 0),
+    { message: 'FR% phải lớn hơn 0 khi chọn chống cháy (FR)', path: ['frPct'] },
+  )
 
 export type UpdateOrderInput = z.input<typeof updateOrderSchema>
 
@@ -472,7 +549,7 @@ export const importedOrderRowSchema = z
     colorVersion: z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
     colorRecipeSnapshot: z.string().nullable().optional(),
 
-    lifecycleStatus: z.enum(['DRAFT', 'PLACEHOLDER', 'APPROVED']).default('APPROVED'),
+    lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).default('APPROVED'),
     isPlaceholder: z.boolean().default(false),
 
     orderType:    z.enum(['meters', 'rolls', 'pieces']).default('meters'),
@@ -480,7 +557,8 @@ export const importedOrderRowSchema = z
     rollLength:   z.number().finite().gt(0).nullable().optional(),
     pieceLength:  z.number().finite().gt(0).nullable().optional(),
 
-    primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON']).default('ROLL'),
+    primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).default('ROLL'),
+    subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
     hasPaperCore: z.boolean().default(false),
     isHalfFolded: z.boolean().default(false),
     piecesPerCarton: z.number().finite().int().positive().nullable().optional(),
@@ -507,6 +585,10 @@ export const importedOrderRowSchema = z
     description:  z.string().max(200).nullable().optional().transform((v) => v?.trim() ?? null),
     remark:       z.string().max(200).nullable().optional().transform((v) => v?.trim() ?? null),
     mbCode:       z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
+  itemCode:     z.string().max(100).nullable().optional().transform((v) => {
+      const t = v?.trim() ?? ''
+      return t === '' ? null : t
+    }),
     meshType:     z.string().max(100).nullable().optional().transform((v) => v?.trim() ?? null),
     needleCount:  z.number().finite().int().positive().nullable().optional(),
     beamCount:    z.number().finite().int().positive().nullable().optional(),
@@ -569,12 +651,12 @@ export const importedOrderRowSchema = z
   )
   .refine(
     (data) => {
-      if (data.onPallet) {
-        return data.palletDimensions != null && data.palletDimensions.trim().length > 0
+      if (data.primaryPackingType === 'HEMMED') {
+        return data.subPackingType === 'CARTON' || data.subPackingType === 'BALE'
       }
       return true
     },
-    { message: 'Thiếu kích thước Pallet khi chọn đóng trên Pallet', path: ['palletDimensions'] }
+    { message: 'Thiếu quy cách đóng gói con (Thùng Carton hoặc Kiện nén BALE) khi chọn May viền, đóng khuy (HEMMED)', path: ['subPackingType'] }
   )
   .refine(
     (data) => {
@@ -621,7 +703,7 @@ export const draftOrderStateSchema = z.object({
   colorVersion: z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
   colorRecipeSnapshot: z.string().nullable().optional(),
 
-  lifecycleStatus: z.enum(['DRAFT', 'PLACEHOLDER', 'APPROVED']).default('DRAFT'),
+  lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).default('DRAFT'),
   isPlaceholder: z.boolean().default(false),
 
   orderType: z.enum(['meters', 'rolls', 'pieces']).default('meters'),
@@ -629,7 +711,8 @@ export const draftOrderStateSchema = z.object({
   rollLength: z.number().finite().gt(0).nullable().optional(),
   pieceLength: z.number().finite().gt(0).nullable().optional(),
 
-  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON']).default('ROLL'),
+  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).default('ROLL'),
+  subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
   hasPaperCore: z.boolean().default(false),
   isHalfFolded: z.boolean().default(false),
   piecesPerCarton: z.number().finite().int().positive().nullable().optional(),
@@ -656,6 +739,10 @@ export const draftOrderStateSchema = z.object({
   description: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   remark: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   mbCode: z.string().max(50).transform((v) => v.trim()).nullable().optional(),
+  itemCode: z.string().max(100).transform((v) => {
+      const t = v.trim()
+      return t === '' ? null : t
+    }).nullable().optional(),
   meshType: z.string().max(100).transform((v) => v.trim()).nullable().optional(),
   needleCount: z.number().finite().int().positive().nullable().optional(),
   beamCount: z.number().finite().int().positive().nullable().optional(),
@@ -701,11 +788,12 @@ export const lineSchema = z
     rollLength:  z.number().finite().gt(0).nullable().optional(),
     pieceLength: z.number().finite().gt(0).nullable().optional(),
 
-  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON']).default('ROLL'),
-  // Lõi giấy chỉ áp dụng cho ROLL. BALE/CARTON = false.
-  hasPaperCore: z.boolean().default(false),
-  isHalfFolded: z.boolean().default(false),
-  outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).default('POLYBAG').nullable().optional(),
+    primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).default('ROLL'),
+    subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
+    // Lõi giấy chỉ áp dụng cho ROLL. BALE/CARTON = false.
+    hasPaperCore: z.boolean().default(false),
+    isHalfFolded: z.boolean().default(false),
+    outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).default('POLYBAG').nullable().optional(),
     piecesPerCarton: z.number().finite().int().positive().nullable().optional(),
     piecesPerBale: z.number().finite().int().positive().nullable().optional(),
     boxDimensions: z.string().max(100).nullable().optional(),
@@ -731,6 +819,10 @@ export const lineSchema = z
     hasEyelet:   z.boolean().default(false),
     eyeletColor: z.string().max(50).nullable().optional(),
     mbCode:      z.string().max(50).transform((v) => v.trim()).nullable().optional(),
+    itemCode:    z.string().max(100).transform((v) => {
+      const t = v.trim()
+      return t === '' ? null : t
+    }).nullable().optional(),
     meshType:    z.string().max(100).transform((v) => v.trim()).nullable().optional(),
     needleCount: z.number().finite().int().positive().nullable().optional(),
     beamCount:   z.number().finite().int().positive().nullable().optional(),
@@ -798,12 +890,12 @@ export const lineSchema = z
   )
   .refine(
     (data) => {
-      if (data.onPallet) {
-        return data.palletDimensions != null && data.palletDimensions.trim().length > 0
+      if (data.primaryPackingType === 'HEMMED') {
+        return data.subPackingType === 'CARTON' || data.subPackingType === 'BALE'
       }
       return true
     },
-    { message: 'Thiếu kích thước Pallet khi chọn đóng trên Pallet', path: ['palletDimensions'] }
+    { message: 'Thiếu quy cách đóng gói con (Thùng Carton hoặc Kiện nén BALE) khi chọn May viền, đóng khuy (HEMMED)', path: ['subPackingType'] }
   )
   .refine(
     (data) => {
@@ -836,7 +928,7 @@ export const multiLineOrderSchema = z.object({
   description: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   remark:      z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   isDraft:     z.boolean().optional(),
-  lifecycleStatus: z.enum(['DRAFT', 'PLACEHOLDER', 'APPROVED']).optional(),
+  lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).optional(),
   isPlaceholder: z.boolean().optional(),
   lines:       z.array(lineSchema).min(1, 'Cần ít nhất 1 dòng'),
 })
@@ -861,7 +953,8 @@ export const draftLineSchema = z.object({
   rollLength:  z.number().finite().gt(0).nullable().optional(),
   pieceLength: z.number().finite().gt(0).nullable().optional(),
 
-  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON']).default('ROLL'),
+  primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).default('ROLL'),
+  subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
   hasPaperCore: z.boolean().default(false),
   isHalfFolded: z.boolean().default(false),
   outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).default('POLYBAG').nullable().optional(),
@@ -890,6 +983,10 @@ export const draftLineSchema = z.object({
   hasEyelet:   z.boolean().default(false),
   eyeletColor: z.string().max(50).nullable().optional(),
   mbCode:      z.string().max(50).transform((v) => v.trim()).nullable().optional(),
+  itemCode:    z.string().max(100).transform((v) => {
+      const t = v.trim()
+      return t === '' ? null : t
+    }).nullable().optional(),
   meshType:    z.string().max(100).transform((v) => v.trim()).nullable().optional(),
   needleCount: z.number().finite().int().positive().nullable().optional(),
   beamCount:   z.number().finite().int().positive().nullable().optional(),
@@ -913,15 +1010,6 @@ export const draftLineSchema = z.object({
       return true
     },
     { message: 'Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)', path: ['piecesPerBale'] }
-  )
-  .refine(
-    (data) => {
-      if (data.onPallet) {
-        return data.palletDimensions != null && data.palletDimensions.trim().length > 0
-      }
-      return true
-    },
-    { message: 'Thiếu kích thước Pallet khi chọn đóng trên Pallet', path: ['palletDimensions'] }
   )
   .refine(
     (data) => {
@@ -953,7 +1041,84 @@ export const draftMultiLineOrderSchema = z.object({
   description: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   remark:      z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   isDraft:     z.boolean().default(true),
-  lifecycleStatus: z.enum(['DRAFT', 'PLACEHOLDER', 'APPROVED']).default('DRAFT'),
+  lifecycleStatus: z.enum(['DRAFT', 'RESERVED', 'RESERVE', 'PLACEHOLDER', 'APPROVED']).default('DRAFT'),
   isPlaceholder: z.boolean().default(false),
   lines:       z.array(draftLineSchema).min(1, 'Cần ít nhất 1 dòng'),
 })
+
+/**
+ * Sanitizes a sub-line object before passing to Zod lineSchema / draftLineSchema.
+ * Automatically converts empty strings '' for numeric fields into undefined,
+ * preventing Zod type errors ("Expected number, received string") on optional fields.
+ */
+export function cleanSubLineForValidation(raw: any): any {
+  if (!raw || typeof raw !== 'object') return raw
+
+  const numOrUndef = (v: any) => {
+    if (v === '' || v === null || v === undefined) return undefined
+    if (typeof v === 'string') {
+      const cleaned = v.replace('%', '').trim()
+      if (cleaned === '') return undefined
+      const n = Number(cleaned)
+      return isNaN(n) ? v : n
+    }
+    const n = Number(v)
+    return isNaN(n) ? v : n
+  }
+
+  const strOrUndef = (v: any) => {
+    if (typeof v === 'string') {
+      const trimmed = v.trim()
+      return trimmed === '' ? undefined : trimmed
+    }
+    return v ?? undefined
+  }
+
+  return {
+    ...raw,
+    // Required / Key numbers
+    widthM: numOrUndef(raw.widthM),
+    gsm: numOrUndef(raw.gsm),
+    productionGsm: numOrUndef(raw.productionGsm),
+    lengthM: numOrUndef(raw.lengthM),
+    qty: numOrUndef(raw.qty),
+    rollLength: numOrUndef(raw.rollLength),
+    pieceLength: numOrUndef(raw.pieceLength),
+
+    // Packing numbers
+    piecesPerCarton: numOrUndef(raw.piecesPerCarton),
+    piecesPerBale: numOrUndef(raw.piecesPerBale),
+    itemsPerPallet: numOrUndef(raw.itemsPerPallet),
+
+    // Dual-GSM & Tolerance
+    rawFabricGsm: numOrUndef(raw.rawFabricGsm),
+    coatingGsm: numOrUndef(raw.coatingGsm),
+    finishedGsm: numOrUndef(raw.finishedGsm),
+    toleranceQtyPct: numOrUndef(raw.toleranceQtyPct),
+    toleranceSpecPct: numOrUndef(raw.toleranceSpecPct),
+
+    // Technical numbers
+    uvPct: numOrUndef(raw.uvPct),
+    frPct: numOrUndef(raw.frPct),
+    needleCount: numOrUndef(raw.needleCount),
+    beamCount: numOrUndef(raw.beamCount),
+    eyeletLines: numOrUndef(raw.eyeletLines),
+
+    // Strings
+    color: typeof raw.color === 'string' ? raw.color.trim() : raw.color,
+    colorVersion: strOrUndef(raw.colorVersion),
+    primaryPackingType: strOrUndef(raw.primaryPackingType),
+    subPackingType: strOrUndef(raw.subPackingType),
+    boxDimensions: strOrUndef(raw.boxDimensions),
+    palletDimensions: strOrUndef(raw.palletDimensions),
+    packingNote: strOrUndef(raw.packingNote),
+    lineNote: strOrUndef(raw.lineNote),
+    meshType: strOrUndef(raw.meshType),
+    mbCode: strOrUndef(raw.mbCode),
+    eyeletColor: strOrUndef(raw.eyeletColor),
+    eyeletSpec: strOrUndef(raw.eyeletSpec),
+    outerWrapping: raw.outerWrapping || undefined,
+    secondaryPackingType: raw.secondaryPackingType || undefined,
+  }
+}
+

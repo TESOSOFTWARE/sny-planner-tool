@@ -19,7 +19,8 @@ import AssignFromOrderModal from '@/components/schedule/AssignFromOrderModal'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
 import { calcOrderStatus } from '@/lib/orderStatus'
 import OrderStatusBadge from './OrderStatusBadge'
-import DraftBadge from './DraftBadge'
+import DraftBadge, { OrderLifecycleBadge, PiStatusBadge, MachinePlanBadge } from './DraftBadge'
+import { toast } from 'sonner'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -98,37 +99,6 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
   // V4.1 view: gọn mặc định — chỉ mở rộng toàn bộ khi planner bấm "Hiện tất cả"
   const [showAllV41, setShowAllV41] = useState(false)
 
-  // Draft approval state (Sprint F1)
-  const [isApproving, setIsApproving] = useState(false)
-  const [approveError, setApproveError] = useState<{ message: string; missingFields?: string[] } | null>(null)
-
-  const handleApproveDraft = async () => {
-    setIsApproving(true)
-    setApproveError(null)
-
-    try {
-      const res = await fetch(`/api/orders/${currentOrder.id}/approve`, {
-        method: 'POST',
-      })
-      const json = await res.json()
-
-      if (!res.ok || !json.success) {
-        setApproveError({
-          message: json.error ?? 'Chưa thể duyệt đơn nháp do thiếu thông tin.',
-          missingFields: json.missingFields ?? [],
-        })
-        return
-      }
-
-      setCurrentOrder((prev) => ({ ...prev, isDraft: false, lifecycleStatus: 'APPROVED' }))
-      router.refresh()
-    } catch {
-      setApproveError({ message: 'Lỗi kết nối mạng khi duyệt đơn nháp.' })
-    } finally {
-      setIsApproving(false)
-    }
-  }
-
   // Danh sách máy đang chạy đơn hàng này
   type MachineRow = { id: string; machineId: string; startDate: string; endDate: string; allocatedMeters: string | null }
   const [machineRows, setMachineRows] = useState<MachineRow[]>([])
@@ -177,11 +147,13 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
   const editRollLength   = watch('rollLength')
   const editPieceLength  = watch('pieceLength')
   const editHasEyelet    = watch('hasEyelet')
+  const editFrFlag       = watch('frFlag')
   const editWidthM       = watch('widthM')
   const editLengthM      = watch('lengthM')
   const editGsm          = watch('gsm')
   // V4.1 — watch để render điều kiện trong edit mode
   const editPrimaryPackingType = watch('primaryPackingType')
+  const editSubPackingType     = watch('subPackingType')
   const editOnPallet     = watch('onPallet')
   const editIsLaminated  = watch('isLaminated')
   const editRawFabricGsm = watch('rawFabricGsm')
@@ -259,10 +231,20 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
         }),
       })
       const json = await res.json()
-      if (!res.ok || !json.success) { setSaveError(json.error ?? 'An unknown error occurred.'); return }
+      if (!res.ok || !json.success) {
+        const errMsg = json.error ?? 'An unknown error occurred.'
+        setSaveError(errMsg)
+        toast.error(errMsg)
+        return
+      }
       setCurrentOrder(json.order as SerializedProductionOrder)
       setMode('view')
-    } catch { setSaveError('Network error — could not reach the server.') }
+      toast.success('Cập nhật chi tiết đơn hàng thành công!')
+    } catch {
+      const netErr = 'Network error — could not reach the server.'
+      setSaveError(netErr)
+      toast.error(netErr)
+    }
   }
 
   const handleDelete = async () => {
@@ -271,10 +253,20 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
       const res = await fetch(`/api/orders/${currentOrder.id}`, { method: 'DELETE' })
       const json = await res.json()
       if (!res.ok || !json.success) {
-        setDeleteError(json.error ?? 'Could not delete order.'); setDeleteStatus('error'); return
+        const errMsg = json.error ?? 'Could not delete order.'
+        setDeleteError(errMsg)
+        setDeleteStatus('error')
+        toast.error(errMsg)
+        return
       }
+      toast.success(`Đã xóa đơn hàng ${currentOrder.piNumber}!`)
       router.push('/orders')
-    } catch { setDeleteError('Network error — could not reach the server.'); setDeleteStatus('error') }
+    } catch {
+      const netErr = 'Network error — could not reach the server.'
+      setDeleteError(netErr)
+      setDeleteStatus('error')
+      toast.error(netErr)
+    }
   }
 
   // ── VIEW mode ──────────────────────────────────────────────────────────────
@@ -287,81 +279,54 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
 
         {/* Draft Banner */}
         {currentOrder.isDraft && (
-          <div className="p-4 bg-[#FFF8E7] border border-[#F59E0B] rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+          <div className="p-4 bg-[#FFF8E7] border border-[#F59E0B] rounded-xl flex items-center justify-between gap-3 shadow-sm">
             <div className="flex items-start gap-2.5 text-xs text-[#92400E]">
               <span className="material-symbols-outlined text-[22px] text-[#D97706] shrink-0 mt-0.5">edit_note</span>
               <div>
                 <p className="font-bold text-sm text-[#B45309]">ĐƠN NHÁP — Thông tin đơn hàng chưa đầy đủ</p>
-                <p className="mt-0.5 text-secondary">Đơn nháp chưa thể gán vào Lịch sản xuất. Kiểm tra, bổ sung đủ thông số và bấm &quot;Duyệt đơn nháp&quot;.</p>
+                <p className="mt-0.5 text-secondary">Đơn nháp lưu thông tin sơ bộ của khách hàng. Hãy hoàn thiện thông số khi có đầy đủ dữ liệu.</p>
               </div>
             </div>
-            <button
-              id="btn-approve-draft"
-              onClick={handleApproveDraft}
-              disabled={isApproving}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-semibold shrink-0 shadow transition-colors disabled:opacity-50 cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-[18px]">check_circle</span>
-              {isApproving ? 'Đang duyệt...' : 'Duyệt đơn nháp →'}
-            </button>
           </div>
         )}
 
-        {/* Approve Error Banner */}
-        {approveError && (
-          <div role="alert" className="p-4 bg-error-container border border-error/40 rounded-xl text-error text-xs space-y-2">
-            <div className="flex items-center gap-2 font-semibold">
-              <span className="material-symbols-outlined text-[18px]">error</span>
-              <span>{approveError.message}</span>
-            </div>
-            {approveError.missingFields && approveError.missingFields.length > 0 && (
-              <div className="pl-6 space-y-1">
-                <p className="font-medium">Vui lòng bổ sung các thông tin sau trước khi duyệt:</p>
-                <ul className="list-disc pl-4 space-y-0.5">
-                  {approveError.missingFields.map((f, i) => (
-                    <li key={i}>{f}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Action buttons */}
-        <div className="flex items-center justify-end gap-sm">
-          {currentOrder.isDraft && (
+        {/* Action toolbar được tổ chức lại chuẩn UI/UX */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+          {/* Nhóm Phá hủy: Đặt tách biệt ở góc trái, viền mờ */}
+          <div>
             <button
-              id="btn-approve-draft-header"
-              onClick={handleApproveDraft}
-              disabled={isApproving}
-              className="inline-flex items-center justify-center gap-sm bg-[#D97706] hover:bg-[#B45309] text-white text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors disabled:opacity-50"
+              id="btn-delete-order"
+              onClick={() => { setShowDeleteDialog(true); setDeleteError(null); setDeleteStatus('idle') }}
+              className="inline-flex items-center justify-center gap-1.5 border border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300 text-sm font-medium px-3.5 py-2 h-9 rounded-md transition-colors whitespace-nowrap"
+              title="Xóa đơn hàng này"
             >
-              <span className="material-symbols-outlined text-[18px]">check_circle</span>
-              {isApproving ? 'Đang duyệt...' : 'Duyệt đơn nháp →'}
+              <span className="material-symbols-outlined text-[18px]">delete</span>
+              <span>Xóa đơn</span>
             </button>
-          )}
-          <button
-            id="btn-delete-order"
-            onClick={() => { setShowDeleteDialog(true); setDeleteError(null); setDeleteStatus('idle') }}
-            className="inline-flex items-center justify-center gap-sm border border-[#ba1a1a] text-[#ba1a1a] hover:bg-[#ba1a1a]/10 bg-transparent text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors"
-          >
-            <span className="material-symbols-outlined text-[18px]">delete</span>Delete
-          </button>
-          <Link
-            id="btn-edit-order"
-            href={`/orders/pi/${encodeURIComponent(currentOrder.piNumber)}?line=${currentOrder.subLineIndex}`}
-            className="inline-flex items-center justify-center gap-sm bg-primary hover:bg-primary/90 text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors shadow-xs"
-          >
-            <span className="material-symbols-outlined text-[18px]">edit_note</span>Sửa đơn (Master-Detail)
-          </Link>
-          <button
-            id="btn-assign-machine"
-            onClick={() => setShowAssignModal(true)}
-            className="inline-flex items-center justify-center gap-sm border border-primary bg-transparent hover:bg-surface-container text-primary text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors"
-          >
-            <span className="material-symbols-outlined text-[18px]">precision_manufacturing</span>
-            Assign to machine
-          </button>
+          </div>
+
+          {/* Nhóm Thao tác Nghiệp vụ: Sắp xếp theo thứ tự luồng Gán máy -> Sửa đơn */}
+          <div className="flex items-center gap-2">
+            {/* 1. Gán máy sản xuất (Secondary Outline) */}
+            <button
+              id="btn-assign-machine"
+              onClick={() => setShowAssignModal(true)}
+              className="inline-flex items-center justify-center gap-1.5 border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium px-3.5 py-2 h-9 rounded-md transition-colors whitespace-nowrap shadow-xs"
+            >
+              <span className="material-symbols-outlined text-[18px] text-slate-500">precision_manufacturing</span>
+              <span>Gán máy</span>
+            </button>
+
+            {/* 2. Chỉnh sửa đơn hàng (Secondary Outline) */}
+            <Link
+              id="btn-edit-order"
+              href={`/orders/pi/${encodeURIComponent(currentOrder.piNumber)}?line=${currentOrder.subLineIndex}`}
+              className="inline-flex items-center justify-center gap-1.5 border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-sm font-medium px-3.5 py-2 h-9 rounded-md transition-colors whitespace-nowrap shadow-xs"
+            >
+              <span className="material-symbols-outlined text-[18px] text-slate-500">edit_note</span>
+              <span>Chỉnh sửa</span>
+            </Link>
+          </div>
         </div>
 
         {/* Máy đang chạy */}
@@ -456,10 +421,17 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
         <dl className="grid grid-cols-1 sm:grid-cols-2 gap-y-lg gap-x-xl">
           <div className="flex flex-col gap-xs">
             <dt className="text-label-sm font-inter font-medium text-secondary uppercase tracking-wider">PI Number</dt>
-            <dd className="flex items-center gap-2 text-type-mono font-mono text-on-surface">
+            <dd className="flex items-center gap-2 text-type-mono font-mono text-on-surface flex-wrap">
               <span>{currentOrder.piNumber}</span>
-              {currentOrder.isDraft && <DraftBadge />}
-              <OrderStatusBadge status={calcOrderStatus(currentOrder.assignments)} />
+              <PiStatusBadge
+                lifecycleStatus={currentOrder.lifecycleStatus}
+                isDraft={currentOrder.isDraft}
+              />
+              <MachinePlanBadge
+                lifecycleStatus={currentOrder.lifecycleStatus}
+                isPlaceholder={currentOrder.isPlaceholder}
+                calculatedStatus={calcOrderStatus(currentOrder.assignments)}
+              />
             </dd>
           </div>
           <ViewField label="Sub-line"     value={currentOrder.subLineIndex}                     />
@@ -531,6 +503,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
             />
           )}
           <ViewField label="Mã màu (MB Code)" value={currentOrder.mbCode ?? null}               mono />
+          <ViewField label="Item Code" value={currentOrder.itemCode ?? null} mono />
           <ViewField label="Kiểu đơn" value={
             currentOrder.orderType === 'rolls'  ? 'Theo cuộn' :
             currentOrder.orderType === 'pieces' ? 'Gia công tấm' :
@@ -581,7 +554,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
           if (!packingTouched && !lamTouched && !colorTouched && !showAllV41) return null
           const packingLabel =
             o.primaryPackingType === 'CARTON' ? 'Thùng carton (CARTON)' :
-            o.primaryPackingType === 'BALE' ? 'Kiện nén (BALE)' : 'Cuộn (ROLL)'
+            o.primaryPackingType === 'BALE' ? 'Kiện nén (BALE)' : o.primaryPackingType === 'HEMMED' ? `May viền, đóng khuy (HEMMED${o.subPackingType ? ` - ${o.subPackingType}` : ''})` : 'Cuộn (ROLL)'
           const wrapLabel =
             o.outerWrapping === 'TARPAULIN' ? 'Bạt (tarpaulin)' :
             o.outerWrapping === 'NONE' ? 'Không bọc' : 'Túi PE (polybag)'
@@ -613,13 +586,14 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
                     <ViewField label="Kiểu đóng gói" value={packingLabel} />
                     <ViewField label="Bọc ngoài" value={wrapLabel} />
                     <ViewField label="Lõi giấy" value={o.hasPaperCore ? 'Có' : 'Không'} />
-                    {(o.isHalfFolded || showAllV41) && (
-                      <ViewField label="Gấp đôi" value={o.isHalfFolded ? 'Có' : 'Không'} />
-                    )}
-                    {o.primaryPackingType === 'CARTON' && o.piecesPerCarton != null && (
+                    
+                    {(o.primaryPackingType === 'CARTON' || (o.primaryPackingType === 'HEMMED' && o.subPackingType === 'CARTON')) && o.piecesPerCarton != null && (
                       <ViewField label="Số tấm/thùng" value={o.piecesPerCarton} mono />
                     )}
-                    {o.primaryPackingType === 'BALE' && o.piecesPerBale != null && (
+                    {(o.primaryPackingType === 'CARTON' || (o.primaryPackingType === 'HEMMED' && o.subPackingType === 'CARTON')) && o.boxDimensions && (
+                      <ViewField label="Kích thước thùng" value={o.boxDimensions} mono />
+                    )}
+                    {(o.primaryPackingType === 'BALE' || (o.primaryPackingType === 'HEMMED' && o.subPackingType === 'BALE')) && o.piecesPerBale != null && (
                       <ViewField label="Số tấm/kiện" value={o.piecesPerBale} mono />
                     )}
                     {(o.onPallet || showAllV41) && (
@@ -643,15 +617,15 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
                     Tráng màng & dung sai
                   </p>
                   <dl className="grid grid-cols-1 sm:grid-cols-2 gap-y-lg gap-x-xl mb-lg">
-                    <ViewField label="Tráng màng ngoài" value={o.isLaminated ? 'Có' : 'Không'} />
+                    <ViewField label="Tráng màng ngoài — COATING" value={o.isLaminated ? 'Có' : 'Không'} />
                     {o.rawFabricGsm != null && (
-                      <ViewField label="GSM mộc" value={o.rawFabricGsm} mono />
+                      <ViewField label="GSM mộc (RAW FABRIC GSM)" value={o.rawFabricGsm} mono />
                     )}
                     {o.coatingGsm != null && (
-                      <ViewField label="GSM màng tráng" value={o.coatingGsm} mono />
+                      <ViewField label="GSM màng tráng (COATING GSM)" value={o.coatingGsm} mono />
                     )}
                     {o.finishedGsm != null && (
-                      <ViewField label="GSM thành phẩm" value={o.finishedGsm} mono />
+                      <ViewField label="GSM thành phẩm (FINISHED GSM)" value={o.finishedGsm} mono />
                     )}
                     {(o.toleranceQtyPct != null || showAllV41) && (
                       <ViewField
@@ -756,10 +730,50 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
         {/* System fields */}
         <div className="border-t-[0.5px] border-outline-variant pt-lg">
           <dl className="grid grid-cols-1 sm:grid-cols-2 gap-y-lg gap-x-xl">
-            <ViewField label="Status" value={
-              <span className="inline-flex items-center px-sm py-xs rounded text-label-sm font-inter font-medium bg-surface-container text-on-surface-variant">
-                {currentOrder.status}
-              </span>
+            <ViewField label="Tình trạng PI" value={
+              (() => {
+                const ls = currentOrder.lifecycleStatus
+                const isD = ls === 'DRAFT' || (currentOrder.isDraft && ls !== 'RESERVED' && !currentOrder.isPlaceholder)
+                if (isD) {
+                  return (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-label-sm font-semibold bg-[#FFF8E7] text-[#D97706] border border-[#F59E0B]/30">
+                      <span className="material-symbols-outlined text-[15px]">edit_note</span>
+                      Đơn nháp (DRAFT)
+                    </span>
+                  )
+                }
+                return (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-label-sm font-semibold bg-emerald-500/10 text-emerald-700 border border-emerald-500/30">
+                    <span className="material-symbols-outlined text-[15px]">verified</span>
+                    Đã chốt (APPROVED)
+                  </span>
+                )
+              })()
+            } />
+            <ViewField label="Kế hoạch máy" value={
+              (() => {
+                const ls = currentOrder.lifecycleStatus
+                const isR = ls === 'RESERVED' || ls === 'RESERVE' || ls === 'PLACEHOLDER' || currentOrder.isPlaceholder
+                if (isR) {
+                  return (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-label-sm font-semibold bg-amber-500/10 text-amber-700 border border-amber-500/30">
+                      <span className="material-symbols-outlined text-[15px]">event_seat</span>
+                      Giữ chỗ máy (RESERVED)
+                    </span>
+                  )
+                }
+                return (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-label-sm font-medium bg-surface-container text-on-surface-variant">
+                    Kế hoạch sản xuất thường
+                  </span>
+                )
+              })()
+            } />
+            <ViewField label="Tiến độ dệt" value={
+              <div className="flex items-center gap-2">
+                <OrderStatusBadge status={calcOrderStatus(currentOrder.assignments)} />
+                <span className="text-xs text-outline font-inter">({currentOrder.status})</span>
+              </div>
             } />
             <ViewField label="Nguồn dữ liệu" value={
               currentOrder.dataSource === 'import' ? 'Excel/bulk import' :
@@ -982,6 +996,15 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
               {...register('mbCode', { setValueAs: (v: string) => (v === '' ? null : v) })}
             />
           </FormField>
+          <FormField label="Item Code">
+            <input
+              id="edit-itemCode"
+              type="text"
+              placeholder="e.g. 00123-A"
+              className={inputCls(false, false)}
+              {...register('itemCode', { setValueAs: (v: string) => (v === '' ? null : v) })}
+            />
+          </FormField>
         </div>
       </section>
 
@@ -999,9 +1022,28 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
           <FormField label="UV %" error={errors.uvPct?.message}>
             <input id="edit-uvPct" type="number" min={0} max={100} step={0.01} className={inputCls(true, !!errors.uvPct)} {...register('uvPct', { valueAsNumber: true })} />
           </FormField>
-          <FormField label="FR %" error={errors.frPct?.message}>
-            <input id="edit-frPct" type="number" min={0} max={100} step={0.01} className={inputCls(true, !!errors.frPct)} {...register('frPct', { valueAsNumber: true })} />
-          </FormField>
+          <div className="flex flex-col justify-end pb-2">
+            <label className="flex items-center gap-xs cursor-pointer group w-fit">
+              <input
+                id="edit-frFlag"
+                type="checkbox"
+                className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer"
+                {...register('frFlag', {
+                  onChange: (e) => {
+                    if (!e.target.checked) setValue('frPct', null)
+                  },
+                })}
+              />
+              <span className="text-body-md font-noto text-on-surface group-hover:text-primary transition-colors select-none">
+                Chống cháy (FR)
+              </span>
+            </label>
+          </div>
+          {editFrFlag && (
+            <FormField label="FR %" required error={errors.frPct?.message}>
+              <input id="edit-frPct" type="number" min={0} max={100} step={0.01} className={inputCls(true, !!errors.frPct)} {...register('frPct', { valueAsNumber: true })} />
+            </FormField>
+          )}
           {/* Checkbox "Cần đóng gói" — ẨN theo feedback KH (R1): dùng Kiểu đóng gói ROLL/BALE/CARTON thay thế.
               Không register field này nữa nên PUT giữ nguyên giá trị cũ trong DB (backward-compat, xem api/orders/[id] fallback). */}
           <div className="sm:col-span-2">
@@ -1108,6 +1150,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
               <option value="ROLL">Cuộn (ROLL)</option>
               <option value="BALE">Kiện nén (BALE)</option>
               <option value="CARTON">Thùng carton (CARTON)</option>
+              <option value="HEMMED">May viền, đóng khuy (HEMMED)</option>
             </select>
           </FormField>
           <FormField label="Bọc ngoài" error={errors.outerWrapping?.message}>
@@ -1117,6 +1160,15 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
               <option value="NONE">Không bọc</option>
             </select>
           </FormField>
+          {editPrimaryPackingType === 'HEMMED' && (
+            <FormField label="Quy cách đóng gói phụ *" error={errors.subPackingType?.message}>
+              <select id="edit-subPackingType" className={inputCls(false, !!errors.subPackingType)} {...register('subPackingType')}>
+                <option value="">Chọn quy cách…</option>
+                <option value="CARTON">Thùng carton (CARTON)</option>
+                <option value="BALE">Kiện nén (BALE)</option>
+              </select>
+            </FormField>
+          )}
           <div className="sm:col-span-2 flex flex-wrap items-center gap-x-lg gap-y-sm">
             {/* Lõi giấy / Gấp đôi chỉ có nghĩa với đơn đóng theo cuộn. */}
             {editPrimaryPackingType === 'ROLL' && (
@@ -1125,10 +1177,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
                   <input id="edit-hasPaperCore" type="checkbox" className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer" {...register('hasPaperCore')} />
                   <label htmlFor="edit-hasPaperCore" className="text-body-md font-noto text-on-surface cursor-pointer select-none">Lõi giấy</label>
                 </span>
-                <span className="inline-flex items-center gap-sm">
-                  <input id="edit-isHalfFolded" type="checkbox" className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer" {...register('isHalfFolded')} />
-                  <label htmlFor="edit-isHalfFolded" className="text-body-md font-noto text-on-surface cursor-pointer select-none">Gấp đôi</label>
-                </span>
+                
               </>
             )}
             <span className="inline-flex items-center gap-sm">
@@ -1136,13 +1185,19 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
               <label htmlFor="edit-onPallet" className="text-body-md font-noto text-on-surface cursor-pointer select-none">Đóng trên pallet</label>
             </span>
           </div>
-          {editPrimaryPackingType === 'CARTON' && (
-            <FormField label="Số tấm/thùng" error={errors.piecesPerCarton?.message}>
-              <input id="edit-piecesPerCarton" type="number" min={1} step={1} className={inputCls(true, !!errors.piecesPerCarton)}
-                {...register('piecesPerCarton', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
-            </FormField>
+          {(editPrimaryPackingType === 'CARTON' || (editPrimaryPackingType === 'HEMMED' && editSubPackingType === 'CARTON')) && (
+            <>
+              <FormField label="Số tấm/thùng" error={errors.piecesPerCarton?.message}>
+                <input id="edit-piecesPerCarton" type="number" min={1} step={1} className={inputCls(true, !!errors.piecesPerCarton)}
+                  {...register('piecesPerCarton', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
+              </FormField>
+              <FormField label="Kích thước thùng" error={errors.boxDimensions?.message}>
+                <input id="edit-boxDimensions" type="text" placeholder="e.g. 60x40x30 cm" className={inputCls(false, !!errors.boxDimensions)}
+                  {...register('boxDimensions', { setValueAs: (v: string) => (v === '' ? null : v) })} />
+              </FormField>
+            </>
           )}
-          {editPrimaryPackingType === 'BALE' && (
+          {(editPrimaryPackingType === 'BALE' || (editPrimaryPackingType === 'HEMMED' && editSubPackingType === 'BALE')) && (
             <FormField label="Số tấm/kiện" error={errors.piecesPerBale?.message}>
               <input id="edit-piecesPerBale" type="number" min={1} step={1} className={inputCls(true, !!errors.piecesPerBale)}
                 {...register('piecesPerBale', { setValueAs: (v: string) => (v === '' || v === null) ? null : Number(v) })} />
@@ -1206,8 +1261,8 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
           <FormField label="Phiên bản màu" error={errors.colorVersion?.message}>
             <select id="edit-colorVersion" className={inputCls(false, !!errors.colorVersion)} {...register('colorVersion', { setValueAs: (v: string) => (v === '' ? null : v) })}>
               <option value="STD">Tiêu chuẩn (STD)</option>
-              <option value="Version A">Desert Sand A (MF 0.22 UV 4%)</option>
-              <option value="Version B">Desert Sand B (MB Arirang Beige)</option>
+              <option value="Version A">Version A (MB Korea)</option>
+              <option value="Version B">Version B (MB Arirang)</option>
             </select>
           </FormField>
         </div>

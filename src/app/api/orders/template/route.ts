@@ -21,25 +21,25 @@ export async function GET() {
     'LENGTH (M)',
     'GSM',
     'PRODUCTION GSM',
-    'LAMINATED',
-    'BASE GSM',
+    'COATING',
+    'RAW FABRIC GSM',
     'COATING GSM',
+    'FINISHED GSM',
     'QTY TOLERANCE (%)',
     'SPEC TOLERANCE (%)',
     'COLOR',
     'COLOR VERSION',
+    'MB CODE',
+    'ITEM CODE',
     'MESH TYPE',
     'NEEDLE COUNT',
     'UV',
-    'FR',
     'FR %',
     'PACKING TYPE',
     'OUTER WRAPPING',
     'PAPER CORE',
-    'HALF FOLDED',
     'PCS / BOX',
     'PCS / BALE',
-    'BOX DIMENSIONS',
     'ON PALLET',
     'PALLET TYPE',
     'PALLET DIMENSIONS',
@@ -53,7 +53,7 @@ export async function GET() {
     'REMARK',
     'DESCRIPTION',
   ]
-  const titleRow = ['ORDER LIST - TEMPLATE V4.1 (PI CONTAINER: 40HQ)', ...Array(headerRow.length - 1).fill('')]
+  const titleRow = ['ORDER LIST - TEMPLATE (PI CONTAINER: 40HQ)', ...Array(headerRow.length - 1).fill('')]
 
   const sampleRow1 = [
     'ALTAJ26-4-1',                           // 0: PI NUMBER ID
@@ -62,44 +62,44 @@ export async function GET() {
     'ALTAJ',                                 // 3: CUSTOMER
     '2026-09-03',                            // 4: ORDER DATE
     '2026-10-31',                            // 5: DELIVERY DATE
-    'APPROVED',                              // 6: STATUS
+    'RESERVED',                              // 6: STATUS (DRAFT | RESERVED | APPROVED)
     'rolls',                                 // 7: ORDER TYPE
     50,                                      // 8: QTY
     2.0,                                     // 9: WIDTH (M)
     50,                                      // 10: LENGTH (M)
     240,                                     // 11: GSM
-    255,                                     // 12: PRODUCTION GSM
-    'NO',                                    // 13: LAMINATED
-    null,                                    // 14: BASE GSM
+    255,                                     // 12: PRODUCTION GSM (Order Weight xưởng)
+    'NO',                                    // 13: COATING
+    null,                                    // 14: RAW FABRIC GSM
     null,                                    // 15: COATING GSM
-    5.0,                                     // 16: QTY TOLERANCE (%)
-    3.0,                                     // 17: SPEC TOLERANCE (%)
-    'DESERT SAND',                           // 18: COLOR
-    'Version A',                             // 19: COLOR VERSION
-    'Standard',                              // 20: MESH TYPE
-    18,                                      // 21: NEEDLE COUNT
-    0.04,                                    // 22: UV
-    'NO',                                    // 23: FR
-    null,                                    // 24: FR %
-    'ROLL',                                  // 25: PACKING TYPE
+    null,                                    // 16: FINISHED GSM
+    5.0,                                     // 17: QTY TOLERANCE (%)
+    3.0,                                     // 18: SPEC TOLERANCE (%)
+    'DESERT SAND',                           // 19: COLOR
+    'Version A',                             // 20: COLOR VERSION
+    'MYD4501A',                              // 21: MB CODE
+    'DS-430-A',                              // 22: ITEM CODE
+    'Standard',                              // 23: MESH TYPE
+    18,                                      // 22: NEEDLE COUNT
+    0.04,                                    // 23: UV
+    null,                                    // 24: FR % (trống hoặc 0 = không FR; ví dụ 6.5)
+    'ROLL',                                  // 25: PACKING TYPE (ROLL | CARTON | BALE | HEMMED)
     'TARPAULIN',                             // 26: OUTER WRAPPING
     'YES',                                   // 27: PAPER CORE
-    'NO',                                    // 28: HALF FOLDED
     null,                                    // 29: PCS / BOX
     null,                                    // 30: PCS / BALE
-    null,                                    // 31: BOX DIMENSIONS
-    'NO',                                    // 32: ON PALLET
-    'NONE',                                  // 33: PALLET TYPE
-    null,                                    // 34: PALLET DIMENSIONS
-    null,                                    // 35: ITEMS / PALLET
-    'Printed polybag, plastic cap 50mm',    // 36: PACKING NOTE
-    false,                                   // 37: EYELET
-    null,                                    // 38: EYELET COLOR
-    null,                                    // 39: EYELET LINES
-    null,                                    // 40: EYELET SPEC
-    'Cuộn quấn màng co',                     // 41: LINE NOTE
-    'Hàng xuất Ả Rập',                       // 42: REMARK
-    'PE Shade Net UV 3 years',               // 43: DESCRIPTION
+    'NO',                                    // 31: ON PALLET
+    'NONE',                                  // 32: PALLET TYPE
+    null,                                    // 33: PALLET DIMENSIONS
+    null,                                    // 34: ITEMS / PALLET
+    'Printed polybag, plastic cap 50mm',    // 35: PACKING NOTE
+    false,                                   // 36: EYELET
+    null,                                    // 37: EYELET COLOR
+    null,                                    // 38: EYELET LINES
+    null,                                    // 39: EYELET SPEC
+    'Cuộn quấn màng co',                     // 40: LINE NOTE
+    'Hàng xuất Ả Rập',                       // 41: REMARK
+    'PE Shade Net UV 3 years',               // 42: DESCRIPTION
   ]
 
   const sampleRow2 = [
@@ -116,37 +116,37 @@ export async function GET() {
     5.0,                                     // 10: LENGTH (M)
     180,                                     // 11: GSM
     180,                                     // 12: PRODUCTION GSM
-    'NO',                                    // 13: LAMINATED
-    null,                                    // 14: BASE GSM
+    'NO',                                    // 13: COATING
+    null,                                    // 14: RAW FABRIC GSM
     null,                                    // 15: COATING GSM
-    10.0,                                    // 16: QTY TOLERANCE (%)
-    5.0,                                     // 17: SPEC TOLERANCE (%)
-    'DARK GREEN',                            // 18: COLOR
-    'STD',                                   // 19: COLOR VERSION
-    'Standard',                              // 20: MESH TYPE
-    24,                                      // 21: NEEDLE COUNT
-    0.02,                                    // 22: UV
-    'YES',                                   // 23: FR
+    null,                                    // 16: FINISHED GSM
+    10.0,                                    // 17: QTY TOLERANCE (%)
+    5.0,                                     // 18: SPEC TOLERANCE (%)
+    'DARK GREEN',                            // 19: COLOR
+    'STD',                                   // 20: COLOR VERSION
+    '7079',                                  // 21: MB CODE
+    'DG-180-STD',                            // 22: ITEM CODE
+    'Standard',                              // 23: MESH TYPE
+    24,                                      // 22: NEEDLE COUNT
+    0.02,                                    // 23: UV
     6.5,                                     // 24: FR %
-    'CARTON',                                // 25: PACKING TYPE
+    'HEMMED',                                // 25: PACKING TYPE (May viền, đóng khuy)
     'POLYBAG',                               // 26: OUTER WRAPPING
     'NO',                                    // 27: PAPER CORE
-    'YES',                                   // 28: HALF FOLDED
-    10,                                      // 29: PCS / BOX
+    10,                                      // 29: PCS / BOX (Quy cách đóng thùng)
     null,                                    // 30: PCS / BALE
-    '60x40x30 cm',                           // 31: BOX DIMENSIONS
-    'YES',                                   // 32: ON PALLET
-    'WOOD_PALLET',                           // 33: PALLET TYPE
-    '110x110 cm',                            // 34: PALLET DIMENSIONS
-    20,                                      // 35: ITEMS / PALLET
-    'Đóng thùng 5 lớp, pallet khử trùng',    // 36: PACKING NOTE
-    true,                                    // 37: EYELET
-    'BLACK',                                 // 38: EYELET COLOR
-    4,                                       // 39: EYELET LINES
-    '50cm interval',                         // 40: EYELET SPEC
-    'Tấm gia công đóng thùng',               // 41: LINE NOTE
-    'Đơn xuất kho EU',                       // 42: REMARK
-    'PE Shade Net export EU',                // 43: DESCRIPTION
+    'YES',                                   // 31: ON PALLET
+    'WOOD_PALLET',                           // 32: PALLET TYPE
+    '110x110 cm',                            // 33: PALLET DIMENSIONS (Cảnh báo mềm nếu thiếu)
+    20,                                      // 34: ITEMS / PALLET
+    'May viền đóng khuy, đóng thùng 5 lớp',  // 35: PACKING NOTE
+    true,                                    // 36: EYELET
+    'BLACK',                                 // 37: EYELET COLOR
+    4,                                       // 38: EYELET LINES
+    '50cm interval',                         // 39: EYELET SPEC
+    'Tấm gia công may viền',                 // 40: LINE NOTE
+    'Đơn xuất kho EU',                       // 41: REMARK
+    'PE Shade Net export EU',                // 42: DESCRIPTION
   ]
 
   const sampleRow3 = [
@@ -161,39 +161,39 @@ export async function GET() {
     35,                                      // 8: QTY
     3.0,                                     // 9: WIDTH (M)
     50,                                      // 10: LENGTH (M)
-    430,                                     // 11: GSM
-    340,                                     // 12: PRODUCTION GSM
-    'YES',                                   // 13: LAMINATED
-    325,                                     // 14: BASE GSM
+    430,                                     // 11: GSM (Thành phẩm giao khách)
+    340,                                     // 12: PRODUCTION GSM (Order weight xưởng)
+    'YES',                                   // 13: COATING
+    325,                                     // 14: RAW FABRIC GSM
     105,                                     // 15: COATING GSM
-    10.0,                                    // 16: QTY TOLERANCE (%)
-    5.0,                                     // 17: SPEC TOLERANCE (%)
-    'DESERT SAND',                           // 18: COLOR
-    'Version A',                             // 19: COLOR VERSION
-    'Standard',                              // 20: MESH TYPE
-    18,                                      // 21: NEEDLE COUNT
-    0.04,                                    // 22: UV
-    'NO',                                    // 23: FR
+    430,                                     // 16: FINISHED GSM
+    10.0,                                    // 17: QTY TOLERANCE (%)
+    5.0,                                     // 18: SPEC TOLERANCE (%)
+    'DESERT SAND',                           // 19: COLOR
+    'Version A',                             // 20: COLOR VERSION
+    'LS309315',                              // 21: MB CODE
+    'DS-325-COAT',                           // 22: ITEM CODE
+    'Standard',                              // 23: MESH TYPE
+    18,                                      // 22: NEEDLE COUNT
+    0.04,                                    // 23: UV
     null,                                    // 24: FR %
     'ROLL',                                  // 25: PACKING TYPE
     'POLYBAG',                               // 26: OUTER WRAPPING
     'YES',                                   // 27: PAPER CORE
-    'NO',                                    // 28: HALF FOLDED
     null,                                    // 29: PCS / BOX
     null,                                    // 30: PCS / BALE
-    null,                                    // 31: BOX DIMENSIONS
-    'NO',                                    // 32: ON PALLET
-    'NONE',                                  // 33: PALLET TYPE
-    null,                                    // 34: PALLET DIMENSIONS
-    null,                                    // 35: ITEMS / PALLET
-    'Dệt mộc 325gsm, tráng màng 105gsm',     // 36: PACKING NOTE
-    false,                                   // 37: EYELET
-    null,                                    // 38: EYELET COLOR
-    null,                                    // 39: EYELET LINES
-    null,                                    // 40: EYELET SPEC
-    'Hàng tráng màng ngoài 430gsm',          // 41: LINE NOTE
-    'Xuất khẩu chống thấm',                  // 42: REMARK
-    'PE Shade Net waterproof 430gsm',        // 43: DESCRIPTION
+    'NO',                                    // 31: ON PALLET
+    'NONE',                                  // 32: PALLET TYPE
+    null,                                    // 33: PALLET DIMENSIONS
+    null,                                    // 34: ITEMS / PALLET
+    'Dệt mộc 325gsm, tráng màng 105gsm',     // 35: PACKING NOTE
+    false,                                   // 36: EYELET
+    null,                                    // 37: EYELET COLOR
+    null,                                    // 38: EYELET LINES
+    null,                                    // 39: EYELET SPEC
+    'Hàng tráng màng ngoài 430gsm',          // 40: LINE NOTE
+    'Xuất khẩu chống thấm',                  // 41: REMARK
+    'PE Shade Net waterproof 430gsm',        // 42: DESCRIPTION
   ]
 
   const wsData = [titleRow, headerRow, sampleRow1, sampleRow2, sampleRow3]
@@ -214,25 +214,25 @@ export async function GET() {
     { wch: 12 }, // 10: LENGTH (M)
     { wch: 8 },  // 11: GSM
     { wch: 16 }, // 12: PRODUCTION GSM
-    { wch: 12 }, // 13: LAMINATED
-    { wch: 12 }, // 14: BASE GSM
+    { wch: 12 }, // 13: COATING
+    { wch: 16 }, // 14: RAW FABRIC GSM
     { wch: 14 }, // 15: COATING GSM
-    { wch: 20 }, // 16: QTY TOLERANCE (%)
-    { wch: 20 }, // 17: SPEC TOLERANCE (%)
-    { wch: 16 }, // 18: COLOR
-    { wch: 16 }, // 19: COLOR VERSION
-    { wch: 14 }, // 20: MESH TYPE
-    { wch: 14 }, // 21: NEEDLE COUNT
-    { wch: 8 },  // 22: UV
-    { wch: 6 },  // 23: FR
-    { wch: 8 },  // 24: FR %
-    { wch: 14 }, // 25: PACKING TYPE
-    { wch: 16 }, // 26: OUTER WRAPPING
-    { wch: 14 }, // 27: PAPER CORE
-    { wch: 14 }, // 28: HALF FOLDED
-    { wch: 12 }, // 29: PCS / BOX
-    { wch: 12 }, // 30: PCS / BALE
-    { wch: 16 }, // 31: BOX DIMENSIONS
+    { wch: 14 }, // 16: FINISHED GSM
+    { wch: 20 }, // 17: QTY TOLERANCE (%)
+    { wch: 20 }, // 18: SPEC TOLERANCE (%)
+    { wch: 16 }, // 19: COLOR
+    { wch: 16 }, // 20: COLOR VERSION
+    { wch: 14 }, // 21: MB CODE
+    { wch: 18 }, // 22: ITEM CODE
+    { wch: 14 }, // 23: MESH TYPE
+    { wch: 14 }, // 24: NEEDLE COUNT
+    { wch: 8 },  // 25: UV
+    { wch: 8 },  // 26: FR %
+    { wch: 14 }, // 27: PACKING TYPE
+    { wch: 16 }, // 28: OUTER WRAPPING
+    { wch: 14 }, // 29: PAPER CORE
+    { wch: 12 }, // 30: PCS / BOX
+    { wch: 12 }, // 31: PCS / BALE
     { wch: 12 }, // 32: ON PALLET
     { wch: 16 }, // 33: PALLET TYPE
     { wch: 18 }, // 34: PALLET DIMENSIONS
@@ -256,7 +256,7 @@ export async function GET() {
     status: 200,
     headers: {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': 'attachment; filename="order_import_template_v4.xlsx"',
+      'Content-Disposition': 'attachment; filename="order_import_template.xlsx"',
     },
   })
 }

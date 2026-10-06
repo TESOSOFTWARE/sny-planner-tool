@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
-import { deriveOrderTypeFromPacking, lineSchema, draftLineSchema } from '@/lib/validations/order'
+import { deriveOrderTypeFromPacking, lineSchema, draftLineSchema, cleanSubLineForValidation } from '@/lib/validations/order'
 
 interface Props {
   params: { piNumber: string }
@@ -111,15 +111,23 @@ export async function PUT(req: NextRequest, { params }: Props) {
   }
 
   // Pre-validate lines with Zod schema
-  const validationIssues: { line: number; errors: string[] }[] = []
+  const validationIssues: {
+    line: number
+    errors: string[]
+    issues: { field: string; message: string }[]
+  }[] = []
   for (let idx = 0; idx < lines.length; idx++) {
-    const rawLine = lines[idx]
+    const rawLine = cleanSubLineForValidation(lines[idx])
     const schemaToUse = lifecycleStatus === 'DRAFT' ? draftLineSchema : lineSchema
     const parseRes = schemaToUse.safeParse(rawLine)
     if (!parseRes.success) {
       validationIssues.push({
         line: idx + 1,
         errors: parseRes.error.issues.map((i: { message: string }) => i.message),
+        issues: parseRes.error.issues.map((i) => ({
+          field: i.path.join('.'),
+          message: i.message,
+        })),
       })
     }
   }
@@ -128,7 +136,7 @@ export async function PUT(req: NextRequest, { params }: Props) {
     return NextResponse.json(
       {
         success: false,
-        error: 'Dữ liệu dòng sản phẩm không hợp lệ.',
+        error: `Dữ liệu không hợp lệ tại ${validationIssues.length} dòng sản phẩm. Vui lòng kiểm tra các ô được đánh dấu.`,
         details: validationIssues,
       },
       { status: 422 }
@@ -157,6 +165,7 @@ export async function PUT(req: NextRequest, { params }: Props) {
       }
 
       const currentIds = new Set(currentOrders.map((o) => o.id))
+      const currentById = new Map(currentOrders.map((o) => [o.id, o]))
       const incomingIds = new Set(lines.filter((l: any) => l.id).map((l: any) => l.id))
 
       // 2. Identify sub-lines to delete
@@ -224,7 +233,7 @@ export async function PUT(req: NextRequest, { params }: Props) {
           remark: remark ? remark.trim() : null,
 
           lifecycleStatus: lifecycleStatus || 'APPROVED',
-          isPlaceholder: Boolean(isPlaceholder || lifecycleStatus === 'PLACEHOLDER'),
+          isPlaceholder: Boolean(isPlaceholder || lifecycleStatus === 'PLACEHOLDER' || lifecycleStatus === 'RESERVE' || lifecycleStatus === 'RESERVED'),
           isDraft: lifecycleStatus === 'DRAFT',
 
           color,
@@ -241,6 +250,7 @@ export async function PUT(req: NextRequest, { params }: Props) {
           pieceLength,
 
           primaryPackingType,
+          subPackingType: line.subPackingType || null,
           hasPaperCore: line.hasPaperCore === true,
           isHalfFolded: Boolean(line.isHalfFolded),
           piecesPerCarton: line.piecesPerCarton != null ? Number(line.piecesPerCarton) : null,
@@ -262,7 +272,7 @@ export async function PUT(req: NextRequest, { params }: Props) {
           toleranceSpecPct: line.toleranceSpecPct != null ? Number(line.toleranceSpecPct) : 5.0,
 
           uvPct: line.uvPct != null ? Number(line.uvPct) : null,
-          frFlag: Boolean(line.frFlag),
+          frFlag: Boolean((line.frPct != null && Number(line.frPct) > 0) || line.frFlag),
           frPct: line.frPct != null ? Number(line.frPct) : null,
           lineNote: line.lineNote ? String(line.lineNote).trim() : null,
           requiresPacking: line.requiresPacking === true,
@@ -271,6 +281,11 @@ export async function PUT(req: NextRequest, { params }: Props) {
           needleCount: line.needleCount != null ? Number(line.needleCount) : null,
           beamCount: line.beamCount != null ? Number(line.beamCount) : null,
           mbCode: line.mbCode ? String(line.mbCode).trim() : null,
+          // Item Code: thiếu key (client cũ) → giữ mã đang lưu của dòng có ID;
+          // gửi rỗng/null → null (xóa chủ động); có giá trị → trim.
+          itemCode: !('itemCode' in line)
+            ? (currentById.get(line.id)?.itemCode ?? null)
+            : (line.itemCode ? (String(line.itemCode).trim() || null) : null),
 
           hasEyelet: Boolean(line.hasEyelet),
           eyeletColor: line.eyeletColor ? String(line.eyeletColor).trim() : null,

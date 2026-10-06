@@ -4,6 +4,7 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { prisma } from '@/lib/db'
+import { matchRecipe, normalizeColorName } from '@/lib/orders/recipeSnapshot'
 import PiMasterDetailEditor, { type SubLineItem } from '@/components/orders/PiMasterDetailEditor'
 
 interface Props {
@@ -158,6 +159,7 @@ export default async function PiMasterDetailPage({ params }: Props) {
     needleCount: o.needleCount != null ? o.needleCount : '',
     beamCount: o.beamCount != null ? o.beamCount : '',
     mbCode: o.mbCode || '',
+    itemCode: o.itemCode || '',
 
     hasEyelet: Boolean(o.hasEyelet),
     eyeletColor: o.eyeletColor || '',
@@ -170,6 +172,23 @@ export default async function PiMasterDetailPage({ params }: Props) {
       endDate: a.endDate.toISOString(),
     })),
   }))
+
+  // B-server: đếm trước số dòng sẽ khớp công thức màu khi duyệt — dùng đúng logic của API approve.
+  const piColors = Array.from(new Set(orders.map((o) => normalizeColorName(o.color)).filter(Boolean)))
+  const recipes = piColors.length > 0
+    ? await prisma.productColorRecipe.findMany({
+        where: { colorName: { in: piColors, mode: 'insensitive' } },
+      })
+    : []
+  const recipeMatched = orders.filter((o) => matchRecipe(o.color, o.colorVersion, recipes)).length
+  const recipeMissingColors = Array.from(
+    new Set(
+      orders
+        .filter((o) => !matchRecipe(o.color, o.colorVersion, recipes))
+        .map((o) => (o.color || '').trim())
+        .filter(Boolean),
+    ),
+  )
 
   return (
     <PiMasterDetailEditor
@@ -186,6 +205,7 @@ export default async function PiMasterDetailPage({ params }: Props) {
       initialLines={lines}
       initialUpdatedAt={initialUpdatedAt}
       relatedPis={relatedPis}
+      recipeCoverage={{ matched: recipeMatched, total: orders.length, missingColors: recipeMissingColors }}
     />
   )
 }
