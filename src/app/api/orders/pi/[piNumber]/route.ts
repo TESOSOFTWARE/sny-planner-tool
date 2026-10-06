@@ -4,6 +4,7 @@
 // PUT: Atomically updates PI Header and reconciles all sub-lines (update, create, delete) in a single transaction.
 
 import { NextRequest, NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
 import { deriveOrderTypeFromPacking, lineSchema, draftLineSchema, cleanSubLineForValidation } from '@/lib/validations/order'
@@ -143,6 +144,18 @@ export async function PUT(req: NextRequest, { params }: Props) {
     )
   }
 
+  const incomingIds = new Set<string>()
+  for (const line of lines) {
+    if (line.id == null) continue
+    if (typeof line.id !== 'string' || !line.id.trim() || incomingIds.has(line.id)) {
+      return NextResponse.json(
+        { success: false, error: 'ID dòng sản phẩm không hợp lệ hoặc bị lặp. Vui lòng tải lại PI.' },
+        { status: 422 }
+      )
+    }
+    incomingIds.add(line.id)
+  }
+
   const effectiveDeliveryDate = deliveryDate && /^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)
     ? new Date(`${deliveryDate}T00:00:00.000Z`)
     : null
@@ -166,16 +179,38 @@ export async function PUT(req: NextRequest, { params }: Props) {
 
       const currentIds = new Set(currentOrders.map((o) => o.id))
       const currentById = new Map(currentOrders.map((o) => [o.id, o]))
-      const incomingIds = new Set(lines.filter((l: any) => l.id).map((l: any) => l.id))
+      for (const id of Array.from(incomingIds)) {
+        if (!currentIds.has(id)) {
+          throw new Error('INVALID_LINE_ID: Dòng sản phẩm không thuộc PI đang sửa. Vui lòng tải lại PI.')
+        }
+      }
 
       // 2. Identify sub-lines to delete
       const toDelete = currentOrders.filter((o) => !incomingIds.has(o.id))
       for (const order of toDelete) {
         if (order.assignments && order.assignments.length > 0) {
           throw new Error(
-            `Không thể xóa dòng sản phẩm (Line ${order.subLineIndex}) vì đã được gán lịch chạy trên máy dệt (${order.assignments.map((a) => a.machineId).join(', ')}). Vui lòng hủy gán máy trước khi xóa.`
+            `LINE_ASSIGNED: Không thể xóa dòng sản phẩm (Line ${order.subLineIndex}) vì đã được gán lịch chạy trên máy dệt (${order.assignments.map((a) => a.machineId).join(', ')}). Vui lòng hủy gán máy trước khi xóa.`
           )
         }
+      }
+
+      // Move retained IDs outside both current and final 1..N indices first.
+      // The unique key is checked on each write, even inside a transaction.
+      const retained = currentOrders.filter((order) => incomingIds.has(order.id))
+      const highestIndex = currentOrders.reduce(
+        (highest, order) => Math.max(highest, order.subLineIndex), lines.length
+      )
+      if (retained.length > 2_147_483_647 - highestIndex) {
+        throw new Error('INDEX_RANGE: Không thể sắp xếp số dòng PI trong giới hạn cho phép.')
+      }
+      for (let index = 0; index < retained.length; index++) {
+        await tx.productionOrder.update({
+          where: { id: retained[index].id },
+          data: { subLineIndex: highestIndex + index + 1 },
+        })
+      }
+      for (const order of toDelete) {
         await tx.productionOrder.delete({ where: { id: order.id } })
       }
 
@@ -315,7 +350,11 @@ export async function PUT(req: NextRequest, { params }: Props) {
       }
 
       return savedOrders
-    }, { timeout: 30_000, maxWait: 5_000 })
+    }, {
+      timeout: 30_000,
+      maxWait: 5_000,
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    })
 
     return NextResponse.json({
       success: true,
@@ -324,10 +363,18 @@ export async function PUT(req: NextRequest, { params }: Props) {
     })
   } catch (err: any) {
     console.error(`[PUT /api/orders/pi/${piNumber}] Error:`, err)
-    const isConflict = typeof err?.message === 'string' && err.message.startsWith('STALE_UPDATE')
+    const message = typeof err?.message === 'string' ? err.message : ''
+    const isWriteConflict = err?.code === 'P2002' || err?.code === 'P2034'
+    const isConflict = isWriteConflict || message.startsWith('STALE_UPDATE') || message.startsWith('INDEX_RANGE')
+    const isInvalid = message.startsWith('INVALID_LINE_ID') || message.startsWith('LINE_ASSIGNED')
+    const error = isWriteConflict
+      ? 'Đơn hàng đang có thay đổi xung đột. Vui lòng tải lại PI và kiểm tra trước khi lưu.'
+      : isConflict || isInvalid
+        ? message.replace(/^[A-Z_]+: /, '')
+        : 'Lỗi máy chủ khi cập nhật đơn hàng PI. Vui lòng thử lại sau.'
     return NextResponse.json(
-      { success: false, error: err?.message || 'Lỗi máy chủ khi cập nhật đơn hàng PI.' },
-      { status: isConflict ? 409 : 500 }
+      { success: false, error },
+      { status: isConflict ? 409 : isInvalid ? 422 : 500 }
     )
   }
 }

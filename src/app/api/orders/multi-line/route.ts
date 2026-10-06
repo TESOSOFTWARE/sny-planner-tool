@@ -196,6 +196,7 @@ export async function POST(req: NextRequest) {
             productionGsm: state.productionGsm ?? null,
             color: state.color ?? null,
             mbCode: state.mbCode ?? null,
+            itemCode: state.itemCode ?? null,
             isDraft: lifecycle.lifecycleStatus === 'DRAFT',
             lifecycleStatus: lifecycle.lifecycleStatus,
             isPlaceholder: lifecycle.isPlaceholder,

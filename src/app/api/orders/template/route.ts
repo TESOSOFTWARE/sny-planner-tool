@@ -5,6 +5,7 @@
 
 import { NextResponse } from 'next/server'
 import * as XLSX from 'xlsx'
+import { MAX_IMPORTED_ORDER_ROWS } from '@/lib/validations/order'
 
 export async function GET() {
   const headerRow = [
@@ -198,6 +199,19 @@ export async function GET() {
 
   const wsData = [titleRow, headerRow, sampleRow1, sampleRow2, sampleRow3]
   const ws = XLSX.utils.aoa_to_sheet(wsData)
+
+  // Preformat samples and the supported input area as Text. Width metadata
+  // alone does not prevent Excel from treating numeric-looking codes as numbers.
+  const itemCodeColumn = headerRow.indexOf('ITEM CODE')
+  const lastInputRow = MAX_IMPORTED_ORDER_ROWS + 1
+  for (let row = 2; row <= lastInputRow; row++) {
+    const address = XLSX.utils.encode_cell({ r: row, c: itemCodeColumn })
+    ws[address] = { t: 's', v: String(ws[address]?.v ?? ''), z: '@' }
+  }
+  ws['!ref'] = XLSX.utils.encode_range({
+    s: { r: 0, c: 0 },
+    e: { r: lastInputRow, c: headerRow.length - 1 },
+  })
 
   // Set column widths matching 44 columns
   ws['!cols'] = [
