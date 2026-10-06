@@ -16,12 +16,7 @@ export function itemCodeWarnings(lines: string[], index: number, extraWarning?: 
     out.push(extraWarning)
   }
 
-  // Cảnh báo 1: Độ dài chuẩn theo MasterData là 16 ký tự
-  if (code.length !== 16) {
-    out.push('Mã theo MasterData dài 16 ký tự — kiểm tra lại nếu cố ý.')
-  }
-
-  // Cảnh báo 2: Trùng mã với dòng khác trong cùng PI (so sánh chính xác theo chuỗi phân biệt hoa thường)
+  // Trùng mã với dòng khác trong cùng PI (so sánh chính xác theo chuỗi phân biệt hoa thường)
   const dup = lines.findIndex((c, i) => i !== index && (c ?? '').trim() === code)
   if (dup >= 0) {
     out.push(`Trùng mã với Dòng #${dup + 1} — xác nhận nếu cố ý.`)
