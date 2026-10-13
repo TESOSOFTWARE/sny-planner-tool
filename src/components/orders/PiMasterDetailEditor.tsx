@@ -14,6 +14,17 @@ import { itemCodeWarnings } from '@/lib/orders/itemCodeHint'
 import { computeItemCodePrefillPatch } from '@/lib/orders/itemCodePrefill'
 import type { ItemCodeOption } from '@/lib/orders/itemCodeCatalog'
 import { toast } from 'sonner'
+import SuggestCombobox, { orderSuggestionLoader, filterLocalOptions } from '@/components/ui/SuggestCombobox'
+import { buildColorOptions, defaultColorVersion, type ColorSuggestion } from '@/lib/orders/colorSuggestions'
+
+const loadMeshTypes = orderSuggestionLoader('meshType')
+const loadDescriptions = orderSuggestionLoader('description')
+const loadUsedColors = orderSuggestionLoader('color')
+// Form sửa PI chưa có màu mẫu theo khách (khác form tạo đơn, giữ như trước): đã dùng + màu xưởng.
+const loadPmeColors = async (q: string, signal: AbortSignal) => {
+  const used = await loadUsedColors(q, signal).then(rows => rows.map(r => r.value)).catch(() => [] as string[])
+  return signal.aborted ? [] : buildColorOptions({ q, used, factory: FACTORY_COLOR_PRESETS })
+}
 
 export interface LineValidationIssue {
   field: string
@@ -151,45 +162,70 @@ export default function PiMasterDetailEditor({
   // Sub-lines State
   const [lines, setLines] = useState<SubLineItem[]>(initialLines)
   const [activeExpandedLine, setActiveExpandedLine] = useState<number | null>(null)
-  const [activeColorDropdownIdx, setActiveColorDropdownIdx] = useState<number | null>(null)
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null)
-  const colorDropdownRef = useRef<HTMLDivElement | null>(null)
 
-  // Auto-close dropdown when scrolling table or page, but ALLOW scrolling inside the dropdown itself
-  useEffect(() => {
-    if (activeColorDropdownIdx === null) return
-    const handleScroll = (e: Event) => {
-      const target = e.target as HTMLElement | null
-      if (target && colorDropdownRef.current && colorDropdownRef.current.contains(target)) {
-        // Scrolling inside color dropdown menu -> do NOT close
-        return
-      }
-      setActiveColorDropdownIdx(null)
-    }
-    window.addEventListener('scroll', handleScroll, true)
-    return () => window.removeEventListener('scroll', handleScroll, true)
-  }, [activeColorDropdownIdx])
-
+  const autoMesh = useRef<Record<number, boolean>>({})
+  const editedItemCodes = useRef<Record<number, string>>({})
+  const codeSignature = lines.filter(line => editedItemCodes.current[line.subLineIndex] === line.itemCode.trim().toUpperCase())
+    .map(line => line.itemCode.trim().toUpperCase()).join('\n')
   // Item Code Suggestions (DB history + MasterData catalog)
   const [itemCodeOptions, setItemCodeOptions] = useState<ItemCodeOption[]>([])
 
   useEffect(() => {
+    let active = true
+    const controller = new AbortController()
     const timer = setTimeout(async () => {
       try {
         const url = initialPiNumber?.trim()
           ? `/api/orders/item-codes?pi=${encodeURIComponent(initialPiNumber.trim())}`
           : '/api/orders/item-codes'
-        const res = await fetch(url)
+        const res = await fetch(url, { signal: controller.signal })
         if (res.ok) {
           const data = await res.json()
-          setItemCodeOptions(data)
+          if (active) setItemCodeOptions(data)
         }
       } catch {
-        setItemCodeOptions([])
+        if (active) setItemCodeOptions([])
       }
     }, 300)
-    return () => clearTimeout(timer)
+    return () => { active = false; clearTimeout(timer); controller.abort() }
   }, [initialPiNumber])
+
+  const applyItemCode = (index: number, value: string) => {
+    const option = itemCodeOptions.find(opt => opt.code.toUpperCase() === value.trim().toUpperCase())
+    setLines(prev => prev.map((line, idx) => {
+      if (idx !== index) return line
+      editedItemCodes.current[line.subLineIndex] = value.trim().toUpperCase()
+      const patch = option ? computeItemCodePrefillPatch(line, option, !!autoMesh.current[line.subLineIndex]).patch : {}
+      if (patch.meshType !== undefined) autoMesh.current[line.subLineIndex] = true
+      return { ...line, ...patch, itemCode: value }
+    }))
+  }
+  const loadItemCodes = useCallback(async (q: string) =>
+    filterLocalOptions(itemCodeOptions.map(opt => ({ value: opt.code, hint: opt.label, data: opt })), q), [itemCodeOptions])
+  useEffect(() => {
+    let active = true
+    const controller = new AbortController()
+    const missing = Array.from(new Set(codeSignature.split('\n').filter(code => code && !itemCodeOptions.some(opt => opt.code.toUpperCase() === code))))
+    const timer = setTimeout(async () => {
+      for (const code of missing) {
+        try {
+          const response = await fetch(`/api/orders/item-codes?code=${encodeURIComponent(code)}`, { signal: controller.signal })
+          if (!response.ok) continue
+          const options: ItemCodeOption[] = await response.json()
+          const option = options.find(opt => opt.code.toUpperCase() === code)
+          if (!active || !option) continue
+          setItemCodeOptions(prev => prev.some(opt => opt.code.toUpperCase() === code) ? prev : [...prev, option])
+          setLines(prev => prev.map(line => {
+            if (line.itemCode.trim().toUpperCase() !== code || editedItemCodes.current[line.subLineIndex] !== code) return line
+            const patch = computeItemCodePrefillPatch(line, option, !!autoMesh.current[line.subLineIndex]).patch
+            if (patch.meshType !== undefined) autoMesh.current[line.subLineIndex] = true
+            return { ...line, ...patch }
+          }))
+        } catch { /* Keep user input on lookup failure. */ }
+      }
+    }, 300)
+    return () => { active = false; clearTimeout(timer); controller.abort() }
+  }, [codeSignature, itemCodeOptions])
 
   // Dirty Guard State
   const [pendingTargetPi, setPendingTargetPi] = useState<string | null>(null)
@@ -420,6 +456,7 @@ export default function PiMasterDetailEditor({
     setLines((prev) => {
       const next = [...prev]
       const current = { ...next[index], [field]: value }
+      if (field === 'meshType') autoMesh.current[current.subLineIndex] = false
 
       // Auto-update orderType when packingType changes
       if (field === 'primaryPackingType') {
@@ -528,6 +565,8 @@ export default function PiMasterDetailEditor({
 
   // Delete line
   const handleDeleteLine = useCallback((index: number) => {
+    const previousAutoMesh = autoMesh.current
+    const previousEditedCodes = editedItemCodes.current
     setLines((prev) => {
       if (prev.length <= 1) {
         alert('Đơn hàng cần có ít nhất 1 dòng sản phẩm.')
@@ -539,6 +578,14 @@ export default function PiMasterDetailEditor({
         return prev
       }
       const remaining = prev.filter((_, i) => i !== index)
+      const nextAutoMesh: Record<number, boolean> = {}
+      const nextEditedCodes: Record<number, string> = {}
+      remaining.forEach((line, idx) => {
+        nextAutoMesh[idx + 1] = !!previousAutoMesh[line.subLineIndex]
+        if (previousEditedCodes[line.subLineIndex] !== undefined) nextEditedCodes[idx + 1] = previousEditedCodes[line.subLineIndex]
+      })
+      autoMesh.current = nextAutoMesh
+      editedItemCodes.current = nextEditedCodes
       return remaining.map((line, idx) => ({ ...line, subLineIndex: idx + 1 }))
     })
   }, [])
@@ -696,15 +743,6 @@ export default function PiMasterDetailEditor({
 
   return (
     <div className="max-w-[1440px] mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* Native datalist for Item Code autocomplete */}
-      <datalist id="pme-itemcode-options">
-        {itemCodeOptions.map((opt) => (
-          <option key={opt.code} value={opt.code}>
-            {opt.label}
-          </option>
-        ))}
-      </datalist>
-
       {/* Breadcrumb Navigation */}
       <nav className="flex items-center gap-2 text-sm text-on-surface-variant font-medium">
         <Link href="/orders" onClick={handleBackToOrders} className="hover:text-primary transition-colors">
@@ -941,6 +979,13 @@ export default function PiMasterDetailEditor({
             />
           </div>
 
+
+          <div className="lg:col-span-12">
+            <label htmlFor="pme-description" className="block text-xs font-semibold text-on-surface-variant mb-1.5">Mô tả</label>
+            <SuggestCombobox id="pme-description" multiline rows={2} maxLength={200}
+              value={description} onChange={setDescription} load={loadDescriptions} listLabel="Mô tả đã dùng"
+              className="w-full bg-surface border border-outline-variant rounded px-3 py-2 text-sm focus:outline-none focus:border-primary" />
+          </div>
           {/* Row 2: Ghi chú chung (Remark) - Mở rộng toàn bộ 12 cột, loại bỏ dropdown vòng đời trùng lặp */}
           <div className="lg:col-span-12">
             <label className="block text-xs font-semibold text-on-surface-variant mb-1.5 flex items-center justify-between">
@@ -983,12 +1028,14 @@ export default function PiMasterDetailEditor({
 
         <div className="bg-surface border border-outline-variant/60 rounded-xl p-4 shadow-sm bg-primary/5 border-primary/20">
           <div className="text-xs font-medium text-primary flex items-center justify-between">
-            <span>Sợi cần dùng (+5% loss)</span>
+            <span>Sợi cần dùng (ước tính)</span>
             <span className="material-symbols-outlined text-[16px]">trending_up</span>
           </div>
           <div className="text-xl font-bold font-mono text-primary mt-1">
             {totals.totalRequiredYarnKg.toLocaleString('vi-VN')} <span className="text-xs font-normal">kg</span>
           </div>
+          {/* 5% là mặc định hệ thống, chưa có nguồn từ khách (AUD-1, chờ K-11). */}
+          <div className="text-[11px] text-secondary mt-0.5">Gồm hao hụt mặc định 5%</div>
         </div>
       </div>
 
@@ -1094,45 +1141,19 @@ export default function PiMasterDetailEditor({
                         {(() => {
                           const allCodes = lines.map((l) => l.itemCode || '')
                           const matched = itemCodeOptions.find((opt) => opt.code.toUpperCase() === (line.itemCode || '').trim().toUpperCase())
-                          const conflict = matched ? computeItemCodePrefillPatch(line, matched).conflictWarning : undefined
+                          const conflict = matched ? computeItemCodePrefillPatch(line, matched, !!autoMesh.current[line.subLineIndex]).conflictWarning : undefined
                           const warns = itemCodeWarnings(allCodes, idx, conflict)
                           const hasWarn = warns.length > 0
                           return (
-                            <div className="relative">
-                              <input
-                                type="text"
-                                list="pme-itemcode-options"
+                            // title nằm ở div bọc vì SuggestCombobox không nhận prop title; tooltip của input kế thừa từ phần tử cha.
+                            <div className="relative" title={warns.length > 0 ? warns.join('; ') : "Item Code theo dòng"}>
+                              <SuggestCombobox<ItemCodeOption>
+                                id={`pme-line-${line.subLineIndex}-itemCode`}
+                                dense
                                 value={line.itemCode}
-                                onChange={(e) => {
-                                  const val = e.target.value
-                                  const matchedOpt = itemCodeOptions.find((opt) => opt.code.toUpperCase() === val.trim().toUpperCase())
-                                  if (matchedOpt) {
-                                    const { patch } = computeItemCodePrefillPatch(line, matchedOpt)
-                                    setLines((prev) => {
-                                      const next = [...prev]
-                                      const updated = { ...next[idx], itemCode: val }
-                                      if (patch.color) {
-                                        updated.color = patch.color
-                                        updated.colorVersion = patch.colorVersion || 'STD'
-                                      }
-                                      if (patch.uvPct != null) {
-                                        updated.uvPct = typeof patch.uvPct === 'number' ? patch.uvPct : Number(patch.uvPct)
-                                      }
-                                      if (patch.meshType) {
-                                        updated.meshType = patch.meshType
-                                      }
-                                      if (patch.mbCode) {
-                                        updated.mbCode = patch.mbCode
-                                      }
-                                      next[idx] = updated
-                                      return next
-                                    })
-                                  } else {
-                                    updateLineField(idx, 'itemCode', val)
-                                  }
-                                }}
+                                onChange={(value) => applyItemCode(idx, value)}
+                                load={loadItemCodes}
                                 placeholder="e.g. GBN1GRE..."
-                                title={warns.length > 0 ? warns.join('; ') : "Item Code theo dòng"}
                                 className={`w-full font-mono bg-surface-variant/30 border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
                                   hasWarn
                                     ? 'border-amber-500/60 bg-amber-500/5 focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30'
@@ -1156,95 +1177,34 @@ export default function PiMasterDetailEditor({
 
                       {/* Color & Version */}
                       <td className="py-2.5 px-3">
-                        <input
-                          type="text"
+                        <SuggestCombobox<ColorSuggestion>
+                          id={`pme-line-${line.subLineIndex}-color`}
+                          dense
                           value={line.color}
-                          onChange={(e) => {
-                            const val = e.target.value.toUpperCase()
+                          onChange={(raw) => {
+                            const val = raw.toUpperCase()
                             updateLineField(idx, 'color', val)
-                            if (val.includes('DESERT')) {
-                              if (line.colorVersion !== 'Version A' && line.colorVersion !== 'Version B') {
-                                updateLineField(idx, 'colorVersion', 'Version A')
-                              }
+                            updateLineField(idx, 'colorVersion', defaultColorVersion(val, line.colorVersion))
+                          }}
+                          load={loadPmeColors}
+                          onSelect={({ value, data }) => {
+                            // Giữ đúng patch của dropdown cũ: màu xưởng mang version riêng, màu đã dùng theo Desert → A.
+                            if (data?.kind === 'factory') {
+                              updateLineField(idx, 'color', data.preset.color)
+                              updateLineField(idx, 'colorVersion', data.preset.version)
                             } else {
-                              updateLineField(idx, 'colorVersion', 'STD')
+                              updateLineField(idx, 'colorVersion', value.toUpperCase().includes('DESERT') ? 'Version A' : 'STD')
                             }
                           }}
-                          onFocus={(e) => {
-                            const rect = e.currentTarget.getBoundingClientRect()
-                            setDropdownPos({ top: rect.bottom + 4, left: rect.left })
-                            setActiveColorDropdownIdx(idx)
-                          }}
-                          onBlur={() => setTimeout(() => setActiveColorDropdownIdx(null), 250)}
                           placeholder="Màu sắc"
+                          listLabel="Gợi ý màu"
+                          emptyText={(q) => `Màu tùy biến "${q}" — sẽ lưu phiên bản STD`}
                           className={`w-full bg-surface-variant/30 border rounded px-2 py-1 text-xs font-semibold focus:outline-none uppercase transition-colors ${
                             hasFieldError(line.subLineIndex, 'color')
                               ? 'border-error bg-error/5 text-error focus:ring-1 focus:ring-error'
                               : 'border-outline-variant/70 focus:border-primary'
                           }`}
                         />
-
-                        {/* Autocomplete dropdown: Gợi ý màu công thức xưởng tiêu chuẩn */}
-                        {activeColorDropdownIdx === idx && dropdownPos && (() => {
-                          const search = (line.color || '').trim().toUpperCase()
-                          const filteredPresets = FACTORY_COLOR_PRESETS.filter((p) => {
-                            if (!search) return true
-                            return (
-                              p.color.includes(search) ||
-                              p.name.toUpperCase().includes(search) ||
-                              (p.mbCode && p.mbCode.toUpperCase().includes(search)) ||
-                              (p.tags && p.tags.some((t) => t.includes(search)))
-                            )
-                          })
-
-                          return (
-                            <div
-                              ref={colorDropdownRef}
-                              onMouseDown={(e) => {
-                                // Prevent input from losing focus / blurring when clicking scrollbar or popover body
-                                e.preventDefault()
-                              }}
-                              style={{
-                                position: 'fixed',
-                                top: `${dropdownPos.top}px`,
-                                left: `${dropdownPos.left}px`,
-                              }}
-                              className="z-[9999] bg-surface-container-lowest border border-outline-variant rounded-md shadow-2xl p-1.5 text-left w-64 divide-y divide-outline-variant/30"
-                            >
-                              <div>
-                                <div className="px-1.5 py-0.5 text-[10px] font-semibold text-secondary uppercase tracking-wider mb-1 flex items-center justify-between">
-                                  <span>Màu công thức xưởng</span>
-                                  <span className="text-[9px] font-mono text-secondary/70">({filteredPresets.length})</span>
-                                </div>
-                                <div className="max-h-56 overflow-y-auto space-y-1 pr-0.5 overscroll-contain">
-                                  {filteredPresets.length > 0 ? (
-                                    filteredPresets.map((preset) => (
-                                      <button
-                                        key={preset.name}
-                                        type="button"
-                                        onMouseDown={(e) => e.preventDefault()}
-                                        onClick={() => {
-                                          updateLineField(idx, 'color', preset.color)
-                                          updateLineField(idx, 'colorVersion', preset.version)
-                                          setActiveColorDropdownIdx(null)
-                                        }}
-                                        className="w-full px-2 py-1.5 text-left rounded hover:bg-primary/10 transition-colors border border-outline-variant/40 flex flex-col"
-                                      >
-                                        <span className="font-semibold text-xs text-primary">{preset.name}</span>
-                                        <span className="text-[9px] text-secondary font-mono">{preset.subText}</span>
-                                      </button>
-                                    ))
-                                  ) : (
-                                    <div className="py-3 px-2 text-center text-xs text-secondary">
-                                      <div>Màu tùy biến: <span className="font-semibold text-on-surface">&quot;{search}&quot;</span></div>
-                                      <div className="text-[10px] text-secondary/70 mt-0.5">Sẽ lưu phiên bản STD</div>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        })()}
 
                         {line.color?.toUpperCase().includes('DESERT') && (
                           <div className={`mt-1 flex items-center gap-1 p-0.5 rounded transition-all ${
@@ -1298,6 +1258,7 @@ export default function PiMasterDetailEditor({
                       <td className="py-2.5 px-2">
                         <input
                           type="number"
+                          step="0.01"
                           value={line.gsm}
                           onChange={(e) => updateLineField(idx, 'gsm', e.target.value === '' ? '' : Number(e.target.value))}
                           placeholder="GSM"
@@ -1541,6 +1502,7 @@ export default function PiMasterDetailEditor({
                                     <label className="block text-[11px] font-medium text-secondary mb-1">GSM SX (thực tế)</label>
                                     <input
                                       type="number"
+                                      step="0.01"
                                       value={line.productionGsm ?? ''}
                                       onChange={(e) => updateLineField(idx, 'productionGsm', e.target.value === '' ? '' : Number(e.target.value))}
                                       placeholder="GSM dệt thực tế"
@@ -1577,45 +1539,18 @@ export default function PiMasterDetailEditor({
                                     {(() => {
                                       const allCodes = lines.map((l) => l.itemCode || '')
                                       const matched = itemCodeOptions.find((opt) => opt.code.toUpperCase() === (line.itemCode || '').trim().toUpperCase())
-                                      const conflict = matched ? computeItemCodePrefillPatch(line, matched).conflictWarning : undefined
+                                      const conflict = matched ? computeItemCodePrefillPatch(line, matched, !!autoMesh.current[line.subLineIndex]).conflictWarning : undefined
                                       const warns = itemCodeWarnings(allCodes, idx, conflict)
                                       const hasWarn = warns.length > 0
                                       return (
-                                        <>
-                                          <input
-                                            type="text"
-                                            list="pme-itemcode-options"
+                                        <div title="Item Code tự do theo dòng">
+                                          <SuggestCombobox<ItemCodeOption>
+                                            id={`pme-detail-${line.subLineIndex}-itemCode`}
+                                            dense
                                             value={line.itemCode}
-                                            onChange={(e) => {
-                                              const val = e.target.value
-                                              const matchedOpt = itemCodeOptions.find((opt) => opt.code.toUpperCase() === val.trim().toUpperCase())
-                                              if (matchedOpt) {
-                                                const { patch } = computeItemCodePrefillPatch(line, matchedOpt)
-                                                setLines((prev) => {
-                                                  const next = [...prev]
-                                                  const updated = { ...next[idx], itemCode: val }
-                                                  if (patch.color) {
-                                                    updated.color = patch.color
-                                                    updated.colorVersion = patch.colorVersion || 'STD'
-                                                  }
-                                                  if (patch.uvPct != null) {
-                                                    updated.uvPct = typeof patch.uvPct === 'number' ? patch.uvPct : Number(patch.uvPct)
-                                                  }
-                                                  if (patch.meshType) {
-                                                    updated.meshType = patch.meshType
-                                                  }
-                                                  if (patch.mbCode) {
-                                                    updated.mbCode = patch.mbCode
-                                                  }
-                                                  next[idx] = updated
-                                                  return next
-                                                })
-                                              } else {
-                                                updateLineField(idx, 'itemCode', val)
-                                              }
-                                            }}
+                                            onChange={(value) => applyItemCode(idx, value)}
+                                            load={loadItemCodes}
                                             placeholder="e.g. GBN1GRE260205054"
-                                            title="Item Code tự do theo dòng"
                                             className={`w-full font-mono bg-surface border rounded px-2 py-1 text-xs focus:outline-none transition-colors ${
                                               hasWarn
                                                 ? 'border-amber-500/60 bg-amber-500/5 focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30'
@@ -1632,7 +1567,7 @@ export default function PiMasterDetailEditor({
                                               ))}
                                             </div>
                                           )}
-                                        </>
+                                        </div>
                                       )
                                     })()}
                                   </div>
@@ -1692,11 +1627,13 @@ export default function PiMasterDetailEditor({
                                 <div className="grid grid-cols-2 gap-2 pt-2 border-t border-outline-variant/30">
                                   <div>
                                     <label className="block text-[11px] font-medium text-secondary mb-1">Loại lưới</label>
-                                    <input
-                                      type="text"
+                                    <SuggestCombobox
+                                      id={`pme-line-${line.subLineIndex}-meshType`}
+                                      dense
                                       value={line.meshType}
-                                      onChange={(e) => updateLineField(idx, 'meshType', e.target.value)}
-                                      placeholder="Hex, Diamond..."
+                                      onChange={(value) => updateLineField(idx, 'meshType', value)}
+                                      load={loadMeshTypes}
+                                      placeholder="VD: Shade net Mono"
                                       className="w-full bg-surface border border-outline-variant rounded px-2 py-1 text-xs focus:border-primary focus:outline-none"
                                     />
                                   </div>
@@ -1751,6 +1688,7 @@ export default function PiMasterDetailEditor({
                                           <label className="block text-[10px] font-medium text-secondary mb-0.5">GSM mộc (RAW FABRIC GSM) *</label>
                                           <input
                                             type="number"
+                                            step="0.01"
                                             value={line.rawFabricGsm ?? ''}
                                             onChange={(e) => updateLineField(idx, 'rawFabricGsm', e.target.value === '' ? '' : Number(e.target.value))}
                                             placeholder="Mộc (325)"
@@ -1766,6 +1704,7 @@ export default function PiMasterDetailEditor({
                                           <label className="block text-[10px] font-medium text-secondary mb-0.5">GSM màng tráng (COATING GSM)</label>
                                           <input
                                             type="number"
+                                            step="0.01"
                                             value={line.coatingGsm ?? ''}
                                             onChange={(e) => updateLineField(idx, 'coatingGsm', e.target.value === '' ? '' : Number(e.target.value))}
                                             placeholder="Tráng (105)"
@@ -1777,6 +1716,7 @@ export default function PiMasterDetailEditor({
                                           <label className="block text-[10px] font-medium text-secondary mb-0.5">GSM thành phẩm (FINISHED GSM) *</label>
                                           <input
                                             type="number"
+                                            step="0.01"
                                             value={line.finishedGsm ?? ''}
                                             onChange={(e) => updateLineField(idx, 'finishedGsm', e.target.value === '' ? '' : Number(e.target.value))}
                                             placeholder="TP (430)"

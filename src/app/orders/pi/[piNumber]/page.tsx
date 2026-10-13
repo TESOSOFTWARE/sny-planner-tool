@@ -6,6 +6,7 @@ import { notFound } from 'next/navigation'
 import { prisma } from '@/lib/db'
 import { matchRecipe, normalizeColorName } from '@/lib/orders/recipeSnapshot'
 import PiMasterDetailEditor, { type SubLineItem } from '@/components/orders/PiMasterDetailEditor'
+import PiMaterialIssues from '@/components/materials/PiMaterialIssues'
 
 interface Props {
   params: { piNumber: string }
@@ -191,6 +192,7 @@ export default async function PiMasterDetailPage({ params }: Props) {
   )
 
   return (
+    <>
     <PiMasterDetailEditor
       initialPiNumber={piNumber}
       initialCustomer={primaryHeader.customer}
@@ -207,5 +209,7 @@ export default async function PiMasterDetailPage({ params }: Props) {
       relatedPis={relatedPis}
       recipeCoverage={{ matched: recipeMatched, total: orders.length, missingColors: recipeMissingColors }}
     />
+    <div className="max-w-[1440px] mx-auto px-8 pb-8"><PiMaterialIssues piNumber={piNumber} /></div>
+    </>
   )
 }

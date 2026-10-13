@@ -368,6 +368,11 @@ export default function ImportOrdersModal() {
     }
     return c
   })()
+  // Import warnings are informational; validity and confirm eligibility remain
+  // controlled by the server decisions and customer review above.
+  const warningRows = (preview?.rows ?? []).filter(
+    (row) => (row.validationWarnings?.length ?? 0) > 0,
+  )
   // B2: NEEDS_REVIEW names the planner still has to resolve (radio starts
   // unselected). AMBIGUOUS names are NOT counted here — they have no
   // resolution UI yet (P0-10), their rows are already marked conflict and
@@ -484,6 +489,26 @@ export default function ImportOrdersModal() {
               {/* ── PREVIEW STATE ────────────────────────────────────────── */}
               {state === 'preview' && preview && (
                 <div className="space-y-3">
+                  {warningRows.length > 0 && (
+                    <details className="border border-amber-200 bg-amber-50/60 rounded-xl text-xs">
+                      <summary className="px-3.5 py-2.5 cursor-pointer font-medium text-amber-900">
+                        {warningRows.length.toLocaleString('vi-VN')} dòng có cảnh báo quy cách đóng gói
+                      </summary>
+                      <p className="px-3.5 pb-2 text-amber-900">
+                        Cảnh báo không chặn nhập; dòng có lỗi hoặc xung đột vẫn bị bỏ qua.
+                      </p>
+                      <ul className="px-3.5 pb-3 space-y-2 max-h-40 overflow-y-auto">
+                        {warningRows.map((row, index) => (
+                          <li key={index} className="text-amber-900 break-words">
+                            <span className="font-semibold">
+                              PI {row.piNumber || '—'} / NO {row.subLineIndex ?? '—'}:
+                            </span>{' '}
+                            {row.validationWarnings?.join('; ')}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
                   {/* Collapsible PI & Data Warnings */}
                   {preview.piWarnings && preview.piWarnings.length > 0 && (
                     <details className="group border border-amber-200 bg-amber-50/60 rounded-xl overflow-hidden transition-all text-xs">

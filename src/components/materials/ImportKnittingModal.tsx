@@ -4,7 +4,8 @@
 // 3-step modal: (1) file picker → (2) preview (dates + machine count) → (3) confirm → success/error.
 // Follows the same pattern as ImportMaterialReportModal.
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
 
 interface Props {
   onImported: () => void
@@ -32,6 +33,8 @@ function fmtDate(iso: string): string {
 }
 
 export default function ImportKnittingModal({ onImported, onClose }: Props) {
+  const modalRef = useRef<HTMLDivElement>(null)
+  useScheduleModalFocus(true, onClose, modalRef)
   const [step, setStep]       = useState<Step>('pick')
   const [file, setFile]       = useState<File | null>(null)
   const [preview, setPreview] = useState<PreviewData | null>(null)
@@ -96,22 +99,22 @@ export default function ImportKnittingModal({ onImported, onClose }: Props) {
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm"
       onClick={onClose}
     >
-      <div
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="knitting-import-title"
         className="bg-surface-container-lowest rounded-2xl shadow-xl w-full max-w-lg overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-outline-variant">
           <div>
-            <h2 className="text-base font-inter font-semibold text-on-surface">
+            <h2 id="knitting-import-title" className="text-base font-inter font-semibold text-on-surface">
               Import Knitting Report
             </h2>
             <p className="text-xs font-inter text-secondary mt-0.5">
               Upload SNY Statistical Report — sheet KNITTING (.xlsx)
             </p>
           </div>
-          <button onClick={onClose} className="text-outline hover:text-on-surface transition-colors">
-            <span className="material-symbols-outlined text-[20px]">close</span>
+          <button aria-label="Đóng" onClick={onClose} className="text-outline hover:text-on-surface transition-colors">
+            <span aria-hidden="true" className="material-symbols-outlined text-[20px]">close</span>
           </button>
         </div>
 
@@ -128,19 +131,19 @@ export default function ImportKnittingModal({ onImported, onClose }: Props) {
                 </div>
               ) : (
                 <>
-                  <span className="material-symbols-outlined text-[48px] text-outline">description</span>
+                  <span aria-hidden="true" className="material-symbols-outlined text-[48px] text-outline">description</span>
                   <div className="text-center">
                     <p className="text-sm font-inter text-on-surface">Chọn file Statistical Report</p>
                     <p className="text-xs font-inter text-secondary mt-1">Sheet KNITTING • chỉ nhận .xlsx</p>
                   </div>
                   <label className="inline-flex items-center gap-2 bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 transition-colors cursor-pointer">
-                    <span className="material-symbols-outlined text-[18px]">upload</span>
+                    <span aria-hidden="true" className="material-symbols-outlined text-[18px]">upload</span>
                     Chọn file
                     <input
                       id="knitting-import-file"
                       type="file"
                       accept=".xlsx"
-                      className="hidden"
+                      className="sr-only focus:not-sr-only focus:outline focus:outline-2 focus:outline-primary"
                       onChange={handleFileChange}
                     />
                   </label>
@@ -196,7 +199,7 @@ export default function ImportKnittingModal({ onImported, onClose }: Props) {
                 >
                   {isLoading ? (
                     <>
-                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <svg aria-hidden="true" className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
                       </svg>
@@ -204,7 +207,7 @@ export default function ImportKnittingModal({ onImported, onClose }: Props) {
                     </>
                   ) : (
                     <>
-                      <span className="material-symbols-outlined text-[16px]">save</span>
+                      <span aria-hidden="true" className="material-symbols-outlined text-[16px]">save</span>
                       Xác nhận import
                     </>
                   )}
@@ -216,7 +219,7 @@ export default function ImportKnittingModal({ onImported, onClose }: Props) {
           {/* ── STEP: success ── */}
           {step === 'success' && result && (
             <div className="flex flex-col items-center gap-5 py-6">
-              <span className="material-symbols-outlined text-[48px] text-[#15803d]">check_circle</span>
+              <span aria-hidden="true" className="material-symbols-outlined text-[48px] text-[#15803d]">check_circle</span>
               <div className="text-center space-y-1">
                 <p className="text-base font-inter font-semibold text-on-surface">Import thành công</p>
                 <p className="text-sm font-inter text-secondary">
@@ -238,7 +241,7 @@ export default function ImportKnittingModal({ onImported, onClose }: Props) {
           {/* ── STEP: error ── */}
           {step === 'error' && (
             <div className="flex flex-col items-center gap-5 py-6">
-              <span className="material-symbols-outlined text-[48px] text-error">error</span>
+              <span aria-hidden="true" className="material-symbols-outlined text-[48px] text-error">error</span>
               <div className="text-center space-y-1">
                 <p className="text-base font-inter font-semibold text-error">Import thất bại</p>
                 <p className="text-xs font-inter text-secondary font-mono break-all">{error}</p>

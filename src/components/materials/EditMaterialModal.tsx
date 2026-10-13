@@ -3,22 +3,45 @@
 // src/components/materials/EditMaterialModal.tsx
 // Modal for editing an existing material. Name is read-only.
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+/** 7 cột của bảng HDPE trong file nguồn — nằm trong payload của MaterialReportSnapshot. */
+export interface MaterialReportPayload {
+  itemCode?: string
+  sourceDateLabel?: string
+  reportPeriodEnd?: string
+  materialName?: string
+  firstStock?: number
+  inQty?: number
+  outUsing?: number
+  outBroken?: number
+  outTape?: number
+  outReject?: number
+  lastStock?: number
+}
 
 export interface SerializedMaterial {
   id: string
   name: string
   group: 'HDPE' | 'MB' | 'KOREA'
+  /** Chỉ dùng cho group HDPE — hai khối có công thức tồn khác nhau. */
+  subGroup?: 'NGUYEN_SINH' | 'TAI_CHE' | null
   color: string | null
   brand: string | null
+  /** Độ bền màu, chỉ dùng cho group MB. */
+  itemCode?: string | null
+  lightFastness?: string | null
   currentStock: string
   minThreshold: string | null  // null = chưa đặt ngưỡng
   unit: string
   note: string | null
   createdAt: string
   updatedAt: string
+  /** Snapshot gần nhất; null khi vật tư chưa từng được import báo cáo. */
+  latestReport?: { reportDate: string; payload: MaterialReportPayload } | null
 }
 
 interface Props {
@@ -28,7 +51,11 @@ interface Props {
 }
 
 export default function EditMaterialModal({ material, onUpdated, onClose }: Props) {
+  const modalRef = useRef<HTMLDivElement>(null)
+  useScheduleModalFocus(true, onClose, modalRef)
   const [group, setGroup]               = useState<'HDPE' | 'MB' | 'KOREA'>(material.group)
+  const [subGroup, setSubGroup] = useState<'NGUYEN_SINH' | 'TAI_CHE' | ''>(material.subGroup ?? '')
+  const [lightFastness, setLightFastness] = useState(material.lightFastness ?? '')
   const [color, setColor]               = useState(material.color ?? '')
   const [brand, setBrand]               = useState(material.brand ?? '')
   const [currentStock, setCurrentStock] = useState(parseFloat(material.currentStock).toString())
@@ -59,9 +86,11 @@ export default function EditMaterialModal({ material, onUpdated, onClose }: Prop
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           group,
+          subGroup: group === 'HDPE' ? subGroup || null : null,
+          lightFastness: group === 'MB' ? lightFastness.trim() || null : null,
           color: color.trim() || null,
           brand: brand.trim() || null,
-          currentStock: stock,
+          ...(stock !== Number(material.currentStock) ? { currentStock: stock } : {}),
           minThreshold: threshold,
           note: note.trim() || null,
         }),
@@ -88,12 +117,12 @@ export default function EditMaterialModal({ material, onUpdated, onClose }: Prop
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="bg-surface rounded-xl shadow-lg w-full max-w-md overflow-hidden">
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-label="Chỉnh sửa nguyên liệu" className="bg-surface rounded-xl shadow-lg w-full max-w-md max-h-[90vh] overflow-y-auto">
 
         {/* Header */}
         <div className="px-6 py-4 border-b-[0.5px] border-outline-variant flex justify-between items-center">
-          <h3 className="text-base font-inter font-semibold text-on-surface">Edit material</h3>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface transition-colors">
+          <h3 className="text-base font-inter font-semibold text-on-surface">Chỉnh sửa nguyên liệu</h3>
+          <button aria-label="Đóng" onClick={onClose} className="text-on-surface-variant hover:text-on-surface transition-colors">
             <span className="material-symbols-outlined text-[20px]">close</span>
           </button>
         </div>
@@ -133,6 +162,24 @@ export default function EditMaterialModal({ material, onUpdated, onClose }: Prop
               <option value="KOREA">Korea & Khác</option>
             </select>
           </div>
+
+
+          {group === 'HDPE' && (
+            <div>
+              <label htmlFor="material-subgroup" className="block text-xs font-medium text-secondary mb-1">Phân loại nhựa</label>
+              <select id="material-subgroup" value={subGroup} onChange={e => setSubGroup(e.target.value as 'NGUYEN_SINH' | 'TAI_CHE' | '')} className={inputCls()}>
+                <option value="">Chưa phân loại</option>
+                <option value="NGUYEN_SINH">Nguyên sinh</option>
+                <option value="TAI_CHE">Tái chế</option>
+              </select>
+            </div>
+          )}
+          {group === 'MB' && (
+            <div>
+              <label htmlFor="material-light-fastness" className="block text-xs font-medium text-secondary mb-1">Độ bền màu</label>
+              <input id="material-light-fastness" type="text" maxLength={100} value={lightFastness} onChange={e => setLightFastness(e.target.value)} className={inputCls()} />
+            </div>
+          )}
 
           {/* Màu và Hãng (chỉ hiện khi nhóm MB) */}
           {group === 'MB' && (
@@ -214,14 +261,14 @@ export default function EditMaterialModal({ material, onUpdated, onClose }: Prop
               onClick={onClose}
               className="inline-flex items-center justify-center border border-primary bg-transparent hover:bg-surface-container text-primary text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors"
             >
-              Cancel
+              Hủy
             </button>
             <button
               type="submit"
               disabled={isLoading}
               className="inline-flex items-center justify-center bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors"
             >
-              {isLoading ? 'Đang lưu…' : 'Save'}
+              {isLoading ? 'Đang lưu…' : 'Lưu'}
             </button>
           </div>
         </form>

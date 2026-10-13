@@ -5,7 +5,12 @@
 // Planner selects: machine + start date + end date.
 // Uses the same UTC+7 date encoding pattern as AssignModal.tsx.
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+import { lineLabel } from '@/lib/schedule/piDisplay'
+import { useScheduleModalFocus } from './useModalFocus'
+import ProductionDurationSummary from './ProductionDurationSummary'
+import { useAssignmentDates } from './useAssignmentDates'
+import { toast } from 'sonner'
 import type { SerializedProductionOrder } from '@/types'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -28,6 +33,8 @@ interface Props {
 }
 
 export default function AssignFromOrderModal({ order, onAssigned, onClose }: Props) {
+  const modalRef = useRef<HTMLDivElement>(null)
+  useScheduleModalFocus(true, onClose, modalRef)
   const [machineId, setMachineId]         = useState('')
   const [startDate, setStartDate]         = useState('')
   const [endDate, setEndDate]             = useState('')
@@ -39,15 +46,20 @@ export default function AssignFromOrderModal({ order, onAssigned, onClose }: Pro
   const [isLoading, setIsLoading]         = useState(false)
   const [isSuccess, setIsSuccess]         = useState(false)
 
+  const dates = useAssignmentDates({
+    enabled: true, startDate, endDate, allocatedMeters, estimatedDailyOutput, setEndDate,
+  })
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    if (dates.loading || dates.error) { setError(dates.error || 'Đang tính lịch, vui lòng đợi.'); return }
 
     // Client-side date validation
     const parsedStart = new Date(startDate)
     const parsedEnd   = new Date(endDate)
     if (parsedEnd < parsedStart) {
-      setError('End Date cannot be before Start Date')
+      setError('Ngày kết thúc không được trước ngày bắt đầu')
       return
     }
 
@@ -61,6 +73,7 @@ export default function AssignFromOrderModal({ order, onAssigned, onClose }: Pro
           orderId:   order.id,
           startDate: toVietnamISO(startDate),
           endDate:   toVietnamISO(endDate),
+          endDateSource: dates.endDateSource,
           // Gửi số mét phân công nếu có nhập
           ...(allocatedMeters !== '' && { allocatedMeters: Number(allocatedMeters) }),
           // Gửi sản lượng dự kiến nếu có nhập
@@ -71,13 +84,14 @@ export default function AssignFromOrderModal({ order, onAssigned, onClose }: Pro
       const data = await res.json()
 
       if (res.status === 409) {
-        setError('Máy đã được xếp lịch trong khoảng thời gian này')
+        setError(data.message || 'Máy đã được xếp lịch trong khoảng thời gian này')
         return
       }
       if (!res.ok) {
         throw new Error(data.message || 'Failed to create assignment')
       }
 
+      if (data.warnings?.length) toast.warning(data.warnings.join(' '))
       // Success path
       setIsSuccess(true)
       onAssigned()
@@ -97,14 +111,15 @@ export default function AssignFromOrderModal({ order, onAssigned, onClose }: Pro
       onClick={onClose}
     >
       <div
-        className="bg-surface rounded-xl shadow-lg w-full max-w-md overflow-hidden"
+        ref={modalRef} role="dialog" aria-modal="true" aria-label="Xếp máy cho đơn hàng"
+        className="bg-surface rounded-xl shadow-lg w-full max-w-md max-h-[90vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
 
         {/* Header */}
         <div className="px-md py-sm border-b-[0.5px] border-outline-variant flex justify-between items-center">
           <h3 className="text-headline-sm font-inter font-semibold text-on-surface">
-            Assign to machine
+            Xếp máy cho đơn hàng
           </h3>
           <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface transition-colors">
             <span className="material-symbols-outlined text-[20px]">close</span>
@@ -141,7 +156,7 @@ export default function AssignFromOrderModal({ order, onAssigned, onClose }: Pro
             {/* Order info (sub-line detail) */}
             <div className="rounded-lg bg-surface-container-low border-[0.5px] border-outline-variant px-md py-sm">
               <p className="text-label-sm font-inter font-semibold text-primary mb-1.5">
-                {order.piNumber} · Dòng {order.subLineIndex + 1}
+                {order.piNumber} · Dòng {lineLabel(order)}
               </p>
               <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
                 <div className="flex gap-1 min-w-0">
@@ -214,8 +229,7 @@ export default function AssignFromOrderModal({ order, onAssigned, onClose }: Pro
                   value={startDate}
                   onChange={e => {
                     setStartDate(e.target.value)
-                    // Reset end date if it's now before new start
-                    if (endDate && e.target.value > endDate) setEndDate(e.target.value)
+                    // Preserve a manually chosen end; the preview validates the new range.
                   }}
                   className="w-full h-10 px-sm rounded-lg border-[0.5px] border-outline bg-surface focus:border-primary outline-none"
                 />
@@ -229,7 +243,7 @@ export default function AssignFromOrderModal({ order, onAssigned, onClose }: Pro
                   required
                   min={startDate || undefined}
                   value={endDate}
-                  onChange={e => setEndDate(e.target.value)}
+                  onChange={e => dates.setManualEndDate(e.target.value)}
                   className="w-full h-10 px-sm rounded-lg border-[0.5px] border-outline bg-surface focus:border-primary outline-none"
                 />
               </div>
@@ -255,7 +269,7 @@ export default function AssignFromOrderModal({ order, onAssigned, onClose }: Pro
             {/* Sản lượng dự kiến */}
             <div>
               <label className="block text-label-sm font-medium text-secondary mb-xs">
-                Sản lượng dự kiến (m/ngày)
+                Năng suất (m/ngày)
               </label>
               <input
                 id="assign-from-order-estimatedDailyOutput"
@@ -269,6 +283,10 @@ export default function AssignFromOrderModal({ order, onAssigned, onClose }: Pro
               />
             </div>
 
+            <ProductionDurationSummary allocatedMeters={allocatedMeters} estimatedDailyOutput={estimatedDailyOutput}
+              startDate={startDate} plan={dates.plan} loading={dates.loading} error={dates.error}
+              mode={dates.mode} onUseComputed={dates.useComputedDates} />
+
             {/* Actions */}
             <div className="flex justify-end gap-sm pt-sm">
               <button
@@ -276,14 +294,14 @@ export default function AssignFromOrderModal({ order, onAssigned, onClose }: Pro
                 onClick={onClose}
                 className="inline-flex items-center justify-center gap-sm border border-primary bg-transparent hover:bg-surface-container text-primary text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors"
               >
-                Cancel
+                Hủy
               </button>
               <button
                 type="submit"
-                disabled={isLoading}
+                disabled={isLoading || dates.loading || !!dates.error}
                 className="inline-flex items-center justify-center gap-sm bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors"
               >
-                {isLoading ? 'Saving…' : 'Assign'}
+                {isLoading ? 'Đang lưu…' : 'Xếp máy'}
               </button>
             </div>
           </form>

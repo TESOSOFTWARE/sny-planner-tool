@@ -14,11 +14,35 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
+import { hasGsmPrecision } from '@/lib/validations/order'
 import { FACTORY_COLOR_PRESETS } from '@/lib/colors'
 import { itemCodeWarnings } from '@/lib/orders/itemCodeHint'
 import { computeItemCodePrefillPatch } from '@/lib/orders/itemCodePrefill'
 import type { ItemCodeOption } from '@/lib/orders/itemCodeCatalog'
 import { toast } from 'sonner'
+import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
+import SuggestCombobox, { orderSuggestionLoader, filterLocalOptions, type SuggestOption } from '@/components/ui/SuggestCombobox'
+import { buildColorOptions, defaultColorVersion, type ColorSuggestion } from '@/lib/orders/colorSuggestions'
+
+const loadMeshTypes = orderSuggestionLoader('meshType')
+const loadDescriptions = orderSuggestionLoader('description')
+const loadUsedColors = orderSuggestionLoader('color')
+
+type PiSearchResult = { piNumber: string; customer: string; orderDate: string | null; lineCount: number; colors: string[] }
+
+const loadPiSearch = async (q: string, signal: AbortSignal): Promise<SuggestOption<PiSearchResult>[]> => {
+  const res = await fetch(`/api/orders/pi-search?q=${encodeURIComponent(q)}`, { signal })
+  if (!res.ok) throw new Error('pi-search')
+  const rows: PiSearchResult[] = await res.json()
+  return rows.map(row => ({ value: row.piNumber, data: row }))
+}
+
+const loadCustomers = async (q: string, signal: AbortSignal): Promise<SuggestOption<{ id: string }>[]> => {
+  const res = await fetch(q ? `/api/customers/search?q=${encodeURIComponent(q)}` : '/api/customers', { signal })
+  if (!res.ok) throw new Error('customers')
+  const rows: { id: string, name: string }[] = await res.json()
+  return (q ? rows : rows.slice(0, 20)).map(c => ({ value: c.name, data: { id: c.id } }))
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -116,19 +140,19 @@ function Label({ children, required }: { children: React.ReactNode; required?: b
 
 function calcLine(line: LineItem) {
   const w = parseFloat(line.widthM)
-  const g = parseInt(line.gsm)
+  const g = Number(line.gsm)
   if (!w || !g || isNaN(w) || isNaN(g)) return null
 
-  const prodGsm     = line.productionGsm ? parseInt(line.productionGsm) : null
+  const prodGsm     = line.productionGsm ? Number(line.productionGsm) : null
   const qty         = line.qty         ? parseInt(line.qty)           : null
   const rollLength  = line.rollLength  ? parseFloat(line.rollLength)  : null
   const pieceLength = line.pieceLength ? parseFloat(line.pieceLength) : null
   const lengthM     = line.lengthM     ? parseFloat(line.lengthM)     : 0
   // G3: preview phản ánh tráng màng — ước tính theo GSM thành phẩm như OrderDetail
   const isLaminated = line.isLaminated
-  const rawFabricGsm = line.rawFabricGsm ? parseInt(line.rawFabricGsm) : null
-  const coatingGsm   = line.coatingGsm   ? parseInt(line.coatingGsm)   : null
-  const finishedGsm  = line.finishedGsm  ? parseInt(line.finishedGsm)  : null
+  const rawFabricGsm = line.rawFabricGsm ? Number(line.rawFabricGsm) : null
+  const coatingGsm   = line.coatingGsm   ? Number(line.coatingGsm)   : null
+  const finishedGsm  = line.finishedGsm  ? Number(line.finishedGsm)  : null
 
   const result = calculateOrderWeight({
     orderType: line.orderType,
@@ -232,13 +256,104 @@ export default function MultiLineOrderForm() {
   const isDraftMode = lifecycleStatus === 'DRAFT'
 
   // ── Lines (now include gsm, meshType, needleCount, beamCount per line) ──────
-  const [lines, setLines] = useState<LineItem[]>([newLine()])
+  // Dòng đầu cố định id 0: _lineIdCounter là biến module, trên server tăng dần qua mỗi request nên id
+  // SSR ≠ id client → lệch hydration (React giữ id/aria của server). Dòng thêm sau dùng counter (≥ 1).
+  const [lines, setLines] = useState<LineItem[]>(() => [{ ...newLine(), id: 0 }])
 
   // ── UI state ──────────────────────────────────────────────────────────────
   const [isSaving,    setIsSaving]    = useState(false)
   const [apiError,    setApiError]    = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [piWarning,   setPiWarning]   = useState<string | null>(null)
+  const [repeatPi, setRepeatPi] = useState('')
+  const [repeatSourcePi, setRepeatSourcePi] = useState<string | null>(null)
+  const [repeatLoads, setRepeatLoads] = useState(0)
+  // Chép xong thì đưa con trỏ vào ô PI. Phải chạy trong effect: hook focus của dialog
+  // trả focus về nút "Chép" ở bước cleanup, effect này chạy sau nên giữ được focus ở ô PI.
+  useEffect(() => {
+    if (repeatLoads) document.getElementById('ml-piNumber')?.focus()
+  }, [repeatLoads])
+  const [repeatLoading, setRepeatLoading] = useState(false)
+  const [pendingRepeat, setPendingRepeat] = useState<{ pi: string; orders: Record<string, unknown>[] } | null>(null)
+  const repeatRequest = useRef(0)
+  const repeatBusy = useRef(false)
+  const [confirmation, setConfirmation] = useState<'create' | 'repeat' | null>(null)
+  const confirmationRef = useRef<HTMLDivElement>(null)
+  const savingRef = useRef(false)
+  const closeConfirmation = useCallback(() => {
+    if (savingRef.current) return
+    setConfirmation(null)
+  }, [])
+  useScheduleModalFocus(confirmation !== null, closeConfirmation, confirmationRef)
+  const autoMesh = useRef<Record<number, boolean>>({})
+  const repeatFormRef = useRef({ piNumber, customer, orderDate, deliveryDate, containerSize, description, remark, lines })
+  repeatFormRef.current = { piNumber, customer, orderDate, deliveryDate, containerSize, description, remark, lines }
+  const loadRepeat = (source: { pi: string; orders: Record<string, unknown>[] }) => {
+    const header = source.orders[0]
+    const mapped = source.orders.map(order => {
+      const line = newLine()
+      const stringFields = ['color', 'colorVersion', 'widthM', 'gsm', 'productionGsm', 'lengthM', 'qty', 'rollLength', 'pieceLength', 'uvPct', 'frPct', 'mbCode', 'itemCode', 'meshType', 'needleCount', 'beamCount', 'lineNote', 'eyeletColor', 'eyeletLines', 'eyeletSpec', 'outerWrapping', 'piecesPerCarton', 'piecesPerBale', 'boxDimensions', 'secondaryPackingType', 'palletDimensions', 'itemsPerPallet', 'packingNote', 'rawFabricGsm', 'coatingGsm', 'finishedGsm', 'toleranceQtyPct', 'toleranceSpecPct'] as const
+      for (const field of stringFields) {
+        if (order[field] != null) line[field] = String(order[field])
+      }
+      const booleanFields = ['frFlag', 'requiresPacking', 'hasEyelet', 'hasPaperCore', 'onPallet', 'isLaminated'] as const
+      for (const field of booleanFields) line[field] = order[field] === true
+      if (order.orderType === 'meters' || order.orderType === 'rolls' || order.orderType === 'pieces') line.orderType = order.orderType
+      if (order.primaryPackingType === 'ROLL' || order.primaryPackingType === 'BALE' || order.primaryPackingType === 'CARTON' || order.primaryPackingType === 'HEMMED') line.primaryPackingType = order.primaryPackingType
+      if (order.subPackingType === 'CARTON' || order.subPackingType === 'BALE') line.subPackingType = order.subPackingType
+      return line
+    })
+    autoMesh.current = {}
+    setLines(mapped)
+    setCustomer(String(header.customer ?? ''))
+    const copiedCustomerId = typeof header.customerId === 'string' ? header.customerId : null
+    pickedCustomer.current = copiedCustomerId ? { name: String(header.customer ?? '').trim(), id: copiedCustomerId } : null
+    setCustomerId(copiedCustomerId)
+    setContainerSize(String(header.containerSize ?? ''))
+    // Mô tả cũ thường ghi "repeat of <PI trước>" — ghi lại theo PI nguồn thật thay vì chép.
+    setDescription(`Repeat of ${source.pi}`)
+    setRemark(String(header.remark ?? ''))
+    setPiNumber('')
+    setOrderDate(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()))
+    setDeliveryDate('')
+    setLifecycleStatus('APPROVED')
+    setRepeatSourcePi(source.pi)
+    setRepeatLoads(n => n + 1)
+    setFieldErrors({})
+    setApiError(null)
+    setPendingRepeat(null)
+    setConfirmation(null)
+  }
+  const requestRepeat = async (selectedPi?: string) => {
+    const pi = (selectedPi ?? repeatPi).trim()
+    if (!pi || repeatBusy.current || savingRef.current) return
+    repeatBusy.current = true
+    const request = ++repeatRequest.current
+    setRepeatLoading(true)
+    setApiError(null)
+    try {
+      const response = await fetch(`/api/orders/pi/${encodeURIComponent(pi)}`)
+      const data: { orders?: Record<string, unknown>[]; error?: string } = await response.json()
+      if (request !== repeatRequest.current) return
+      if (response.status === 404) { setApiError(`Không tìm thấy PI ${pi}. Kiểm tra lại số PI.`); return }
+      if (!response.ok || !Array.isArray(data.orders) || !data.orders.length) { setApiError(data.error || 'Không thể chép PI'); return }
+      const source = { pi, orders: data.orders }
+      const { piNumber, customer, orderDate, deliveryDate, containerSize, description, remark, lines } = repeatFormRef.current
+      const hasData = !!(piNumber || customer || orderDate || deliveryDate || containerSize || description || remark) || lines.length > 1 || lines.some(line => {
+        const defaults = newLine()
+        return (Object.keys(defaults) as (keyof LineItem)[]).some(field => field !== 'id' && line[field] !== defaults[field])
+      })
+      if (hasData) {
+        document.getElementById('ml-repeat-copy')?.focus()
+        setPendingRepeat(source)
+        setConfirmation('repeat')
+      } else loadRepeat(source)
+    } catch { if (request === repeatRequest.current) setApiError('Lỗi mạng — không thể chép PI') }
+    finally { repeatBusy.current = false; setRepeatLoading(false) }
+  }
+  // SuggestCombobox đã onChange (setRepeatPi + huỷ lần chép cũ) trước khi gọi onSelect.
+  const choosePi = (pi: string) => { void requestRepeat(pi) }
+  const codeSignature = lines.map(line => line.itemCode.trim().toUpperCase()).join('\n')
 
   // ── PI Number Duplicate Customer Check ────────────────────────────────────
   useEffect(() => {
@@ -274,51 +389,29 @@ export default function MultiLineOrderForm() {
     return () => clearTimeout(timer)
   }, [piNumber, customer])
 
-  // ── Customer Autocomplete ─────────────────────────────────────────────────
-  const [customerOptions, setCustomerOptions] = useState<{ id: string, name: string }[]>([])
-  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
-  const [isSearchingCustomer, setIsSearchingCustomer] = useState(false)
-  const customerRef = useRef<HTMLDivElement>(null)
-
+  // ── Customer → customerId (gõ đúng tên khách đã có thì gắn id; gợi ý do SuggestCombobox lo) ──
+  // Khách vừa chọn từ danh sách (hoặc chép từ PI gốc) đã có id chắc chắn: không tra lại theo tên,
+  // vì search chỉ trả 10 kết quả "chứa" và tên chỉ unique có phân biệt hoa/thường.
+  const pickedCustomer = useRef<{ name: string; id: string } | null>(null)
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (customerRef.current && !customerRef.current.contains(e.target as Node)) {
-        setShowCustomerDropdown(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
-
-  useEffect(() => {
+    const query = customer.trim()
+    if (!query) { setCustomerId(null); return }
+    if (pickedCustomer.current?.name === query) { setCustomerId(pickedCustomer.current.id); return }
+    pickedCustomer.current = null
+    const controller = new AbortController()
     const timer = setTimeout(async () => {
-      setIsSearchingCustomer(true)
       try {
-        const query = customer.trim()
-        const url = query ? `/api/customers/search?q=${encodeURIComponent(query)}` : '/api/customers'
-        const res = await fetch(url)
+        const res = await fetch(`/api/customers/search?q=${encodeURIComponent(query)}`, { signal: controller.signal })
         if (res.ok) {
-          const data = await res.json()
-          setCustomerOptions(query ? data : data.slice(0, 20))
-          
-          if (query) {
-            const exact = data.find((c: any) => c.name.toLowerCase() === query.toLowerCase())
-            if (exact) {
-              setCustomerId(exact.id)
-            } else {
-              setCustomerId(null)
-            }
-          } else {
-            setCustomerId(null)
-          }
+          const data: { id: string, name: string }[] = await res.json()
+          const exact = data.find(c => c.name === query) ?? data.find(c => c.name.toLowerCase() === query.toLowerCase())
+          setCustomerId(exact ? exact.id : null)
         }
-      } catch (err) {
-      } finally {
-        setIsSearchingCustomer(false)
+      } catch {
       }
-    }, customer.trim() ? 300 : 0)
+    }, 300)
 
-    return () => clearTimeout(timer)
+    return () => { clearTimeout(timer); controller.abort() }
   }, [customer])
 
   // ── ColorPreset state ─────────────────────────────────────────────────────
@@ -334,7 +427,12 @@ export default function MultiLineOrderForm() {
     note?: string | null
   }
   const [colorPresets, setColorPresets] = useState<ColorPresetItem[]>([])
-  const [activeColorDropdownLineId, setActiveColorDropdownLineId] = useState<number | null>(null)
+  // Ô Màu: màu mẫu KH + đã dùng + màu xưởng. Lỗi tải "đã dùng" thì vẫn hiện 2 nhóm còn lại (như trước).
+  const loadColors = useCallback(async (q: string, signal: AbortSignal) => {
+    const used = await loadUsedColors(q, signal).then(rows => rows.map(r => r.value)).catch(() => [] as string[])
+    if (signal.aborted) return []
+    return buildColorOptions({ q, customerName: customer, customerPresets: colorPresets, used, factory: FACTORY_COLOR_PRESETS })
+  }, [colorPresets, customer])
 
   useEffect(() => {
     if (!customer.trim()) {
@@ -360,26 +458,64 @@ export default function MultiLineOrderForm() {
 
   // ── Item Code Suggestions (DB history + MasterData catalog) ─────────────────
   const [itemCodeOptions, setItemCodeOptions] = useState<ItemCodeOption[]>([])
+  const loadItemCodes = useCallback(async (q: string) =>
+    filterLocalOptions(itemCodeOptions.map(opt => ({ value: opt.code, hint: opt.label, data: opt })), q),
+  [itemCodeOptions])
 
   useEffect(() => {
+    let active = true
+    const controller = new AbortController()
     const timer = setTimeout(async () => {
       try {
         const url = piNumber.trim()
           ? `/api/orders/item-codes?pi=${encodeURIComponent(piNumber.trim())}`
           : '/api/orders/item-codes'
-        const res = await fetch(url)
+        const res = await fetch(url, { signal: controller.signal })
         if (res.ok) {
           const data = await res.json()
-          setItemCodeOptions(data)
+          if (active) setItemCodeOptions(data)
         }
       } catch {
-        setItemCodeOptions([])
+        if (active) setItemCodeOptions([])
       }
     }, 300)
-    return () => clearTimeout(timer)
+    return () => { active = false; clearTimeout(timer); controller.abort() }
   }, [piNumber])
 
   // ── Line mutation helpers ─────────────────────────────────────────────────
+  const applyItemCode = (id: number, value: string) => {
+    const option = itemCodeOptions.find(opt => opt.code.toUpperCase() === value.trim().toUpperCase())
+    setLines(prev => prev.map(line => {
+      if (line.id !== id) return line
+      const patch = option ? computeItemCodePrefillPatch(line, option, !!autoMesh.current[line.id]).patch : {}
+      if (patch.meshType !== undefined) autoMesh.current[line.id] = true
+      return { ...line, ...patch, itemCode: value }
+    }))
+  }
+  useEffect(() => {
+    let active = true
+    const controller = new AbortController()
+    const missing = Array.from(new Set(codeSignature.split('\n').filter(code => code && !itemCodeOptions.some(opt => opt.code.toUpperCase() === code))))
+    const timer = setTimeout(async () => {
+      for (const code of missing) {
+        try {
+          const response = await fetch(`/api/orders/item-codes?code=${encodeURIComponent(code)}`, { signal: controller.signal })
+          if (!response.ok) continue
+          const options: ItemCodeOption[] = await response.json()
+          const option = options.find(opt => opt.code.toUpperCase() === code)
+          if (!active || !option) continue
+          setItemCodeOptions(prev => prev.some(opt => opt.code.toUpperCase() === code) ? prev : [...prev, option])
+          setLines(prev => prev.map(line => {
+            if (line.itemCode.trim().toUpperCase() !== code) return line
+            const patch = computeItemCodePrefillPatch(line, option, !!autoMesh.current[line.id]).patch
+            if (patch.meshType !== undefined) autoMesh.current[line.id] = true
+            return { ...line, ...patch }
+          }))
+        } catch { /* Keep user input on lookup failure. */ }
+      }
+    }, 300)
+    return () => { active = false; clearTimeout(timer); controller.abort() }
+  }, [codeSignature, itemCodeOptions])
 
   const addLine = () => setLines((prev) => [...prev, copyLine(prev[prev.length - 1])])
 
@@ -387,8 +523,10 @@ export default function MultiLineOrderForm() {
     setLines((prev) => prev.length > 1 ? prev.filter((l) => l.id !== id) : prev)
 
   const updateLine = useCallback(
-    (id: number, patch: Partial<LineItem>) =>
-      setLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l))),
+    (id: number, patch: Partial<LineItem>) => {
+      if (patch.meshType !== undefined) autoMesh.current[id] = false
+      setLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)))
+    },
     [],
   )
 
@@ -398,7 +536,16 @@ export default function MultiLineOrderForm() {
     const errs: Record<string, string> = {}
 
     if (!piNumber.trim()) errs.piNumber = 'PI Number là bắt buộc'
+    if (repeatSourcePi && piNumber.trim() === repeatSourcePi) errs.piNumber = 'Đơn lặp phải dùng PI mới, khác PI gốc'
     if (!customer.trim()) errs.customer = 'Khách hàng là bắt buộc'
+
+    lines.forEach((line, i) => {
+      for (const field of ['gsm', 'productionGsm', 'rawFabricGsm', 'coatingGsm', 'finishedGsm'] as const) {
+        if (line[field] && !hasGsmPrecision(Number(line[field]))) {
+          errs[`lines.${i}.${field}`] = 'GSM tối đa 2 chữ số thập phân (vd 13.45)'
+        }
+      }
+    })
 
     if (isDraftMode) {
       setFieldErrors(errs)
@@ -410,7 +557,7 @@ export default function MultiLineOrderForm() {
     lines.forEach((line, i) => {
       const p = `lines.${i}`
       const w   = parseFloat(line.widthM)
-      const gsm = parseInt(line.gsm)
+      const gsm = Number(line.gsm)
 
       if (!line.widthM || isNaN(w) || w <= 0) errs[`${p}.widthM`] = 'Khổ phải lớn hơn 0'
       if (!line.color.trim())                  errs[`${p}.color`]  = 'Màu là bắt buộc'
@@ -442,8 +589,8 @@ export default function MultiLineOrderForm() {
         errs[`${p}.secondaryPackingType`] = 'Chưa chọn loại Pallet (Gỗ/Nhựa/Sắt) khi đóng trên Pallet'
       }
       if (line.isLaminated) {
-        const raw = parseInt(line.rawFabricGsm)
-        const fin = parseInt(line.finishedGsm)
+        const raw = Number(line.rawFabricGsm)
+        const fin = Number(line.finishedGsm)
         if (!line.rawFabricGsm || isNaN(raw) || raw <= 0 || !line.finishedGsm || isNaN(fin) || fin <= 0) {
           errs[`${p}.rawFabricGsm`] = 'Hàng tráng màng (COATING) bắt buộc có GSM dệt mộc (RAW FABRIC GSM) và GSM thành phẩm (FINISHED GSM)'
         }
@@ -487,14 +634,24 @@ export default function MultiLineOrderForm() {
 
   // ── Submit ────────────────────────────────────────────────────────────────
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    if (savingRef.current || confirmation) return
     setApiError(null)
     if (!validate()) return
+    document.getElementById('btn-save-multi')?.focus()
+    setConfirmation('create')
+  }
+
+  const saveOrder = async () => {
+    if (savingRef.current || !validate()) return
+    savingRef.current = true
+    confirmationRef.current?.focus()
 
     const payload = {
       // Shared fields
       piNumber:    piNumber.trim(),
+      ...(repeatSourcePi ? { requireNewPi: true } : {}),
       customer:    customer.trim(),
       customerId,
       orderDate:   orderDate || undefined,
@@ -509,8 +666,8 @@ export default function MultiLineOrderForm() {
       lines: lines.map((line) => ({
         color:     line.color.trim() || undefined,
         widthM:    line.widthM ? parseFloat(line.widthM) : undefined,
-        gsm:       line.gsm ? parseInt(line.gsm) : undefined,
-        productionGsm: line.productionGsm ? parseInt(line.productionGsm) : undefined,
+        gsm:       line.gsm ? Number(line.gsm) : undefined,
+        productionGsm: line.productionGsm ? Number(line.productionGsm) : undefined,
         orderType: line.orderType,
         ...(line.orderType === 'meters' && line.lengthM && {
           lengthM: parseFloat(line.lengthM),
@@ -554,9 +711,9 @@ export default function MultiLineOrderForm() {
         itemsPerPallet: line.itemsPerPallet ? parseInt(line.itemsPerPallet) : undefined,
         packingNote: line.packingNote.trim() || undefined,
         isLaminated: line.isLaminated,
-        rawFabricGsm: line.rawFabricGsm ? parseInt(line.rawFabricGsm) : undefined,
-        coatingGsm: line.coatingGsm ? parseInt(line.coatingGsm) : undefined,
-        finishedGsm: line.finishedGsm ? parseInt(line.finishedGsm) : undefined,
+        rawFabricGsm: line.rawFabricGsm ? Number(line.rawFabricGsm) : undefined,
+        coatingGsm: line.coatingGsm ? Number(line.coatingGsm) : undefined,
+        finishedGsm: line.finishedGsm ? Number(line.finishedGsm) : undefined,
         toleranceQtyPct: line.toleranceQtyPct ? parseFloat(line.toleranceQtyPct) : undefined,
         toleranceSpecPct: line.toleranceSpecPct ? parseFloat(line.toleranceSpecPct) : undefined,
       })),
@@ -583,22 +740,77 @@ export default function MultiLineOrderForm() {
       setApiError(netErr)
       toast.error(netErr)
     } finally {
+      savingRef.current = false
       setIsSaving(false)
+      setConfirmation(null)
     }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <form onSubmit={handleSubmit} noValidate className="space-y-6">
-      {/* Native datalist for Item Code autocomplete */}
-      <datalist id="ml-itemcode-options">
-        {itemCodeOptions.map((opt) => (
-          <option key={opt.code} value={opt.code}>
-            {opt.label}
-          </option>
-        ))}
-      </datalist>
+    <form onSubmit={handleSubmit} onKeyDown={(e) => {
+      if (e.key === 'Enter' && e.target instanceof HTMLInputElement) e.preventDefault()
+    }} noValidate className="space-y-6">
+      {confirmation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+          onClick={(e) => { if (e.target === e.currentTarget) closeConfirmation() }}>
+          {/* tabIndex -1: giữ focus trong dialog khi nút bị disable lúc đang lưu; focus đầu tiên vào Huỷ để Enter không tạo đơn nhầm */}
+          <div ref={confirmationRef} role="dialog" aria-modal="true" aria-labelledby="ml-confirm-title" tabIndex={-1}
+            // Đang lưu thì 2 nút bị disable, hook focus không còn phần tử để bẫy Tab → giữ focus ở dialog.
+            onKeyDown={(e) => { if (e.key === 'Tab' && savingRef.current) e.preventDefault() }}
+            className="w-full max-w-md rounded-xl border border-outline-variant bg-surface-container-lowest p-5 shadow-lg focus:outline-none">
+            <h2 id="ml-confirm-title" className="font-semibold text-on-surface">{confirmation === 'repeat' ? 'Xác nhận chép PI' : 'Xác nhận tạo đơn'}</h2>
+            {confirmation === 'repeat'
+              ? <p className="mt-3 break-words text-sm">Chép PI <strong>{pendingRepeat?.pi}</strong> và thay thế dữ liệu đang nhập?</p>
+              : <p className="mt-3 break-words text-sm">Tạo PI <strong>{piNumber.trim()}</strong> gồm <strong>{lines.length}</strong> dòng cho <strong>{customer.trim()}</strong>?</p>}
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button type="button" disabled={isSaving} onClick={closeConfirmation} className="h-9 px-4 rounded-md border border-outline-variant text-sm text-on-surface hover:bg-surface-container-low disabled:opacity-50">Huỷ</button>
+              <button id="ml-confirm-action" type="button" disabled={isSaving} onClick={() => {
+                if (confirmation === 'repeat' && pendingRepeat) loadRepeat(pendingRepeat)
+                else void saveOrder()
+              }} className="h-9 px-4 rounded-md bg-primary text-sm text-on-primary disabled:opacity-50">{isSaving ? 'Đang tạo…' : confirmation === 'repeat' ? 'Xác nhận chép' : 'Xác nhận tạo'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      <section className="bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-xl p-4">
+        <label htmlFor="ml-repeat-source" className="block text-xs font-semibold text-secondary mb-1">Repeat of — chép từ PI cũ</label>
+        <div className="flex flex-wrap gap-2">
+          <div className="relative min-w-0 flex-1">
+            <SuggestCombobox<PiSearchResult>
+              id="ml-repeat-source"
+              value={repeatPi}
+              disabled={repeatLoading || isSaving}
+              placeholder="Gõ số PI hoặc tên khách, VD: GBN26-150"
+              // Huỷ lần chép đang chờ khi đổi chữ, để kết quả về muộn không ghi đè form.
+              onChange={(value) => { setRepeatPi(value); repeatRequest.current++ }}
+              onSelect={(opt) => choosePi(opt.value)}
+              onEnterWithoutSelection={() => { void requestRepeat() }}
+              load={loadPiSearch}
+              className={inputCls()}
+              listLabel="PI cũ"
+              emptyText={(q) => q ? `Không có PI nào khớp "${q}"` : 'Chưa có PI nào'}
+              errorText="Không tải được danh sách PI. Thử lại."
+              renderOption={(opt) => opt.data && (
+                <>
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                    <span className="font-mono font-semibold text-primary">{opt.data.piNumber}</span>
+                    <span className="min-w-0 flex-1 truncate text-on-surface">{opt.data.customer}</span>
+                    <span className="text-xs text-secondary tabular-nums">
+                      {opt.data.orderDate ? new Date(opt.data.orderDate).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'} · {opt.data.lineCount} dòng
+                    </span>
+                  </div>
+                  {opt.data.colors.length > 0 && <p className="text-xs text-secondary truncate">{opt.data.colors.join(', ')}</p>}
+                </>
+              )}
+            />
+          </div>
+          <button id="ml-repeat-copy" type="button" disabled={!repeatPi.trim() || repeatLoading || isSaving}
+            onClick={() => { void requestRepeat() }} className="h-10 px-4 rounded-md border border-outline-variant text-sm text-on-surface hover:bg-surface-container-low disabled:opacity-50">{repeatLoading ? 'Đang chép…' : 'Chép'}</button>
+        </div>
+        {repeatSourcePi && <p className="mt-2 text-xs break-words">Đã chép từ PI {repeatSourcePi}. Nhập số PI mới trước khi lưu.</p>}
+      </section>
 
       {/* Error banner */}
       {apiError && (
@@ -647,16 +859,19 @@ export default function MultiLineOrderForm() {
             <input
               id="ml-piNumber"
               type="text"
-              placeholder="e.g. GBN26-110"
+              placeholder={repeatSourcePi ? 'Nhập số PI mới' : 'e.g. GBN26-110'}
               value={piNumber}
               onChange={(e) => setPiNumber(e.target.value)}
-              className={monoInputCls(!!fieldErrors.piNumber)}
+              aria-describedby={repeatSourcePi && !piNumber.trim() ? 'ml-piNumber-repeat-hint' : undefined}
+              className={`${monoInputCls(!!fieldErrors.piNumber)}${repeatSourcePi && !piNumber.trim() && !fieldErrors.piNumber ? ' ring-2 ring-amber-500/60' : ''}`}
             />
-            {fieldErrors.piNumber && <p className="text-xs text-error mt-1">{fieldErrors.piNumber}</p>}
+            {fieldErrors.piNumber
+              ? <p className="text-xs text-error mt-1">{fieldErrors.piNumber}</p>
+              : repeatSourcePi && !piNumber.trim() && <p id="ml-piNumber-repeat-hint" className="text-xs text-amber-700 mt-1">Nhập số PI mới cho đơn lặp (khác {repeatSourcePi})</p>}
           </div>
 
           {/* Customer */}
-          <div className="relative" ref={customerRef}>
+          <div>
             <div className="flex items-center justify-between mb-1">
               <Label required>Khách hàng</Label>
               {customer.trim() && customerId === null && (
@@ -665,37 +880,17 @@ export default function MultiLineOrderForm() {
                 </span>
               )}
             </div>
-            <input
+            <SuggestCombobox<{ id: string }>
               id="ml-customer"
-              type="text"
               placeholder="e.g. GRABINO"
               value={customer}
-              onChange={(e) => {
-                setCustomer(e.target.value)
-                setShowCustomerDropdown(true)
-              }}
-              onFocus={() => setShowCustomerDropdown(true)}
+              onChange={setCustomer}
+              onSelect={(opt) => { if (opt.data) { pickedCustomer.current = { name: opt.value.trim(), id: opt.data.id }; setCustomerId(opt.data.id) } }}
+              load={loadCustomers}
               className={inputCls(!!fieldErrors.customer)}
-              autoComplete="off"
+              listLabel="Khách hàng"
+              emptyText={(q) => `Chưa có khách "${q}" — sẽ tạo khách mới khi lưu`}
             />
-            {showCustomerDropdown && customerOptions.length > 0 && (
-              <div className="absolute z-10 w-full mt-1 bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-md shadow-lg max-h-60 overflow-auto">
-                {customerOptions.map(opt => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    className="w-full text-left px-3 py-2 text-sm text-on-surface hover:bg-surface-container-low transition-colors"
-                    onClick={() => {
-                      setCustomer(opt.name)
-                      setCustomerId(opt.id)
-                      setShowCustomerDropdown(false)
-                    }}
-                  >
-                    {opt.name}
-                  </button>
-                ))}
-              </div>
-            )}
             {fieldErrors.customer && <p className="text-xs text-error mt-1">{fieldErrors.customer}</p>}
           </div>
 
@@ -740,12 +935,16 @@ export default function MultiLineOrderForm() {
           {/* Description */}
           <div className="sm:col-span-2 lg:col-span-2">
             <Label>Mô tả (Description)</Label>
-            <textarea
+            <SuggestCombobox
               id="ml-description"
+              multiline
               rows={2}
+              maxLength={200}
               placeholder="Ghi chú mô tả đơn hàng..."
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={setDescription}
+              load={loadDescriptions}
+              listLabel="Mô tả đã dùng"
               className={textareaCls}
             />
           </div>
@@ -843,27 +1042,17 @@ export default function MultiLineOrderForm() {
                   {(() => {
                     const allCodes = lines.map((l) => l.itemCode || '')
                     const matched = itemCodeOptions.find((opt) => opt.code.toUpperCase() === (line.itemCode || '').trim().toUpperCase())
-                    const conflict = matched ? computeItemCodePrefillPatch(line, matched).conflictWarning : undefined
+                    const conflict = matched ? computeItemCodePrefillPatch(line, matched, !!autoMesh.current[line.id]).conflictWarning : undefined
                     const warns = itemCodeWarnings(allCodes, idx, conflict)
                     const hasWarn = warns.length > 0
                     return (
                       <>
-                        <input
+                        <SuggestCombobox<ItemCodeOption>
                           id={`ml-line-${line.id}-itemCode`}
-                          type="text"
-                          list="ml-itemcode-options"
                           placeholder="e.g. GBN1GRE260205054"
                           value={line.itemCode}
-                          onChange={(e) => {
-                            const val = e.target.value
-                            const matchedOpt = itemCodeOptions.find((opt) => opt.code.toUpperCase() === val.trim().toUpperCase())
-                            if (matchedOpt) {
-                              const { patch } = computeItemCodePrefillPatch(line, matchedOpt)
-                              updateLine(line.id, { itemCode: val, ...patch })
-                            } else {
-                              updateLine(line.id, { itemCode: val })
-                            }
-                          }}
+                          onChange={(value) => applyItemCode(line.id, value)}
+                          load={loadItemCodes}
                           className={monoInputCls(false, hasWarn)}
                         />
                         {hasWarn && (
@@ -886,28 +1075,35 @@ export default function MultiLineOrderForm() {
                   <div className="flex items-center justify-between">
                     <Label required>Màu & Phiên bản</Label>
                   </div>
-                  <input
+                  <SuggestCombobox<ColorSuggestion>
                     id={`ml-line-${line.id}-color`}
-                    type="text"
                     placeholder="e.g. BLACK hoặc DESERT SAND"
                     value={line.color}
-                    onChange={(e) => {
-                      const val = e.target.value
-                      const patch: Partial<LineItem> = { color: val }
-                      if (val.toUpperCase().includes('DESERT')) {
-                        if (line.colorVersion !== 'Version A' && line.colorVersion !== 'Version B') {
-                          patch.colorVersion = 'Version A'
+                    onChange={(val) => updateLine(line.id, { color: val, colorVersion: defaultColorVersion(val, line.colorVersion) })}
+                    load={loadColors}
+                    onSelect={({ value, data }) => {
+                      // Giữ đúng patch của dropdown cũ cho từng nhóm (MB/kim chỉ điền khi ô đang trống).
+                      if (data?.kind === 'customer') {
+                        const { preset } = data
+                        const patch: Partial<LineItem> = { colorVersion: preset.color.toUpperCase().includes('DESERT') ? 'Version A' : 'STD' }
+                        if (!line.mbCode.trim() && preset.mbCode) patch.mbCode = preset.mbCode
+                        if (!line.needleCount && preset.wale) patch.needleCount = String(preset.wale)
+                        if (preset.eyeletLines) {
+                          patch.hasEyelet = true
+                          patch.eyeletLines = String(preset.eyeletLines)
                         }
-                      } else {
-                        patch.colorVersion = 'STD'
+                        updateLine(line.id, patch)
+                      } else if (data?.kind === 'factory') {
+                        const patch: Partial<LineItem> = { colorVersion: data.preset.version }
+                        if (data.preset.mbCode && !line.mbCode.trim()) patch.mbCode = data.preset.mbCode
+                        updateLine(line.id, patch)
+                      } else if (data?.kind === 'used') {
+                        updateLine(line.id, { colorVersion: value.toUpperCase().includes('DESERT') ? 'Version A' : 'STD' })
                       }
-                      updateLine(line.id, patch)
-                      setActiveColorDropdownLineId(line.id)
                     }}
-                    onFocus={() => setActiveColorDropdownLineId(line.id)}
-                    onBlur={() => setTimeout(() => setActiveColorDropdownLineId(null), 250)}
+                    listLabel="Gợi ý màu"
+                    emptyText={(q) => `Màu tùy biến "${q}" — sẽ lưu phiên bản STD`}
                     className={inputCls(!!fieldErrors[`${p}.color`])}
-                    autoComplete="off"
                   />
 
                   {/* Smart Version Switcher: Khi là Desert Sand -> hiển thị 2 nút bấm trực quan kèm thông số hạt màu quy định */}
@@ -958,104 +1154,6 @@ export default function MultiLineOrderForm() {
                     </div>
                   )}
 
-                  {/* Autocomplete dropdown: Gợi ý màu mẫu KH + Màu công thức chuẩn xưởng */}
-                  {activeColorDropdownLineId === line.id && (
-                    <div className="absolute z-20 w-full mt-1 bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-md shadow-lg max-h-60 overflow-auto divide-y divide-outline-variant/30">
-                      {colorPresets.length > 0 && (
-                        <div>
-                          <div className="px-2 py-1 text-[10px] font-semibold text-secondary bg-surface-container-low uppercase tracking-wider">
-                            Màu mẫu ({customer.trim()})
-                          </div>
-                          {colorPresets
-                            .filter((cp) => !line.color.trim() || cp.color.toLowerCase().includes(line.color.trim().toLowerCase()))
-                            .map((preset) => (
-                              <button
-                                key={preset.id}
-                                type="button"
-                                className="w-full text-left px-3 py-1.5 text-xs text-on-surface hover:bg-surface-container-low transition-colors flex items-center justify-between"
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => {
-                                  const isDesert = preset.color.toUpperCase().includes('DESERT')
-                                  const patch: Partial<LineItem> = {
-                                    color: preset.color,
-                                    colorVersion: isDesert ? 'Version A' : 'STD',
-                                  }
-                                  if (!line.mbCode.trim() && preset.mbCode) patch.mbCode = preset.mbCode
-                                  if (!line.needleCount && preset.wale) patch.needleCount = String(preset.wale)
-                                  if (preset.eyeletLines) {
-                                    patch.hasEyelet = true
-                                    patch.eyeletLines = String(preset.eyeletLines)
-                                  }
-                                  updateLine(line.id, patch)
-                                  setActiveColorDropdownLineId(null)
-                                }}
-                              >
-                                <span className="font-semibold text-primary">{preset.color}</span>
-                                <span className="text-[10px] text-secondary font-mono">
-                                  {preset.mbCode ? `MB: ${preset.mbCode}` : ''} {preset.wale ? `· Kim: ${preset.wale}` : ''} {preset.eyeletLines ? `· Eyelet: ${preset.eyeletLines}L` : ''}
-                                </span>
-                              </button>
-                            ))}
-                        </div>
-                      )}
-
-                      {/* Gợi ý màu công thức xưởng tiêu chuẩn */}
-                      <div>
-                        {(() => {
-                          const search = (line.color || '').trim().toUpperCase()
-                          const filteredPresets = FACTORY_COLOR_PRESETS.filter((p) => {
-                            if (!search) return true
-                            return (
-                              p.color.includes(search) ||
-                              p.name.toUpperCase().includes(search) ||
-                              (p.mbCode && p.mbCode.toUpperCase().includes(search)) ||
-                              (p.tags && p.tags.some((t) => t.includes(search)))
-                            )
-                          })
-
-                          return (
-                            <>
-                              <div className="px-2 py-1 text-[10px] font-semibold text-secondary bg-surface-container-low uppercase tracking-wider flex items-center justify-between">
-                                <span>Màu công thức xưởng</span>
-                                <span className="text-[9px] font-mono text-secondary/70">({filteredPresets.length})</span>
-                              </div>
-                              <div className="p-1 grid grid-cols-2 gap-1 max-h-56 overflow-y-auto">
-                                {filteredPresets.length > 0 ? (
-                                  filteredPresets.map((preset) => (
-                                    <button
-                                      key={preset.name}
-                                      type="button"
-                                      onMouseDown={(e) => e.preventDefault()}
-                                      onClick={() => {
-                                        const patch: Partial<LineItem> = {
-                                          color: preset.color,
-                                          colorVersion: preset.version,
-                                        }
-                                        if (preset.mbCode && !line.mbCode.trim()) {
-                                          patch.mbCode = preset.mbCode
-                                        }
-                                        updateLine(line.id, patch)
-                                        setActiveColorDropdownLineId(null)
-                                      }}
-                                      className="px-2 py-1.5 text-left rounded bg-surface hover:bg-primary/10 transition-colors border border-outline-variant/60 flex flex-col"
-                                    >
-                                      <span className="font-semibold text-xs text-primary">{preset.name}</span>
-                                      <span className="text-[9px] text-secondary font-mono">{preset.subText}</span>
-                                    </button>
-                                  ))
-                                ) : (
-                                  <div className="col-span-2 py-3 px-2 text-center text-xs text-secondary">
-                                    <div>Màu tùy biến: <span className="font-semibold text-on-surface">&quot;{search}&quot;</span></div>
-                                    <div className="text-[10px] text-secondary/70 mt-0.5">Sẽ lưu phiên bản STD</div>
-                                  </div>
-                                )}
-                              </div>
-                            </>
-                          )
-                        })()}
-                      </div>
-                    </div>
-                  )}
 
                   {fieldErrors[`${p}.color`] && (
                     <p className="text-xs text-error mt-1">{fieldErrors[`${p}.color`]}</p>
@@ -1111,7 +1209,7 @@ export default function MultiLineOrderForm() {
                   <Label required>GSM (đơn hàng)</Label>
                   <input
                     id={`ml-line-${line.id}-gsm`}
-                    type="number" min={1} max={500} step={1}
+                    type="number" min={1} max={500} step="0.01"
                     placeholder="e.g. 95"
                     value={line.gsm}
                     onChange={(e) => updateLine(line.id, { gsm: e.target.value })}
@@ -1127,7 +1225,7 @@ export default function MultiLineOrderForm() {
                   <Label>PRODUCTION GSM</Label>
                   <input
                     id={`ml-line-${line.id}-productionGsm`}
-                    type="number" min={1} max={500} step={1}
+                    type="number" min={1} max={500} step="0.01"
                     placeholder="Để trống nếu = GSM đơn"
                     value={line.productionGsm}
                     onChange={(e) => updateLine(line.id, { productionGsm: e.target.value })}
@@ -1241,12 +1339,12 @@ export default function MultiLineOrderForm() {
                 {/* ROW 3 - Cột 1: Loại lưới */}
                 <div>
                   <Label>Loại lưới</Label>
-                  <input
+                  <SuggestCombobox
                     id={`ml-line-${line.id}-meshType`}
-                    type="text"
-                    placeholder="e.g. Hex, Diamond..."
+                    placeholder="VD: Shade net Mono"
                     value={line.meshType}
-                    onChange={(e) => updateLine(line.id, { meshType: e.target.value })}
+                    onChange={(value) => updateLine(line.id, { meshType: value })}
+                    load={loadMeshTypes}
                     className={inputCls()}
                   />
                 </div>
@@ -1323,7 +1421,7 @@ export default function MultiLineOrderForm() {
                           <Label required>GSM mộc (RAW FABRIC GSM)</Label>
                           <input
                             id={`ml-line-${line.id}-rawFabricGsm`}
-                            type="number" min={1} step={1} placeholder="e.g. 325"
+                            type="number" min={1} step="0.01" placeholder="e.g. 325"
                             value={line.rawFabricGsm}
                             onChange={(e) => updateLine(line.id, { rawFabricGsm: e.target.value })}
                             className={monoInputCls(!!fieldErrors[`${p}.rawFabricGsm`])}
@@ -1336,7 +1434,7 @@ export default function MultiLineOrderForm() {
                           <Label>GSM màng tráng (COATING GSM)</Label>
                           <input
                             id={`ml-line-${line.id}-coatingGsm`}
-                            type="number" min={1} step={1} placeholder="e.g. 105"
+                            type="number" min={1} step="0.01" placeholder="e.g. 105"
                             value={line.coatingGsm}
                             onChange={(e) => updateLine(line.id, { coatingGsm: e.target.value })}
                             className={monoInputCls()}
@@ -1346,7 +1444,7 @@ export default function MultiLineOrderForm() {
                           <Label required>GSM thành phẩm (FINISHED GSM)</Label>
                           <input
                             id={`ml-line-${line.id}-finishedGsm`}
-                            type="number" min={1} step={1} placeholder="e.g. 430"
+                            type="number" min={1} step="0.01" placeholder="e.g. 430"
                             value={line.finishedGsm}
                             onChange={(e) => updateLine(line.id, line.isLaminated
                               // Đ5: đơn laminate — GSM đơn hàng chính là GSM thành phẩm,

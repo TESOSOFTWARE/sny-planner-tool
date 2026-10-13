@@ -63,7 +63,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   const quantityKg = Number(b.quantityKg)
   const txDate     = String(b.txDate ?? '').trim()
   const mbPct      = b.mbPct != null && b.mbPct !== '' ? Number(b.mbPct) : null
-  const orderId    = b.orderId ? String(b.orderId).trim() : null
+  const orderId    = b.orderId ? String(b.orderId).trim() || null : null
   const note       = b.note ? String(b.note).trim() : null
 
   const validTypes = ['in', 'out_using', 'out_broken', 'out_tape', 'out_reject']
@@ -93,8 +93,10 @@ export async function POST(req: NextRequest, { params }: Params) {
       const material = await tx.material.findUnique({ where: { id } })
       if (!material) return { notFound: true as const }
       if (material.stockReportDate && txDate <= material.stockReportDate.toISOString().slice(0, 10)) return { covered: true as const }
+      const order = orderId ? await tx.productionOrder.findFirst({ where: { piNumber: { equals: orderId, mode: 'insensitive' } }, select: { piNumber: true } }) : null
+      if (orderId && !order) return { invalidPi: true as const }
       const transaction = await tx.materialTransaction.create({
-        data: { materialId: id, txType, quantityKg, txDate: txDateValue, mbPct, orderId, note },
+        data: { materialId: id, txType, quantityKg, txDate: txDateValue, mbPct, orderId: order?.piNumber ?? null, note },
       })
       const updatedMaterial = await tx.material.update({
         where: { id },
@@ -107,6 +109,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     }, { timeout: 30_000, maxWait: 5_000 })
 
     if ('notFound' in result && result.notFound) return NextResponse.json({ success: false, error: 'Nguyên liệu không tồn tại.' }, { status: 404 })
+    if ('invalidPi' in result && result.invalidPi) return NextResponse.json({ success: false, error: `Không tìm thấy PI ${orderId}.` }, { status: 422 })
     if ('covered' in result && result.covered) return NextResponse.json({ success: false, code: 'SNAPSHOT_COVERED', error: 'Ngày giao dịch nằm trong snapshot tồn kho; hãy dùng báo cáo ngày mới.' }, { status: 409 })
     const { transaction, updatedMaterial } = result
 

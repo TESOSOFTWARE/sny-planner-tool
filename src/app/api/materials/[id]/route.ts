@@ -5,12 +5,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { z } from 'zod'
+import { materialTaxonomyShape, taxonomyMatchesGroup } from '@/lib/materials/taxonomy'
 
 type RouteContext = { params: { id: string } }
 
 // ── Zod schema for PATCH body ──────────────────────────────────────────────────
 
 const updateMaterialSchema = z.object({
+  ...materialTaxonomyShape,
   currentStock: z
     .number({ message: 'Tồn kho phải là số' })
     .finite()
@@ -72,6 +74,8 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
   if (data.group !== undefined) updateData.group = data.group
   if (data.color !== undefined) updateData.color = data.color
   if (data.brand !== undefined) updateData.brand = data.brand
+  if (data.subGroup !== undefined) updateData.subGroup = data.subGroup
+  if (data.lightFastness !== undefined) updateData.lightFastness = data.lightFastness
 
   try {
     const material = await prisma.$transaction(async (tx) => {
@@ -81,6 +85,12 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       await tx.$executeRawUnsafe('LOCK TABLE "material_report_snapshots" IN SHARE ROW EXCLUSIVE MODE')
       const current = await tx.material.findUnique({ where: { id }, include: { reportSnapshots: { take: 1 } } })
       if (!current) throw Object.assign(new Error('NOT_FOUND'), { code: 'P2025' })
+      const nextGroup = data.group ?? current.group
+      if (!taxonomyMatchesGroup(nextGroup, data)) throw Object.assign(new Error('INVALID_TAXONOMY'), { code: 'INVALID_TAXONOMY' })
+      if (data.group !== undefined && data.group !== current.group) {
+        if (nextGroup !== 'HDPE') updateData.subGroup = null
+        if (nextGroup !== 'MB') updateData.lightFastness = null
+      }
       if (data.group !== undefined && data.group !== current.group && current.reportSnapshots.length > 0) {
         throw Object.assign(new Error('SNAPSHOT_COVERED'), { code: 'SNAPSHOT_COVERED' })
       }
@@ -98,6 +108,8 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
 
     return NextResponse.json({ success: true, material: serialized })
   } catch (err: unknown) {
+    if (err && typeof err === 'object' && 'code' in err && err.code === 'INVALID_TAXONOMY') return NextResponse.json({ success: false, error: 'Phân loại nhựa chỉ dùng cho HDPE; độ bền màu chỉ dùng cho MB.' }, { status: 422 })
+
     if (
       err !== null &&
       typeof err === 'object' &&

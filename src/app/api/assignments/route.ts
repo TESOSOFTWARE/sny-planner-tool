@@ -1,6 +1,11 @@
+import { withAssignmentLock, overlapWhere, isLockRetryable, ASSIGNMENT_RETRY_MESSAGE } from '@/lib/schedule/assignmentLock'
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { createAssignmentSchema } from "@/lib/validations/assignment";
+import { resolveAssignmentDates, factoryDateToISO, AssignmentDateError } from "@/lib/schedule/assignmentDates";
+import { loadFactoryCalendar } from "@/lib/schedule/factoryCalendar";
+import { scheduleDay } from "@/lib/schedule/importSafety";
+import type { Prisma } from '@prisma/client';
 
 export async function GET(request: Request) {
   try {
@@ -9,12 +14,14 @@ export async function GET(request: Request) {
     const month = searchParams.get("month"); // 0-indexed month
     // Lọc theo đơn hàng cụ thể (dùng ở OrderDetail để hiển thị máy đang chạy)
     const orderId = searchParams.get("orderId");
+    const piNumber = searchParams.get('piNumber');
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let whereClause: any = {};
+    let whereClause: Prisma.MachineAssignmentWhereInput = {};
 
     if (orderId) {
       whereClause = { orderId };
+    } else if (piNumber) {
+      whereClause = { order: { piNumber } };
     } else if (year && month) {
       const y = parseInt(year, 10);
       const m = parseInt(month, 10);
@@ -45,16 +52,23 @@ export async function GET(request: Request) {
           select: {
             id: true,
             piNumber: true,
+            subLineIndex: true,
+            isPlaceholder: true,
+            itemCode: true,
             customer: true,
             status: true,
             isDraft: true,
             widthM: true,
             lengthM: true,
+            orderType: true,
+            rollLength: true,
+            pieceLength: true,
             gsm: true,
             color: true,
             mbCode: true,
             qty: true,
             meshType: true,
+            description: true,
             needleCount: true,
             hasEyelet: true,
             eyeletColor: true,
@@ -84,11 +98,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const { machineId, orderId, startDate, endDate, allocatedMeters, estimatedDailyOutput } = result.data;
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    const { machineId, orderId, startDate, endDate, allocatedMeters, estimatedDailyOutput, endDateSource } = result.data;
+    let start = new Date(startDate);
+    let end = new Date(endDate);
 
-    if (start > end) {
+    if (start > end && endDateSource !== "COMPUTED") {
       return NextResponse.json(
         { message: "Start date must be before or equal to end date" },
         { status: 400 }
@@ -105,50 +119,60 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "Order not found" }, { status: 404 });
     }
 
-    // Overlap check (applies equally to draft placeholders and official assignments)
-    console.log("OVERLAP CHECK TRIGGERED");
-    const existing = await prisma.machineAssignment.findFirst({
-      where: {
-        machineId,
-        startDate: { lte: end },
-        endDate: { gte: start },
-      },
-    });
+    const datePlan = await resolveAssignmentDates({
+      startDate: scheduleDay(start), endDate: scheduleDay(end),
+      allocatedMeters, estimatedDailyOutput,
+      computeEnd: endDateSource === 'COMPUTED', adjustStart: true,
+      // Xếp mới: ngày kết thúc do người dùng chọn nên không cho rơi vào ngày nghỉ.
+      rejectNonWorkingEnd: endDateSource !== 'COMPUTED',
+    }, (from, to) => loadFactoryCalendar(prisma, from, to));
+    if (datePlan.startDate !== scheduleDay(start)) start = new Date(factoryDateToISO(datePlan.startDate));
+    if (endDateSource === 'COMPUTED') end = new Date(factoryDateToISO(datePlan.endDate));
 
-    if (existing) {
-      return NextResponse.json(
-        { message: "Máy đã được xếp lịch trong khoảng thời gian này" },
-        { status: 409 }
+    return await withAssignmentLock(async tx => {
+      // Overlap check (applies equally to draft placeholders and official assignments)
+      const existing = await tx.machineAssignment.findFirst({
+        where: overlapWhere(machineId, scheduleDay(start), scheduleDay(end)),
+      });
+
+      if (existing) {
+        return NextResponse.json(
+          { message: "Máy đã được xếp lịch trong khoảng thời gian này" },
+          { status: 409 }
+        );
+      }
+
+      // Đơn nháp hoặc đơn giữ chỗ lên máy dệt với cờ isPlaceholder = true như nhánh cũ
+      const isPlaceholder = Boolean(
+        targetOrder.isDraft ||
+        targetOrder.lifecycleStatus === 'DRAFT' ||
+        targetOrder.lifecycleStatus === 'RESERVED' ||
+        targetOrder.lifecycleStatus === 'RESERVE' ||
+        targetOrder.lifecycleStatus === 'PLACEHOLDER' ||
+        targetOrder.isPlaceholder
       );
-    }
 
-    // Đơn nháp hoặc đơn giữ chỗ lên máy dệt với cờ isPlaceholder = true như nhánh cũ
-    const isPlaceholder = Boolean(
-      targetOrder.isDraft ||
-      targetOrder.lifecycleStatus === 'DRAFT' ||
-      targetOrder.lifecycleStatus === 'RESERVED' ||
-      targetOrder.lifecycleStatus === 'RESERVE' ||
-      targetOrder.lifecycleStatus === 'PLACEHOLDER' ||
-      targetOrder.isPlaceholder
-    );
+      const assignment = await tx.machineAssignment.create({
+        data: {
+          machineId,
+          orderId,
+          startDate: start,
+          endDate: end,
+          isPlaceholder,
+          endDateSource: endDateSource ?? "MANUAL",
+          ...(allocatedMeters != null && { allocatedMeters }),
+          ...(estimatedDailyOutput != null && { estimatedDailyOutput }),
+        },
+        include: {
+          order: true,
+        },
+      });
 
-    const assignment = await prisma.machineAssignment.create({
-      data: {
-        machineId,
-        orderId,
-        startDate: start,
-        endDate: end,
-        isPlaceholder,
-        ...(allocatedMeters != null && { allocatedMeters }),
-        ...(estimatedDailyOutput != null && { estimatedDailyOutput }),
-      },
-      include: {
-        order: true,
-      },
+      return NextResponse.json({ ...assignment, warnings: datePlan.warnings }, { status: 201 });
     });
-
-    return NextResponse.json(assignment, { status: 201 });
   } catch (error: unknown) {
+    if (error instanceof AssignmentDateError) return NextResponse.json({ message: error.message }, { status: 400 });
+    if (isLockRetryable(error)) return NextResponse.json({ message: ASSIGNMENT_RETRY_MESSAGE, retryable: true }, { status: 409 });
     console.error("[POST_ASSIGNMENTS]", error);
     return NextResponse.json({ message: "Internal server error" }, { status: 500 });
   }

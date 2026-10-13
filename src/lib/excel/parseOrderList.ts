@@ -1,10 +1,12 @@
+import { explicitOrderListPacking, unitOrderListPacking, missingInferredPacking, orderListPackingWarnings } from './orderListPacking'
+import { parseOrderListFr } from './orderListFr'
 // src/lib/excel/parseOrderList.ts
 // Server-only utility — parses ORDER_LIST .xlsx file using SheetJS.
 // Validates each row strictly against mandatory order rules matching MultiLineOrderForm.
 
 import * as XLSX from 'xlsx'
 import type { OrderImportDecision, OrderImportResolution, ParsedOrder, ProductionOrder } from '@/types'
-import { importedOrderRowSchema, draftOrderStateSchema, isValidISODate } from '@/lib/validations/order'
+import { orderListImportRowSchema, draftOrderStateSchema, isValidISODate } from '@/lib/validations/order'
 
 // ── Value coercion helpers ────────────────────────────────────────────────────
 
@@ -189,7 +191,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       h.toUpperCase() === 'SL' ||
       h.toUpperCase().includes('SỐ LƯỢNG'),
   )
-  const packingTypeColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('ĐÓNG GÓI') || h.toUpperCase().includes('PACKING TYPE') || (h.toUpperCase().includes('KIỂU') && (h.toUpperCase().includes('ĐƠN') || h.toUpperCase().includes('GÓI'))))
+  const packingTypeColIdx = findColIdx(headers, (h) => h.trim().toUpperCase() === 'PACKING' || h.toUpperCase().includes('ĐÓNG GÓI') || h.toUpperCase().includes('PACKING TYPE') || (h.toUpperCase().includes('KIỂU') && (h.toUpperCase().includes('ĐƠN') || h.toUpperCase().includes('GÓI'))))
   // UNIT fallback (01/10): file SNY thật dùng cột UNIT thay cho PACKING TYPE/ORDER TYPE.
   const unitColIdx = findColIdx(headers, (h) => h.trim().toUpperCase() === 'UNIT' || h.toUpperCase().includes('ĐƠN VỊ'))
   const orderTypeColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('ORDER TYPE') || (h.toUpperCase().includes('TYPE') && !h.toUpperCase().includes('MESH') && !h.toUpperCase().includes('PACKING') && !h.toUpperCase().includes('PALLET')))
@@ -296,9 +298,8 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
 
     const qty = safeInt(get(qtyColIdx))
     const uvPct = normalizeUvPct(get(uvColIdx))
-    const frPct = safeNum(get(frPctColIdx))
-    // Percentage-only templates infer FR; legacy files keep their explicit flag.
-    const frFlag = frColIdx >= 0 ? safeBool(get(frColIdx)) : frPct != null && frPct > 0
+    const fr = parseOrderListFr(get(frColIdx), get(frPctColIdx), frPctColIdx >= 0, frColIdx >= 0)
+    const { frFlag, frPct } = fr
     const description = safeStr(get(descColIdx))
     const remark = safeStr(get(remarkColIdx))
     const mbCode = safeStr(get(mbCodeColIdx))
@@ -327,54 +328,26 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
     else if (rawLifecycle.includes('RESERVED') || rawLifecycle.includes('RESERVE') || rawLifecycle.includes('PLACEHOLDER') || rawLifecycle.includes('GIỮ')) lifecycleStatus = 'RESERVED'
     const isPlaceholder = lifecycleStatus === 'RESERVED'
 
-    const rawPacking = safeStr(get(packingTypeColIdx))?.toUpperCase() || ''
-    let primaryPackingType: 'ROLL' | 'BALE' | 'CARTON' | 'HEMMED' = 'ROLL'
-    // H4 (01/10): từ khóa chốt từ dữ liệu thật SNY (ORDER LIST 2023-2026, WI SEDCO26-1):
-    // HEMMED / HEMMED EDGES / REINFORCED HEMMED / WEBBING HEM / HEM (thuật ngữ xưởng may).
-    // Check HEMMED TRƯỚC CARTON/BALE để chuỗi như "HEMMED CARTON" không bị nhận nhầm.
-    // "HEM" đứng một mình phải match word-boundary (tránh CHEMICAL / SCHEME / THEME).
-    const isHemmed = rawPacking.includes('HEMMED')
-      || rawPacking.includes('WEBBING HEM')
-      || rawPacking.includes('MAY VIỀN')
-      || rawPacking.includes('MAY VIEN')
-      || rawPacking.includes('ĐÓNG KHUY')
-      || rawPacking.includes('DONG KHUY')
-      || /\bHEM\b/.test(rawPacking)
-    if (isHemmed) {
-      primaryPackingType = 'HEMMED'
-    } else if (rawPacking.includes('CARTON') || rawPacking.includes('THÙNG')) {
-      primaryPackingType = 'CARTON'
-    } else if (rawPacking.includes('BALE') || rawPacking.includes('KIỆN')) {
-      primaryPackingType = 'BALE'
-    } else if (rawPacking.includes('ROLL') || rawPacking.includes('CUỘN')) {
-      primaryPackingType = 'ROLL'
-    }
-
-    // UNIT fallback (01/10): file SNY thật (ORDER LIST 2023-2026, 3345 dòng) dùng cột UNIT,
-    // cột PACKING bỏ trống 3297/3345. Chỉ suy từ UNIT khi PACKING trống — PACKING tường minh thắng.
-    // PCS/PANEL/BOX/PACK → CARTON (hàng tấm đóng thùng); BALE/BALES → BALE; còn lại giữ ROLL.
-    // orderType phía dưới tự suy đúng từ packing (CARTON→pieces, BALE→meters, ROLL→rolls).
-    if (rawPacking === '') {
-      const rawUnit = safeStr(get(unitColIdx))?.toUpperCase() || ''
-      if (/\b(BOX|PACK|PCS|PANEL)\b/.test(rawUnit)) primaryPackingType = 'CARTON'
-      else if (/\bBALES?\b/.test(rawUnit)) primaryPackingType = 'BALE'
-    }
+    const rawPacking = safeStr(get(packingTypeColIdx)) || ''
+    const rawUnit = safeStr(get(unitColIdx)) || ''
+    const explicitPacking = explicitOrderListPacking(rawPacking)
+    const primaryPackingType = explicitPacking ?? unitOrderListPacking(rawUnit) ?? 'ROLL'
 
     const rawPaperCore = get(hasPaperCoreColIdx)
     const hasPaperCore = primaryPackingType === 'ROLL'
       ? (rawPaperCore != null ? safeBool(rawPaperCore) : true)
       : false
     const isHalfFolded = safeBool(get(isHalfFoldedColIdx))
-    const piecesPerCarton = safeInt(get(piecesPerCartonColIdx))
-    const piecesPerBale = safeInt(get(piecesPerBaleColIdx))
+    const piecesPerCarton = safeStr(get(piecesPerCartonColIdx)) == null ? null : (safeInt(get(piecesPerCartonColIdx)) ?? NaN)
+    const piecesPerBale = safeStr(get(piecesPerBaleColIdx)) == null ? null : (safeInt(get(piecesPerBaleColIdx)) ?? NaN)
     const boxDimensions = safeStr(get(boxDimensionsColIdx))
 
     let subPackingType: 'CARTON' | 'BALE' | null = null
     if (primaryPackingType === 'HEMMED') {
       if (piecesPerCarton != null && piecesPerCarton > 0) subPackingType = 'CARTON'
       else if (piecesPerBale != null && piecesPerBale > 0) subPackingType = 'BALE'
-      else if (rawPacking.includes('CARTON') || rawPacking.includes('THÙNG')) subPackingType = 'CARTON'
-      else if (rawPacking.includes('BALE') || rawPacking.includes('KIỆN')) subPackingType = 'BALE'
+      else if (explicitOrderListPacking(rawPacking.replace(/HEMMED|HEM/gi, '')) === 'CARTON') subPackingType = 'CARTON'
+      else if (explicitOrderListPacking(rawPacking.replace(/HEMMED|HEM/gi, '')) === 'BALE') subPackingType = 'BALE'
       else subPackingType = 'CARTON'
     }
 
@@ -388,7 +361,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
 
     const palletDimensions = safeStr(get(palletDimensionsColIdx))
     const itemsPerPallet = safeInt(get(itemsPerPalletColIdx))
-    const packingNote = safeStr(get(packingNoteColIdx))
+    const packingNote = safeStr(get(packingNoteColIdx)) ?? (explicitPacking == null ? safeStr(rawPacking) : null)
 
     const rawWrapping = safeStr(get(outerWrappingColIdx))?.toUpperCase() || ''
     let outerWrapping: 'POLYBAG' | 'TARPAULIN' | 'NONE' = 'POLYBAG'
@@ -433,7 +406,11 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
     }
 
     // ── Row-Level Mandatory Validation ───────────────────────────────────────
+    const packingContext = { rawPacking, rawUnit, primaryPackingType, piecesPerCarton, piecesPerBale }
+    const inferredMissing = missingInferredPacking(packingContext)
+    const validationWarnings = lifecycleStatus === 'DRAFT' ? [] : orderListPackingWarnings(packingContext)
     const rawValidationErrors: string[] = []
+    if (fr.error) rawValidationErrors.push(fr.error)
 
     if (!rawPi) rawValidationErrors.push('Thiếu PI Number')
     if (!customer) rawValidationErrors.push('Thiếu Khách hàng')
@@ -460,10 +437,10 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
         rawValidationErrors.push('Thiếu % chống cháy (FR% > 0)')
       }
 
-      if (primaryPackingType === 'CARTON' && (piecesPerCarton == null || piecesPerCarton <= 0)) {
+      if (primaryPackingType === 'CARTON' && inferredMissing !== 'CARTON' && (piecesPerCarton == null || piecesPerCarton <= 0)) {
         rawValidationErrors.push('Thiếu số tấm/thùng khi chọn đóng thùng Carton (piecesPerCarton > 0)')
       }
-      if (primaryPackingType === 'BALE' && (piecesPerBale == null || piecesPerBale <= 0)) {
+      if (primaryPackingType === 'BALE' && inferredMissing !== 'BALE' && (piecesPerBale == null || piecesPerBale <= 0)) {
         rawValidationErrors.push('Thiếu số tấm/kiện khi chọn đóng kiện nén BALE (piecesPerBale > 0)')
       }
       if (onPallet && (!palletDimensions || !palletDimensions.trim())) {
@@ -492,6 +469,8 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       qty,
       rollLength,
       pieceLength,
+      rawPacking,
+      rawUnit,
       primaryPackingType,
       subPackingType,
       hasPaperCore,
@@ -531,7 +510,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       eyeletSpec,
     }
 
-    const schemaToUse = lifecycleStatus === 'DRAFT' ? draftOrderStateSchema : importedOrderRowSchema
+    const schemaToUse = lifecycleStatus === 'DRAFT' ? draftOrderStateSchema : orderListImportRowSchema
     const schemaResult = schemaToUse.safeParse(payloadForValidation)
     if (!schemaResult.success) {
       for (const issue of schemaResult.error.issues) {
@@ -560,6 +539,8 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       qty,
       rollLength,
       pieceLength,
+      rawPacking,
+      rawUnit,
       primaryPackingType,
       subPackingType,
       hasPaperCore,
@@ -600,6 +581,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       noWasGenerated,
       isValid,
       validationErrors,
+      validationWarnings,
     })
   }
 
@@ -777,7 +759,7 @@ function validParsedOrder(row: ParsedOrder): boolean {
     const result = draftOrderStateSchema.safeParse(draftPayload)
     return result.success
   }
-  const result = importedOrderRowSchema.safeParse(row)
+  const result = orderListImportRowSchema.safeParse(row)
   return result.success
 }
 

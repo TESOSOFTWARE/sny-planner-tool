@@ -2,7 +2,7 @@
 // Utility for parsing tab-separated text pasted from Excel.
 
 import type { ParsedOrder } from '@/types'
-import { isValidISODate } from '@/lib/validations/order'
+import { hasGsmPrecision, isValidISODate } from '@/lib/validations/order'
 import { normalizeUvPct } from '@/lib/excel/parseOrderList'
 
 /**
@@ -140,8 +140,10 @@ export function parsePastedText(text: string): ParsedOrder[] {
     // Parse GSM (index 9) - required
     const rawGsm = cols[9]?.trim()
     if (!rawGsm) continue
-    const gsm = Number(rawGsm)
-    if (isNaN(gsm) || gsm <= 0) continue
+    const gsm = Number(rawGsm.replace(',', '.'))
+    if (!Number.isFinite(gsm) || gsm <= 0 || gsm > 500 || !hasGsmPrecision(gsm)) {
+      throw new Error(`GSM không hợp lệ: "${rawGsm}" — phải > 0, ≤ 500 và tối đa 2 chữ số thập phân`)
+    }
 
     // Parse Width (index 10) - required
     const rawWidth = cols[10]?.trim()
@@ -294,12 +296,12 @@ export function parsePastedTextExtended(text: string): ParsedRowResult[] {
       })
       continue
     }
-    const gsm = Number(rawGsm)
-    if (isNaN(gsm) || gsm <= 0) {
+    const gsm = Number(rawGsm.replace(',', '.'))
+    if (!Number.isFinite(gsm) || gsm <= 0 || gsm > 500 || !hasGsmPrecision(gsm)) {
       results.push({
         order: null,
         rawLine: trimmedLine,
-        error: `Invalid GSM: "${rawGsm}" (Must be a positive integer)`,
+        error: `GSM không hợp lệ: "${rawGsm}" — phải > 0, ≤ 500 và tối đa 2 chữ số thập phân`,
         isValid: false,
       })
       continue

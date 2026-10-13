@@ -3,8 +3,9 @@
 // src/components/materials/ImportMaterialReportModal.tsx
 // 3-step modal: (1) file upload + date, (2) preview, (3) confirm → success.
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { MaterialBlock, ParsedMaterialRow } from '@/lib/excel/parseMaterialReport'
+import { reportPeriodLabel } from './MaterialReportsModal'
 import type { StockDecision } from '@/types'
 
 interface Props {
@@ -12,7 +13,7 @@ interface Props {
   onClose: () => void
 }
 
-type PreviewRow = ParsedMaterialRow
+type PreviewRow = ParsedMaterialRow & { reportDate?: string; group?: string; sourceDateLabel?: string; reportPeriodEnd?: string }
 
 interface PreviewResponse {
   success: boolean
@@ -28,6 +29,8 @@ interface PreviewResponse {
   blocks?: MaterialBlock[]
   error?: string
   code?: string
+  reportDates?: string[]
+  skippedRows?: Array<{ sourceRow: number; reasons: string[] }>
 }
 
 type Step = 'upload' | 'preview' | 'success'
@@ -36,9 +39,13 @@ function todayISO() {
   return new Date().toISOString().slice(0, 10)
 }
 
+// History write endpoints are not available yet; never send requests to them.
+const HISTORY_IMPORT_AVAILABLE = false
+
 const inputCls = 'w-full h-10 px-3 rounded-lg border-[0.5px] border-outline bg-surface text-on-surface text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors'
 
 export default function ImportMaterialReportModal({ onImported, onClose }: Props) {
+  const [mode, setMode] = useState<'SINGLE' | 'HISTORY'>('SINGLE')
   const [step, setStep]           = useState<Step>('upload')
   const [file, setFile]           = useState<File | null>(null)
   const [txDate, setTxDate]       = useState(todayISO())
@@ -50,11 +57,18 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
   const [preview, setPreview]     = useState<PreviewResponse | null>(null)
   const [successMsg, setSuccessMsg] = useState('')
 
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => { if (event.key === 'Escape' && !isLoading) onClose() }
+    document.addEventListener('keydown', listener)
+    return () => document.removeEventListener('keydown', listener)
+  }, [onClose, isLoading])
+
   // ── Step 1: upload + parse preview ───────────────────────────────────────
 
   const handlePreview = async () => {
+    if (mode === 'HISTORY' && !HISTORY_IMPORT_AVAILABLE) { setError('Nhập nhiều ngày chưa khả dụng; hiện có thể nhập từng block.'); return }
     if (!file) { setError('Vui lòng chọn file .xlsx'); return }
-    if (!txDate) { setError('Vui lòng chọn ngày báo cáo'); return }
+    if (mode === 'SINGLE' && !txDate) { setError('Vui lòng chọn ngày báo cáo'); return }
     setError(null)
     setIsLoading(true)
 
@@ -64,7 +78,8 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
       fd.append('group', 'HDPE')
       fd.append('txDate', txDate)
       if (headerRow != null) fd.append('headerRow', String(headerRow))
-      const res = await fetch('/api/materials/import-transactions', { method: 'POST', body: fd })
+      const res = await fetch(mode === 'HISTORY' ? '/api/materials/import-transactions/history' : '/api/materials/import-transactions', { method: 'POST', body: fd })
+      if (res.status >= 500) { setError(`Máy chủ lỗi (mã ${res.status}), thử lại.`); return }
       const data = await res.json() as PreviewResponse
       if (!res.ok || !data.success) {
         setError(data.error ?? 'Không thể đọc file.')
@@ -86,21 +101,21 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
 
   const handleConfirm = async () => {
     if (!preview) return
+    if (mode === 'HISTORY' && !HISTORY_IMPORT_AVAILABLE) { setError('Nhập nhiều ngày chưa khả dụng; hiện có thể nhập từng block.'); return }
     setError(null)
     setIsLoading(true)
 
     try {
-      const res = await fetch('/api/materials/import-transactions/confirm', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          group: preview.group,
-          txDate: preview.txDate,
-          rows: preview.rows,
-          expectedSnapshot: preview.expectedSnapshot,
-          replaceKeys,
-        }),
-      })
+      if (!file) { setError('Vui lòng chọn lại file đã xem trước.'); return }
+      const body = new FormData()
+      body.append('file', file)
+      body.append('group', preview.group)
+      body.append('txDate', preview.txDate)
+      body.append('headerRow', String(preview.headerRow))
+      body.append('expectedSnapshot', preview.expectedSnapshot)
+      body.append('replaceKeys', JSON.stringify(replaceKeys))
+      const res = await fetch('/api/materials/import-transactions/confirm', { method: 'POST', body })
+      if (res.status >= 500) { setError(`Máy chủ lỗi (mã ${res.status}), thử lại.`); return }
       const data = await res.json() as { success: boolean; materialsUpdated?: number; transactionsCreated?: number; created?: number; replaced?: number; unchanged?: number; error?: string; code?: string }
       if (!res.ok || !data.success) {
         setError(data.error ?? 'Không thể lưu dữ liệu.')
@@ -111,7 +126,7 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
         }
         return
       }
-      setSuccessMsg(`Đã cập nhật ${data.materialsUpdated} nguyên liệu (${data.created ?? 0} mới, ${data.replaced ?? 0} thay thế, ${data.unchanged ?? 0} giữ nguyên). Tạo ${data.transactionsCreated} giao dịch.`)
+      setSuccessMsg(mode === 'HISTORY' ? `Đã lưu báo cáo lịch sử (${data.created ?? 0} mới, ${data.replaced ?? 0} thay thế, ${data.unchanged ?? 0} giữ nguyên). Tồn hiện tại không thay đổi.` : `Đã cập nhật ${data.materialsUpdated} nguyên liệu (${data.created ?? 0} mới, ${data.replaced ?? 0} thay thế, ${data.unchanged ?? 0} giữ nguyên). Tạo ${data.transactionsCreated} giao dịch.`)
       setStep('success')
       onImported()
     } catch {
@@ -125,7 +140,7 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
     row.outUsing + row.outBroken + row.outTape + row.outReject
   const decisions = preview?.decisions ?? []
   const replaceDecisions = decisions.filter(decision => decision.status === 'replace')
-  const hasBlockingDecision = decisions.some(decision => decision.status === 'conflict' || decision.status === 'invalid')
+  const hasBlockingDecision = decisions.some(decision => decision.status === 'conflict')
   const replacementsAcknowledged = replaceDecisions.every(decision => replaceKeys.includes(decision.materialKey))
   const toggleReplacement = (key: string) => {
     setReplaceKeys(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key])
@@ -134,6 +149,7 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" onClick={onClose}>
       <div
+        role="dialog" aria-modal="true" aria-label="Import báo cáo nguyên vật liệu"
         className="bg-surface rounded-xl shadow-lg w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
@@ -147,7 +163,7 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
               {step === 'success' && 'Import thành công'}
             </p>
           </div>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface transition-colors">
+          <button disabled={isLoading} onClick={onClose} aria-label="Đóng import" className="text-on-surface-variant hover:text-on-surface transition-colors">
             <span className="material-symbols-outlined text-[20px]">close</span>
           </button>
         </div>
@@ -165,6 +181,14 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
           {/* ── STEP 1: UPLOAD ── */}
           {step === 'upload' && (
             <div className="space-y-4">
+              <label className="block text-sm">Cách nhập báo cáo
+                <select aria-label="Cách nhập báo cáo" value={mode} onChange={e => { setMode(e.target.value as 'SINGLE' | 'HISTORY'); setHeaderRow(undefined); setAvailableBlocks([]); setPreview(null); setReplaceKeys([]); setError(null) }} className={inputCls}>
+                  <option value="SINGLE">Một block — cập nhật tồn hiện tại</option>
+                  <option value="HISTORY" disabled={!HISTORY_IMPORT_AVAILABLE}>Nhiều ngày — chưa khả dụng</option>
+                </select>
+              </label>
+              {!HISTORY_IMPORT_AVAILABLE && <p className="text-xs text-secondary">Nhập nhiều ngày chưa khả dụng; hiện có thể nhập từng block. Lựa chọn nhiều ngày được khóa để tránh gửi yêu cầu chưa được hỗ trợ.</p>}
+              {mode === 'HISTORY' && <p className="text-xs text-secondary">Đọc các ngày trong file Excel. Chỉ lưu báo cáo theo ngày, không đổi tồn hiện tại và không tạo giao dịch xuất/nhập. Bản ghi khác nội dung cần xác nhận thay thế theo vật tư và ngày.</p>}
               <div>
                 <label className="block text-xs font-medium text-secondary mb-1">
                   File Excel (.xlsx) <span className="text-error">*</span>
@@ -184,7 +208,7 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
                 )}
               </div>
 
-              <div>
+              {mode === 'SINGLE' && <div>
                 <label className="block text-xs font-medium text-secondary mb-1">
                   Ngày báo cáo <span className="text-error">*</span>
                 </label>
@@ -196,13 +220,13 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
                   className={`${inputCls} max-w-[200px]`}
                 />
                 <p className="text-xs text-outline mt-1">Ngày này đại diện cho các giao dịch trong file.</p>
-              </div>
+              </div>}
               {availableBlocks.length > 0 && (
                 <div>
                   <label className="block text-xs font-medium text-secondary mb-1">Chọn block báo cáo</label>
-                  <select value={headerRow ?? ''} onChange={e => { setHeaderRow(e.target.value ? Number(e.target.value) : undefined); setPreview(null) }} className={inputCls}>
+                  <select value={headerRow ?? ''} onChange={e => { const selected = availableBlocks.find(block => block.headerRow === Number(e.target.value)); setHeaderRow(selected?.headerRow); if (selected?.reportDate) setTxDate(selected.reportDate); setPreview(null) }} className={inputCls}>
                     <option value="">Chọn dòng header…</option>
-                    {availableBlocks.map(block => <option key={block.headerRow} value={block.headerRow}>{block.sheetName} — dòng {block.headerRow} đến {block.endRow}</option>)}
+                    {availableBlocks.map(block => <option key={block.headerRow} value={block.headerRow}>{block.reportDate ? reportPeriodLabel(block.reportDate, block) : 'Chưa có ngày nguồn'} — {block.sheetName} — dòng {block.headerRow} đến {block.endRow}</option>)}
                   </select>
                 </div>
               )}
@@ -212,6 +236,8 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
           {/* ── STEP 2: PREVIEW TABLE ── */}
           {step === 'preview' && preview && (
             <div className="space-y-4">
+              {mode === 'HISTORY' && <p className="text-sm text-primary">Phạm vi: {preview.reportDates?.length ?? 0} mốc đầu kỳ — {(preview.reportDates ?? []).map(date => date.split('-').reverse().join('/')).join(', ')}. Kỳ gộp ngày giữ nguyên theo nguồn, không chia sản lượng theo ngày. Chỉ lưu lịch sử.</p>}
+              {!!preview.skippedRows?.length && <div className="text-sm text-secondary"><p>{preview.skippedRows.length} dòng bỏ qua — không ghi dữ liệu.</p>{preview.skippedRows.map(row => <p key={row.sourceRow}>Dòng {row.sourceRow}: {row.reasons.join('; ')}</p>)}</div>}
               {/* Summary pills */}
               <div className="flex gap-3 flex-wrap">
                 <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-surface-container-low border border-outline-variant text-xs font-medium text-on-surface">
@@ -230,11 +256,11 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
                 )}
               </div>
 
-              <div className="border border-outline-variant rounded-lg overflow-hidden">
+              <div className="border border-outline-variant rounded-lg overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-surface-container border-b-[0.5px] border-outline-variant">
                     <tr>
-                      {['Nguyên liệu', 'Trạng thái', 'Tồn đầu', 'Nhập (IN)', 'Xuất (total)', 'Tồn cuối'].map(h => (
+                      {[...(mode === 'HISTORY' ? ['Ngày/kỳ nguồn'] : []), 'Nhóm', 'Nguyên liệu', 'Phân loại / Độ bền màu', 'Trạng thái', 'Tồn đầu', 'Nhập (IN)', 'Xuất (total)', 'Tồn cuối'].map(h => (
                         <th key={h} className="px-3 py-2 text-left text-xs font-inter font-medium text-secondary uppercase tracking-widest whitespace-nowrap">
                           {h}
                         </th>
@@ -244,9 +270,11 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
                   <tbody className="divide-y divide-outline-variant/50">
                     {preview.rows.map((row, i) => (
                       <tr key={i} className="hover:bg-[#f0eded] transition-colors">
+                        {mode === 'HISTORY' && <td className="px-3 py-2 whitespace-nowrap">{row.reportDate ? reportPeriodLabel(row.reportDate, row) : '—'}</td>}<td className="px-3 py-2">{row.group === 'MB' ? 'Hạt màu' : row.group ?? 'HDPE'}</td>
                         <td className="px-3 py-2 font-mono text-xs font-semibold text-on-surface">
                           {row.materialName}
                         </td>
+                        <td className="px-3 py-2 whitespace-nowrap">{row.subGroup === 'NGUYEN_SINH' ? 'Nguyên sinh' : row.subGroup === 'TAI_CHE' ? 'Tái chế' : row.lightFastness ?? '—'}</td>
                         <td className="px-3 py-2">
                           {decisions.find(decision => decision.rowIndex === i)?.status === 'new' ? (
                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-[#fef3c7] text-[#92400e] border border-[#f59e0b]/30 whitespace-nowrap">
@@ -266,6 +294,7 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
                               Đã có
                             </span>
                           )}
+                          {decisions.find(decision => decision.rowIndex === i)?.reasons.map(reason => <p key={reason} className="text-xs text-secondary mt-1">{reason}</p>)}
                         </td>
                         <td className="px-3 py-2 font-mono text-xs tabular-nums text-on-surface-variant">
                           {row.firstStock.toLocaleString('vi-VN')}
@@ -285,14 +314,12 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
                 </table>
               </div>
 
-              <p className="text-xs text-secondary">
-                Tồn cuối (LAST STOCK) sẽ được set làm tồn hiện tại của mỗi nguyên liệu.
-              </p>
-              <p className="text-xs text-secondary">Các dòng không có trong file không bị xóa khỏi tồn kho.</p>
+              <p className="text-xs text-secondary">{mode === 'HISTORY' ? 'Tồn hiện tại không thay đổi; chỉ các báo cáo cùng vật tư/ngày được xác nhận mới bị thay thế.' : 'Tồn cuối (LAST STOCK) sẽ được đặt làm tồn hiện tại của mỗi nguyên liệu.'}</p>
+              <p className="text-xs text-secondary">Các dòng không có trong file không bị xóa khỏi tồn kho. Phân loại và độ bền màu từ file chỉ bổ sung thông tin còn thiếu; giữ giá trị đã lưu trong danh mục.</p>
               {replaceDecisions.length > 0 && (
                 <button type="button" onClick={() => setReplaceKeys(replaceDecisions.map(decision => decision.materialKey))} className="text-xs text-primary underline">Chọn tất cả bản ghi cần thay thế</button>
               )}
-              {hasBlockingDecision && <p className="text-xs text-error">Có dòng xung đột hoặc không hợp lệ; cần sửa file trước khi xác nhận.</p>}
+              {hasBlockingDecision && <p className="text-xs text-error">Có dòng xung đột; cần xử lý trước khi xác nhận.</p>}
             </div>
           )}
 
@@ -301,7 +328,7 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
             <div className="flex flex-col items-center justify-center py-8 text-center gap-3">
               <span className="material-symbols-outlined text-[48px] text-[#15803d]">check_circle</span>
               <p className="text-base font-inter font-semibold text-on-surface">{successMsg}</p>
-              <p className="text-sm text-secondary">Tồn kho đã được cập nhật theo file báo cáo.</p>
+              <p className="text-sm text-secondary">{mode === 'HISTORY' ? 'Đã lưu lịch sử; tồn hiện tại được giữ nguyên.' : 'Tồn kho đã được cập nhật theo file báo cáo.'}</p>
             </div>
           )}
         </div>
@@ -332,7 +359,7 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={isLoading || hasBlockingDecision || !replacementsAcknowledged}
+                disabled={isLoading || hasBlockingDecision || !preview?.rows.some(row => row.isValid) || !replacementsAcknowledged}
                 className="inline-flex items-center gap-2 bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors"
               >
                 {isLoading

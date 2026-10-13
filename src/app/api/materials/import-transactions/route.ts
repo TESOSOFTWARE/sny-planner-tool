@@ -7,11 +7,11 @@ import { prisma } from '@/lib/db'
 import {
   inspectMaterialBlocks,
   materialReportKey,
-  normalizeMaterialName,
   parseMaterialReport,
   type MaterialGroupInput,
   type ParsedMaterialRow,
 } from '@/lib/excel/parseMaterialReport'
+import { materialReportPayload, sameMaterialReport } from '@/lib/materials/reportPayload'
 import type { StockDecision } from '@/types'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
   if (rows.length === 0 || rows.length > 500) return decisionError('INVALID_INPUT', 'Báo cáo phải có từ 1 đến 500 dòng vật tư.')
 
   const dbMaterials = await prisma.material.findMany({
-    where: { group },
+    where: { group: { in: group === 'HDPE' ? ['HDPE', 'MB'] : [group] } },
     include: {
       reportSnapshots: { orderBy: { reportDate: 'desc' }, take: 1 },
       transactions: { orderBy: { txDate: 'desc' }, take: 1 },
@@ -82,14 +82,14 @@ export async function POST(req: NextRequest) {
   })
   const byName = new Map<string, typeof dbMaterials>()
   dbMaterials.forEach((material) => {
-    const key = normalizeMaterialName(material.name)
+    const key = materialReportKey(material.group as MaterialGroupInput, material.name)
     byName.set(key, [...(byName.get(key) ?? []), material])
   })
 
   const decisions: StockDecision[] = rows.map((row, rowIndex) => {
-    const key = materialReportKey(group, row.materialName)
+    const key = materialReportKey(row.group ?? group, row.materialName)
     if (!row.isValid) return { rowIndex, materialKey: key, materialId: null, status: 'invalid', reasons: row.validationErrors }
-    const matches = byName.get(normalizeMaterialName(row.materialName)) ?? []
+    const matches = byName.get(key) ?? []
     if (matches.length > 1) return { rowIndex, materialKey: key, materialId: null, status: 'conflict', reasons: ['Có nhiều vật tư trong DB trùng tên sau khi chuẩn hóa'] }
     if (matches.length === 0) return { rowIndex, materialKey: key, materialId: null, status: 'new', reasons: [] }
     const material = matches[0]
@@ -103,9 +103,10 @@ export async function POST(req: NextRequest) {
     }
     if (snapshot && snapshot.reportDate.toISOString().slice(0, 10) === txDate) {
       const payload = snapshot.payload as Record<string, unknown>
-      const same = Number(payload.firstStock) === row.firstStock && Number(payload.inQty) === row.inQty && Number(payload.outUsing) === row.outUsing && Number(payload.outBroken) === row.outBroken && Number(payload.outTape) === row.outTape && Number(payload.outReject) === row.outReject && Number(payload.lastStock) === row.lastStock && String(payload.materialName) === normalizeMaterialName(row.materialName)
-      if (same) return { rowIndex, materialKey: key, materialId: material.id, status: 'identical', reasons: [] }
+      const same = sameMaterialReport(payload, row)
+      if (same && material.stockReportDate?.toISOString().slice(0, 10) === txDate) return { rowIndex, materialKey: key, materialId: material.id, status: 'identical', reasons: [] }
       if (material.stockReportDirty) return { rowIndex, materialKey: key, materialId: material.id, status: 'conflict', reasons: ['Đã có chỉnh tồn/giao dịch tay sau snapshot (SNAPSHOT_COVERED)'] }
+      if (same) return { rowIndex, materialKey: key, materialId: material.id, status: 'replace', reasons: ['Đã có báo cáo lịch sử ngày này; xác nhận để cập nhật tồn hiện tại.'] }
       return { rowIndex, materialKey: key, materialId: material.id, status: 'replace', reasons: ['Bản sửa cùng ngày cần xác nhận thay thế'] }
     }
     const hasLegacyDateTx = material.transactions.some((tx) => tx.txDate.toISOString().slice(0, 10) === txDate)
@@ -115,16 +116,10 @@ export async function POST(req: NextRequest) {
 
   const canonicalRows = rows.map((row, index) => ({
     key: decisions[index].materialKey,
-    row: {
-      materialName: normalizeMaterialName(row.materialName),
-      firstStock: row.firstStock,
-      inQty: row.inQty,
-      outUsing: row.outUsing,
-      outBroken: row.outBroken,
-      outTape: row.outTape,
-      outReject: row.outReject,
-      lastStock: row.lastStock,
-    },
+    sourceRow: row.sourceRow,
+    isValid: row.isValid,
+    validationErrors: row.validationErrors,
+    row: materialReportPayload(row),
     materialId: decisions[index].materialId,
     updatedAt: dbMaterials.find((material) => material.id === decisions[index].materialId)?.updatedAt.toISOString() ?? null,
     currentStock: dbMaterials.find((material) => material.id === decisions[index].materialId)?.currentStock.toString() ?? null,
@@ -149,6 +144,8 @@ export async function POST(req: NextRequest) {
     group,
     txDate,
     headerRow: headerRow ?? blocks[0].headerRow,
+    blocks,
+    skippedRows: rows.filter(row => !row.isValid).map(row => ({ sourceRow: row.sourceRow, reasons: row.validationErrors })),
     expectedSnapshot,
     decisions,
   })

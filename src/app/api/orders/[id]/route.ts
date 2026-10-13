@@ -266,13 +266,40 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
 export async function DELETE(_req: NextRequest, context: RouteContext) {
   const id = getId(context)
   try {
-    await prisma.productionOrder.delete({ where: { id } })
+    const result = await prisma.$transaction(async (tx) => {
+      // FOR UPDATE also blocks the FK KEY SHARE lock of a concurrent assignment.
+      // Hold the order row until the count and deletion have both completed.
+      const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM production_orders WHERE id = ${id} FOR UPDATE`
+      if (locked.length === 0) return { notFound: true as const }
+      const assignmentCount = await tx.machineAssignment.count({ where: { orderId: id } })
+      if (assignmentCount > 0) {
+        const assignments = await tx.machineAssignment.findMany({
+          where: { orderId: id },
+          select: { machineId: true },
+          distinct: ['machineId'],
+          orderBy: { machineId: 'asc' },
+        })
+        return { assigned: true as const, assignmentCount, machines: assignments.map(row => row.machineId) }
+      }
+      await tx.productionOrder.delete({ where: { id } })
+      return { deleted: true as const }
+    })
+    if (result.notFound === true) {
+      return NextResponse.json({ success: false, error: 'Không tìm thấy đơn hàng.' }, { status: 404 })
+    }
+    if (result.assigned === true) {
+      return NextResponse.json({
+        success: false,
+        code: 'ORDER_ASSIGNED',
+        error: `Không thể xoá đơn vì còn ${result.assignmentCount} lịch máy (${result.machines.join(', ')}). Gỡ hoặc chuyển phân công trước khi xoá.`,
+      }, { status: 409 })
+    }
     return NextResponse.json({ success: true })
   } catch (err: unknown) {
     if (err !== null && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2025') {
-      return NextResponse.json({ success: false, error: 'Order not found.' }, { status: 404 })
+      return NextResponse.json({ success: false, error: 'Không tìm thấy đơn hàng.' }, { status: 404 })
     }
     console.error(`[DELETE /api/orders/${id}] Unexpected error:`, err)
-    return NextResponse.json({ success: false, error: 'An unexpected server error occurred.' }, { status: 500 })
+    return NextResponse.json({ success: false, error: 'Không thể xoá đơn hàng. Vui lòng thử lại.' }, { status: 500 })
   }
 }
