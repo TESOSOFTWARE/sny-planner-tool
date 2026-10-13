@@ -398,3 +398,27 @@ test('deduplicateValidationErrors removes redundant manual and Zod messages for 
     'Thiếu PI Number',
   ])
 })
+
+test('1210-02: workbook import retains all five decimal GSM fields without rounding', () => {
+  const headers = [...standardHeaders, 'RAW GSM', 'COATING GSM', 'FINISHED GSM']
+  const row: unknown[] = ['PI-DECIMAL-GSM', 'CUSTOMER', 1, '2026-10-12', 50.8, 2, 100, 'BLUE', 'meters']
+  row[18] = 51.12
+  row[30] = 40.25
+  row[31] = 10.55
+  row[32] = 50.8
+  const parsed = parseOrderList(makeOrderListWorkbook(headers, [row]))[0]
+  assert.equal(parsed.isValid, true, parsed.validationErrors?.join('; '))
+  assert.equal(parsed.gsm, 50.8)
+  assert.equal(parsed.productionGsm, 51.12)
+  assert.equal(parsed.rawFabricGsm, 40.25)
+  assert.equal(parsed.coatingGsm, 10.55)
+  assert.equal(parsed.finishedGsm, 50.8)
+})
+
+test('1210-02: workbook import reports excessive GSM precision and keeps the original value', () => {
+  const row = ['PI-DECIMAL-BAD', 'CUSTOMER', 1, '2026-10-12', 50.123, 2, 100, 'BLUE', 'meters']
+  const parsed = parseOrderList(makeOrderListWorkbook(standardHeaders, [row]))[0]
+  assert.equal(parsed.isValid, false)
+  assert.equal(parsed.gsm, 50.123)
+  assert.ok(parsed.validationErrors?.some(message => message.includes('2')))
+})

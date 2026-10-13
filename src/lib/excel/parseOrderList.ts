@@ -278,7 +278,7 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
     const orderDate = rawDate || ''
     const gsm = rawGsm || 0
     const widthM = rawWidthM || 0
-    const lengthM = rawLengthM
+    let lengthM = rawLengthM
     const color = rawColor ? rawColor.toUpperCase() : ''
 
     const fileSubLine = safeInt(get(subLineColIdx))
@@ -397,6 +397,14 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       else orderType = 'rolls'
     }
 
+    // [MoM §2.4] 0810-34: LENGTH is one bale's length only when UNIT supplies BALE.
+    // Explicit packing and explicitly modelled rolls/pieces retain their existing semantics.
+    const inferredBale = explicitPacking == null && primaryPackingType === 'BALE'
+    const validBaleQuantity = qty != null && Number.isInteger(qty) && qty > 0
+    if (inferredBale && orderType === 'meters' && validBaleQuantity && lengthM != null) {
+      lengthM *= qty
+    }
+
     // Fallback: If rollLength / pieceLength is missing from separate column, use lengthM from LENGTH column
     if (orderType === 'rolls' && rollLength == null && lengthM != null && lengthM > 0) {
       rollLength = lengthM
@@ -410,6 +418,9 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
     const inferredMissing = missingInferredPacking(packingContext)
     const validationWarnings = lifecycleStatus === 'DRAFT' ? [] : orderListPackingWarnings(packingContext)
     const rawValidationErrors: string[] = []
+    if (inferredBale && !validBaleQuantity) {
+      rawValidationErrors.push("Thiếu số lượng (QU'TY) cho hàng đóng kiện")
+    }
     if (fr.error) rawValidationErrors.push(fr.error)
 
     if (!rawPi) rawValidationErrors.push('Thiếu PI Number')
@@ -745,6 +756,9 @@ function changedComparisonFields(row: ParsedOrder, existing: ProductionOrder): s
 }
 
 function validParsedOrder(row: ParsedOrder): boolean {
+  // Confirm rechecks quantity even if a client changes the preview's validity flag.
+  if (explicitOrderListPacking(row.rawPacking) == null && unitOrderListPacking(row.rawUnit) === 'BALE' &&
+      (row.qty == null || !Number.isInteger(row.qty) || row.qty <= 0)) return false
   if (row.isValid === false) return false
   const pi = String(row.piNumber ?? '').trim()
   if (!pi || pi === 'CHƯA_CÓ_PI') return false
