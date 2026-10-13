@@ -198,7 +198,7 @@ export default function ExtruderTab({ onImport }: Props) {
             <table className="w-full">
               <thead>
                 <tr className="bg-surface-container border-b-[0.5px] border-outline-variant">
-                  {['Ngày', 'Máy', 'Ca', 'Màu sắc', 'Denier', 'Weight (kg)', 'Beam Note', 'Mã PI', ].map(h => (
+                  {['Ngày', 'Máy', 'Ca', 'Màu sắc', 'Denier', 'Weight (kg)', 'Beam Note', 'Ghi chú', ].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-inter font-medium text-secondary uppercase tracking-widest whitespace-nowrap">
                       {h}
                     </th>

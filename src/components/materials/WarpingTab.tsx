@@ -193,7 +193,7 @@ export default function WarpingTab({ onImport }: Props) {
               <thead>
                 <tr className="bg-surface-container border-b-[0.5px] border-outline-variant">
                   {/* Note: Columns Beam 1 & Beam 2 displayed as explicit English labels per requirement 2 */}
-                  {['Ngày', 'Máy Warping', 'Ca', 'Máy Dệt', 'Màu sắc', 'Denier', 'Strand', 'Beam 1', 'M/EA', 'Weig', 'Beam 2', 'Quantity', 'Weight (kg)', 'Mã PI'].map(h => (
+                  {['Ngày', 'Máy Warping', 'Ca', 'Máy Dệt', 'Màu sắc', 'Denier', 'Strand', 'Beam 1', 'M/EA', 'Weig', 'Beam 2', 'Quantity', 'Weight (kg)', 'Ghi chú'].map(h => (
                     <th key={h} className="px-3 py-3 text-left font-medium text-secondary uppercase tracking-wider whitespace-nowrap">
                       {h}
                     </th>

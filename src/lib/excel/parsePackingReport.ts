@@ -5,8 +5,6 @@
 import * as XLSX from 'xlsx'
 
 const MAX_DATES = 366
-const EXCEL_EPOCH = Date.UTC(1899, 11, 30)
-const MS_PER_DAY = 86_400_000
 
 export interface ParsedPackingOutput {
   date: string
@@ -27,6 +25,20 @@ export interface ParsePackingResult {
   totalRowsParsed: number
   availableSheets: string[]
   fileName: string
+  period: PackingPeriod | null
+  outOfPeriodOutputs: ParsedPackingOutput[]
+  skippedRows: { total: number; header: number; blank: number }
+}
+
+export type PackingPeriod = { month: string; source: 'filename' | 'rows' }
+
+export function packingPeriod(fileName: string, dates: readonly string[]): PackingPeriod | null {
+  const match = /(?:^|[^\d])(0[1-9]|1[0-2])-(\d{4})(?!\d)/.exec(fileName)
+  if (match) return { month: `${match[2]}-${match[1]}`, source: 'filename' }
+  const counts = new Map<string, number>()
+  for (const date of dates) counts.set(date.slice(0, 7), (counts.get(date.slice(0, 7)) ?? 0) + 1)
+  const month = Array.from(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0]
+  return month ? { month, source: 'rows' } : null
 }
 
 type PackingMetricKey =
@@ -50,27 +62,19 @@ function dateFromParts(year: number, month: number, day: number): string | null 
   return date.toISOString().slice(0, 10)
 }
 
-function parseDate(value: unknown): string | null {
+function serialToDate(value: number, date1904: boolean): string | null {
+  if (!Number.isFinite(value) || value < 1 || value > 2_958_465) return null
+  const parts = XLSX.SSF.parse_date_code(value, { date1904 })
+  return parts ? dateFromParts(parts.y, parts.m, parts.d) : null
+}
+
+export function parsePackingDate(value: unknown, date1904 = false): string | null {
   if (value instanceof Date) {
     if (!Number.isFinite(value.getTime())) return null
-    if (
-      value.getUTCHours() !== 0 ||
-      value.getUTCMinutes() !== 0 ||
-      value.getUTCSeconds() !== 0 ||
-      value.getUTCMilliseconds() !== 0
-    ) {
-      return null
-    }
-    return dateFromParts(value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate())
+    const vn = new Date(value.getTime() + 7 * 60 * 60 * 1000)
+    return dateFromParts(vn.getUTCFullYear(), vn.getUTCMonth() + 1, vn.getUTCDate())
   }
-
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1 || value > 2_958_465) {
-      return null
-    }
-    const date = new Date(EXCEL_EPOCH + value * MS_PER_DAY)
-    return dateFromParts(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate())
-  }
+  if (typeof value === 'number') return serialToDate(value, date1904)
 
   if (typeof value !== 'string' || value.trim() === '') return null
   const clean = value.trim()
@@ -118,10 +122,10 @@ function hasUncachedFormula(ws: XLSX.WorkSheet, row: number, column: number): bo
 
 /**
  * Main parser for SẢN LƯỢNG ĐÓNG GÓI sheet.
- * Filename text is metadata only; it never invents dates or selects rows.
+ * Source dates are preserved; filename month only filters confirmation eligibility.
  */
 export function parsePackingReport(buffer: Buffer, fileName: string): ParsePackingResult {
-  const workbook = XLSX.read(buffer, { raw: false, cellDates: true })
+  const workbook = XLSX.read(buffer, { raw: false, cellDates: false })
   const availableSheets = workbook.SheetNames
   const matchingSheets = availableSheets.filter((sheet) => {
     const upper = sheet.toUpperCase()
@@ -136,28 +140,38 @@ export function parsePackingReport(buffer: Buffer, fileName: string): ParsePacki
 
   const sheetName = matchingSheets[0]
   const worksheet = workbook.Sheets[sheetName]
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, { header: 1, defval: null })
+  const end = XLSX.utils.decode_range(worksheet['!ref'] ?? 'A1').e
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, { header: 1, defval: null, range: { s: { r: 0, c: 0 }, e: end } })
+  const headerIndex = rows.findIndex(row => row.some(value => String(value ?? '').trim().toUpperCase() === 'TIME') && row.some(value => String(value ?? '').trim().toUpperCase() === 'DAY') && row.some(value => String(value ?? '').trim().toUpperCase() === 'NIGHT'))
+  if (headerIndex < 0) throw new Error('Không tìm thấy tiêu đề TIME / DAY / NIGHT của báo cáo Đóng gói.')
+  const dateColumn = rows[headerIndex].findIndex(value => String(value ?? '').trim().toUpperCase() === 'TIME')
+  const skippedRows = { total: 0, header: headerIndex + 1, blank: 0 }
+  const datedRows: ParsedPackingOutput[] = []
+  const date1904 = Boolean(workbook.Workbook?.WBProps?.date1904)
   const byDate = new Map<string, ParsedPackingOutput>()
 
-  for (let rowIndex = 3; rowIndex < rows.length; rowIndex += 1) {
+  for (let rowIndex = headerIndex + 1; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex]
     if (!Array.isArray(row)) continue
-    const values = row.slice(3, 10)
-    if (values.every(isBlank)) continue
+    const values = row.slice(dateColumn, dateColumn + 7)
+    const label = String(row[dateColumn] ?? '').trim().toUpperCase()
+    if (/^TOTAL(?: ALL)?$/.test(label)) { skippedRows.total++; continue }
+    if (values.some(value => String(value ?? '').trim().toUpperCase() === 'QUANTITY')) { skippedRows.header++; continue }
+    if (values.every(isBlank)) { skippedRows.blank++; continue }
 
-    if (hasUncachedFormula(worksheet, rowIndex, 3)) {
+    if (hasUncachedFormula(worksheet, rowIndex, dateColumn)) {
       throw new Error(`Dòng ${rowIndex + 1}: ô ngày chứa công thức chưa có giá trị lưu.`)
     }
-    const date = parseDate(row[3])
+    const date = parsePackingDate(row[dateColumn], date1904)
     if (!date) throw new Error(`Dòng ${rowIndex + 1}: ngày không hợp lệ.`)
 
     const metricColumns: Array<[PackingMetricKey, number]> = [
-      ['qtyDay', 4],
-      ['totalMDay', 5],
-      ['weightDay', 6],
-      ['qtyNight', 7],
-      ['totalMNight', 8],
-      ['weightNight', 9],
+      ['qtyDay', dateColumn + 1],
+      ['totalMDay', dateColumn + 2],
+      ['weightDay', dateColumn + 3],
+      ['qtyNight', dateColumn + 4],
+      ['totalMNight', dateColumn + 5],
+      ['weightNight', dateColumn + 6],
     ]
     const parsed: Record<PackingMetricKey, number | null> = {
       qtyDay: null,
@@ -178,11 +192,11 @@ export function parsePackingReport(buffer: Buffer, fileName: string): ParsePacki
       date,
       ...parsed,
       dataSource: fileName,
-      cellRef: `Row ${rowIndex + 1}, Col D (date: ${date})`,
+      cellRef: `Row ${rowIndex + 1}, Col ${XLSX.utils.encode_col(dateColumn)} (date: ${date})`,
       isValid: true,
       validationErrors: [],
     }
-    if (Object.values(parsed).every((value) => value == null)) continue
+    datedRows.push(output)
 
     const previous = byDate.get(date)
     if (previous) {
@@ -197,11 +211,17 @@ export function parsePackingReport(buffer: Buffer, fileName: string): ParsePacki
     }
   }
 
-  const outputs = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date))
+  const period = packingPeriod(fileName, datedRows.map(row => row.date))
+  const outOfPeriodOutputs = datedRows.filter(row => row.date.slice(0, 7) !== period?.month)
+  const outputs = Array.from(byDate.values()).filter(row => row.date.slice(0, 7) === period?.month && [row.qtyDay, row.totalMDay, row.weightDay, row.qtyNight, row.totalMNight, row.weightNight].some(value => value != null)).sort((a, b) => a.date.localeCompare(b.date))
+  skippedRows.blank += datedRows.filter(row => row.date.slice(0, 7) === period?.month && [row.qtyDay, row.totalMDay, row.weightDay, row.qtyNight, row.totalMNight, row.weightNight].every(value => value == null)).length
   return {
     outputs,
-    totalRowsParsed: outputs.length,
+    totalRowsParsed: datedRows.length,
     availableSheets,
     fileName,
+    period,
+    outOfPeriodOutputs,
+    skippedRows,
   }
 }

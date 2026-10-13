@@ -83,9 +83,7 @@ export async function POST(req: NextRequest) {
   try {
     const arrayBuffer = await file.arrayBuffer()
     parseResult = parsePackingReport(Buffer.from(arrayBuffer), file.name)
-    if (parseResult.outputs.length === 0) {
-      return NextResponse.json({ success: false, code: 'INVALID_INPUT', error: 'Không có ngày sản lượng hợp lệ trong file.' }, { status: 422 })
-    }
+
   } catch (error) {
     return NextResponse.json(
       { success: false, code: 'INVALID_INPUT', error: error instanceof Error ? error.message : 'Lỗi khi đọc file Báo cáo Đóng gói Excel' },
@@ -93,6 +91,8 @@ export async function POST(req: NextRequest) {
     )
   }
 
+  const metadata = { period: parseResult.period, outOfPeriodOutputs: parseResult.outOfPeriodOutputs, skippedRows: parseResult.skippedRows }
+  if (!parseResult.outputs.length) return NextResponse.json({ success: true, ...parseResult, expectedSnapshot: '', decisions: [] })
   try {
     const dates = parseResult.outputs.map((output) => output.date).sort()
     const existing = await prisma.packingDailyOutput.findMany({
@@ -121,10 +121,11 @@ export async function POST(req: NextRequest) {
           : null,
       }
     })
-    const expectedSnapshot = hashSnapshot({ dates, state })
+    const expectedSnapshot = hashSnapshot({ dates, state, period: parseResult.period })
 
     return NextResponse.json({
       success: true,
+      ...metadata,
       outputs: parseResult.outputs,
       totalRowsParsed: parseResult.totalRowsParsed,
       fileName: parseResult.fileName,

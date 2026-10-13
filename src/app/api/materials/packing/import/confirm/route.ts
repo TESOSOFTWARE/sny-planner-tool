@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/db'
+import { packingPeriod } from '@/lib/excel/parsePackingReport'
 import type { PackingDecision } from '@/types'
 
 const bodySchema = z.object({
   outputs: z.array(z.unknown()).min(1).max(366),
   fileName: z.string(),
+  period: z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), source: z.enum(['filename', 'rows']) }),
   expectedSnapshot: z.string().min(1),
   replaceDates: z.array(z.string()),
 })
@@ -176,6 +178,12 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     return NextResponse.json({ success: false, code: 'INVALID_INPUT', error: error instanceof Error ? error.message : 'Dữ liệu Đóng gói không hợp lệ.' }, { status: 422 })
   }
+  const period = packingPeriod(parsed.data.fileName, outputs.map(row => row.date))
+  if (!period || period.month !== parsed.data.period.month || period.source !== parsed.data.period.source) {
+    return NextResponse.json({ success: false, code: 'INVALID_INPUT', error: 'Kỳ đối chiếu đã thay đổi. Vui lòng xem trước lại.' }, { status: 422 })
+  }
+  outputs = outputs.filter(row => row.date.slice(0, 7) === period.month)
+  if (!outputs.length) return NextResponse.json({ success: false, code: 'INVALID_INPUT', error: `Không có dòng thuộc kỳ ${period.month.slice(5)}/${period.month.slice(0, 4)}.` }, { status: 422 })
   const dates = outputs.map((output) => output.date)
   const requestedReplaceDates = [...parsed.data.replaceDates].sort()
   if (new Set(requestedReplaceDates).size !== requestedReplaceDates.length) {
@@ -194,7 +202,7 @@ export async function POST(req: NextRequest) {
         orderBy: { date: 'asc' },
       })
       const decisions = classify(outputs, existing as Array<{ id: string; date: Date } & PackingFields>)
-      const actualSnapshot = hashSnapshot({ dates, state: canonicalState(dates, existing as Array<{ id: string; date: Date } & PackingFields>) })
+      const actualSnapshot = hashSnapshot({ dates, state: canonicalState(dates, existing as Array<{ id: string; date: Date } & PackingFields>), period })
       const allIdentical = decisions.every((decision) => decision.status === 'identical')
       if (actualSnapshot !== parsed.data.expectedSnapshot && !allIdentical) {
         return { stale: true as const, decisions }

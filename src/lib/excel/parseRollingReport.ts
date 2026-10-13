@@ -3,6 +3,7 @@
 // Long-format parsing of 6 primary shift/size metric labels per order item per date.
 
 import * as XLSX from 'xlsx'
+import { rollingPeriodFromFileName, validateRollingPeriod, type RollingPeriod } from '@/lib/materials/rollingPeriod'
 
 export interface ParsedRollingMetric {
   date:           string   // ISO date string (YYYY-MM-DD)
@@ -24,7 +25,7 @@ export interface DateBlockMapping {
   startCol:     number
   endCol:       number
   spanCols:     number
-  isoDate:      string
+  isoDate:      string | null
   note:         string | null
 }
 
@@ -36,46 +37,32 @@ export interface ParseRollingResult {
   summarySkipped:   number
   availableSheets:  string[]
   fileName:         string
+  period:           RollingPeriod | null
+  periodRequired:   boolean
 }
 
 /**
  * Parses date label from Row 3 to YYYY-MM-DD ISO string.
  * Handles single date ("3st", "05th") and ambiguous joint labels ("04+05th", "27+28th").
  */
-export function parseDateLabelToISO(label: string, defaultMonth: number, defaultYear: number): { isoDate: string; note: string | null } {
+export function parseDateLabelToISO(label: string, month: number, year: number): { isoDate: string | null; note: string | null } {
+  const period = validateRollingPeriod(month, year)
   const clean = label.replace(/[^\d+]/g, '').trim()
-  if (!clean) {
-    return {
-      isoDate: `${defaultYear}-${String(defaultMonth).padStart(2, '0')}-01`,
-      note: 'Dùng ngày 01 mặc định do nhãn không chứa chữ số',
-    }
+  const days = clean.split('+').map(value => value ? Number(value) : NaN)
+  const lastDay = period ? new Date(Date.UTC(year, month, 0)).getUTCDate() : 0
+  if (!period || days.some(day => !Number.isInteger(day) || day < 1 || day > lastDay)) {
+    return { isoDate: null, note: `Bỏ khối "${label}": ngày không hợp lệ trong kỳ ${String(month).padStart(2, '0')}/${year}.` }
   }
-
-  if (clean.includes('+')) {
-    const firstDay = parseInt(clean.split('+')[0], 10)
-    const validDay = !isNaN(firstDay) && firstDay >= 1 && firstDay <= 31 ? firstDay : 1
-    const mm = String(defaultMonth).padStart(2, '0')
-    const dd = String(validDay).padStart(2, '0')
-    return {
-      isoDate: `${defaultYear}-${mm}-${dd}`,
-      note: `Nhãn gộp "${label}" -> Lấy ngày đầu tiên (${validDay})`,
-    }
-  }
-
-  const day = parseInt(clean, 10)
-  const validDay = !isNaN(day) && day >= 1 && day <= 31 ? day : 1
-  const mm = String(defaultMonth).padStart(2, '0')
-  const dd = String(validDay).padStart(2, '0')
   return {
-    isoDate: `${defaultYear}-${mm}-${dd}`,
-    note: null,
+    isoDate: `${year}-${String(month).padStart(2, '0')}-${String(days[0]).padStart(2, '0')}`,
+    note: days.length > 1 ? `Nhãn gộp "${label}" -> Lấy ngày đầu tiên (${days[0]})` : null,
   }
 }
 
 /**
  * Main parser for ROLLING sheet.
  */
-export function parseRollingReport(buffer: Buffer, fileName: string): ParseRollingResult {
+export function parseRollingReport(buffer: Buffer, fileName: string, selectedPeriod?: RollingPeriod): ParseRollingResult {
   const wb = XLSX.read(buffer, { raw: false, cellDates: true })
   const availableSheets = wb.SheetNames
 
@@ -87,13 +74,9 @@ export function parseRollingReport(buffer: Buffer, fileName: string): ParseRolli
   const ws = wb.Sheets[sheetName]
   const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: null })
 
-  // Detect month and year from fileName (e.g. "07-2026" or "08-2026")
-  let month = 7, year = 2026
-  const monthMatch = fileName.match(/(\d{2})[-_](\d{4})/)
-  if (monthMatch) {
-    month = parseInt(monthMatch[1], 10)
-    year  = parseInt(monthMatch[2], 10)
-  }
+  const period = selectedPeriod ? validateRollingPeriod(selectedPeriod.month, selectedPeriod.year) : rollingPeriodFromFileName(fileName)
+  if (!period) return { metrics: [], dateBlockMappings: [], totalOrderRows: 0, nonZeroCount: 0, summarySkipped: 0, availableSheets, fileName, period: null, periodRequired: true }
+  const { month, year } = period
 
   const rowDate = (rows[3] as unknown[]) || []
   const rowMetric = (rows[4] as unknown[]) || []
@@ -181,6 +164,7 @@ export function parseRollingReport(buffer: Buffer, fileName: string): ParseRolli
     const weightKgsOrder = row[5] != null ? Number(row[5]) : null
 
     for (const block of dateBlockMappings) {
+      if (!block.isoDate) continue
       // Each block spans columns from block.startCol to block.endCol
       // Offset 0..5 = 6 Primary Shift Metrics (QUANTITY/TOTAL(M)/WEIGHT x DAY-NIGHT/SMALL-BIG)
       // Offset 6..7 = 2 Summary Columns (QUANTITY & WEIGHT total) -> EXPLICITLY SKIPPED
@@ -230,5 +214,7 @@ export function parseRollingReport(buffer: Buffer, fileName: string): ParseRolli
     summarySkipped,
     availableSheets,
     fileName,
+    period,
+    periodRequired: false,
   }
 }

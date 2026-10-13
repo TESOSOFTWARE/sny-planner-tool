@@ -1,54 +1,115 @@
-'use client'
+﻿'use client'
 
 import { useState, useMemo } from 'react'
-import type { SerializedMaterial } from './EditMaterialModal'
+import { reportPeriodLabel } from './MaterialReportsModal'
+import type { SerializedMaterial, MaterialReportPayload } from './EditMaterialModal'
+import { reconcileStock, reconciliationRange, totalReconciliation } from '@/lib/materials/reconciliation'
 
 interface Props {
-  materials: SerializedMaterial[] // pre-filtered to HDPE
+  materials: SerializedMaterial[] // HDPE + MB, selected common date
+  reportDate: string | null
+  reportDates: string[]
+  onReportDateChange: (date: string) => void
+  onReports: (material: SerializedMaterial) => void
   onEdit: (material: SerializedMaterial) => void
   onDelete: (material: SerializedMaterial) => void
   onHistory: (material: SerializedMaterial) => void
   onRowClick: (material: SerializedMaterial) => void
   onImport: () => void
+  onImportHistory: () => void
 }
 
-function StatusBadge({ stock, threshold }: { stock: number; threshold: number | null }) {
-  if (threshold === null) {
-    return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-inter font-semibold bg-surface-container text-secondary border border-outline-variant">Chưa đặt ngưỡng</span>
-  }
-  if (stock < threshold) {
-    return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-inter font-semibold bg-error-container text-error border border-error/30">Cần nhập thêm</span>
-  }
-  return <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-inter font-semibold bg-[#f0fdf4] text-[#15803d] border border-[#22c55e]/30">Đủ hàng</span>
+/**
+ * MoM §3.1 — 7 cột đúng theo bảng khách đang dùng trong file nguồn.
+ * Giữ nguyên lỗi chính tả gốc ở nhãn (FISRT/OUT USEING) để khách đối chiếu được.
+ */
+const REPORT_COLUMNS = [
+  { key: 'firstStock', label: 'First Stock' },
+  { key: 'inQty', label: 'In' },
+  { key: 'outBroken', label: 'HDPE Broken' },
+  { key: 'outTape', label: 'Xuất Tape' },
+  { key: 'outReject', label: 'Reject' },
+  { key: 'outUsing', label: 'Out Useing' },
+  { key: 'lastStock', label: 'Last Stock' },
+] as const
+
+type ReportKey = (typeof REPORT_COLUMNS)[number]['key']
+
+/**
+ * MoM §3.2 — ba khối đúng thứ tự file nguồn. Nguyên sinh và tái chế có
+ * CÔNG THỨC TỒN KHÁC NHAU (tái chế trừ REJECT) nên không được gộp.
+ */
+const SECTIONS = [
+  { id: 'NGUYEN_SINH', title: 'HDPE nguyên sinh' },
+  { id: 'TAI_CHE', title: 'HDPE tái chế (Recycled)' },
+  { id: 'MB', title: 'Hạt màu (Masterbatch)' },
+  { id: 'CHUA_PHAN_LOAI', title: 'Chưa phân loại' },
+] as const
+
+/** Số chưa có thì để trống — không hiển thị 0 để khỏi nhầm "đã đo được = 0". */
+function Num({ value }: { value: number | undefined }) {
+  if (value == null || !Number.isFinite(value)) return <span className="italic text-outline">—</span>
+  return <>{value.toLocaleString('vi-VN')}</>
 }
 
-export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowClick, onImport }: Props) {
+function sumBy(rows: SerializedMaterial[], key: ReportKey): number | undefined {
+  const periods = rows.map(row => row.latestReport ? `${row.latestReport.reportDate}|${row.latestReport.payload.reportPeriodEnd ?? row.latestReport.reportDate}` : '')
+  if (periods.some(period => !period || period !== periods[0])) return undefined
+  const values = rows
+    .map(r => (r.latestReport?.payload as MaterialReportPayload | undefined)?.[key])
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+  return values.length === rows.length && values.length > 0 ? values.reduce((a, b) => a + b, 0) : undefined
+}
+
+export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowClick, onImport, onImportHistory, reportDate, reportDates, onReportDateChange, onReports }: Props) {
   const [query, setQuery] = useState('')
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return materials
-    return materials.filter(m => m.name.toLowerCase().includes(q))
-  }, [materials, query])
+    const sameDate = materials.map(material => ({ ...material, latestReport: material.latestReport?.reportDate.slice(0, 10) === reportDate ? material.latestReport : null }))
+    if (!q) return sameDate
+    return sameDate.filter(m => `${m.name} ${m.color ?? ''} ${m.brand ?? ''}`.toLowerCase().includes(q))
+  }, [materials, query, reportDate])
+
+  const sections = useMemo(
+    () =>
+      SECTIONS.map(section => ({
+        ...section,
+        rows: filtered.filter(m =>
+          section.id === 'MB' ? m.group === 'MB' : m.group === 'HDPE' && (section.id === 'CHUA_PHAN_LOAI' ? !m.subGroup : m.subGroup === section.id),
+        ),
+      })).filter(section => section.rows.length > 0),
+    [filtered],
+  )
+
+  const colCount = 2 + REPORT_COLUMNS.length + 1 + 3
 
   return (
     <div className="space-y-4">
-      {/* Tab Header Actions */}
-      <div className="flex items-center justify-between">
-        <div className="relative w-72">
-          <span className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-outline">
-            <span className="material-symbols-outlined text-[18px]">search</span>
-          </span>
-          <input
-            type="search"
-            placeholder="Tìm kiếm NVL HDPE..."
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            className="w-full bg-surface-container-lowest border-[0.5px] border-outline-variant rounded pl-9 pr-4 py-2 text-sm text-on-surface focus:outline-none focus:border-primary transition-colors"
-          />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative w-72">
+            <span className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-outline">
+              <span className="material-symbols-outlined text-[18px]">search</span>
+            </span>
+            <input
+              type="search"
+              aria-label="Tìm nguyên liệu" placeholder="Tìm kiếm nhựa, hạt màu..."
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              className="w-full bg-surface-container-lowest border-[0.5px] border-outline-variant rounded pl-9 pr-4 py-2 text-sm text-on-surface focus:outline-none focus:border-primary transition-colors"
+            />
+          </div>
+          <label className="text-xs text-secondary">Ngày báo cáo
+            <select aria-label="Ngày báo cáo HDPE" value={reportDate ?? ''} onChange={e => onReportDateChange(e.target.value)} className="ml-2 border border-outline-variant rounded p-2 bg-surface text-on-surface">
+              {!reportDate && <option value="">Chưa có báo cáo</option>}
+              {reportDates.map(date => <option key={date} value={date}>{date.split('-').reverse().join('/')}</option>)}
+            </select>
+          </label>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={onImportHistory} className="inline-flex items-center gap-2 px-4 py-2 border border-primary text-primary rounded-md text-sm font-medium hover:bg-surface-container focus-visible:ring-2 focus-visible:ring-primary">Nhập lịch sử báo cáo</button>
           <a
             href="/api/materials/template/hdpe"
             className="inline-flex items-center gap-2 px-4 py-2 border border-outline text-on-surface-variant hover:bg-surface-container-lowest rounded-md text-sm font-medium transition-colors"
@@ -67,69 +128,123 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
         </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-lg overflow-hidden">
-        <table className="w-full">
-          <thead>
+      <p className="text-xs text-secondary">Chỉ hiển thị số liệu cùng ngày đã chọn; dấu — là chưa có dữ liệu. TOTAL để trống nếu có dòng thiếu hoặc khác khoảng ngày nguồn. Tồn hiện tại có thể khác báo cáo lịch sử.</p>
+      <p className="text-xs text-secondary">Đối chiếu chuẩn hoá: AC = Tồn đầu + Nhập − Out Useing − Xuất Tape; nhựa tái chế trừ thêm Reject. Broken giữ theo nguồn, không trừ vào AC. AD lấy tồn cuối nguồn; check chỉ cảnh báo, không tự sửa tồn.</p>
+      <p className="text-xs text-secondary">Thiếu số liệu nguồn để tính AC; ô trống không được coi là 0. Dấu — trong cột đối chiếu có chú thích lý do.</p>
+      <div className="bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-lg overflow-x-auto">
+        <table className="w-full min-w-[1000px]">
+          <thead className="sticky top-0 z-20">
             <tr className="bg-surface-container border-b-[0.5px] border-outline-variant">
-              {['Tên NVL', 'Tồn kho (kg)', 'Ngưỡng TT (kg)', 'Trạng thái', 'Ghi chú', 'Actions'].map((h) => (
-                <th key={h} className="px-4 py-3 text-left text-xs font-inter font-medium text-secondary uppercase tracking-widest whitespace-nowrap">
-                  {h}
+              <th className="sticky left-0 z-30 min-w-[180px] max-w-[200px] bg-surface-container px-4 py-3 text-left text-xs font-inter font-medium text-secondary uppercase tracking-widest whitespace-nowrap">
+                Tên NVL
+              </th>
+              {REPORT_COLUMNS.map(col => (
+                <th
+                  key={col.key}
+                  className="px-3 py-3 text-right text-xs font-inter font-medium text-secondary uppercase tracking-widest whitespace-nowrap"
+                >
+                  {col.label}
                 </th>
               ))}
+              {['AC', 'AD', 'check'].map(label => <th key={label} className="px-3 py-3 text-right text-xs font-medium text-secondary whitespace-nowrap">{label}</th>)}
+              <th className="px-3 py-3 text-right text-xs font-inter font-medium text-secondary uppercase tracking-widest whitespace-nowrap">
+                Ngưỡng TT
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-inter font-medium text-secondary uppercase tracking-widest whitespace-nowrap">
+                Thao tác
+              </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-outline-variant/50">
-            {filtered.length === 0 ? (
+
+          {sections.length === 0 ? (
+            <tbody>
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-secondary">
+                <td colSpan={colCount} className="px-4 py-8 text-center text-secondary">
                   Không tìm thấy nguyên liệu nào.
                 </td>
               </tr>
-            ) : (
-              filtered.map((mat) => {
-                const stock = parseFloat(mat.currentStock)
-                const threshold = mat.minThreshold != null ? parseFloat(mat.minThreshold) : null
-
-                return (
-                  <tr
-                    key={mat.id}
-                    onClick={() => onRowClick(mat)}
-                    className="hover:bg-[#f0eded] cursor-pointer transition-colors duration-150"
+            </tbody>
+          ) : (
+            sections.map(section => (
+              <tbody key={section.id} className="divide-y divide-outline-variant/50">
+                <tr className="bg-surface-container-low">
+                  <td
+                    colSpan={colCount}
+                    className="px-4 py-2 text-xs font-inter font-semibold text-on-surface-variant uppercase tracking-widest"
                   >
-                    <td className="px-4 py-3 font-mono text-sm font-semibold text-on-surface whitespace-nowrap">
-                      {mat.name}
+                    <span className="sticky left-4">{section.title}
+                    <span className="ml-2 font-normal normal-case tracking-normal text-outline">
+                      {section.rows.length} mã
+                    </span></span>
+                  </td>
+                </tr>
+
+                {section.rows.map((mat, index) => {
+                  const payload = mat.latestReport?.payload as MaterialReportPayload | undefined
+                  const threshold = mat.minThreshold != null ? parseFloat(mat.minThreshold) : null
+                  const last = payload?.lastStock
+                  const below = threshold !== null && typeof last === 'number' && last < threshold
+                  const reconciliation = reconcileStock(payload, mat)
+
+                  return (
+                    <tr
+                      key={mat.id}
+                      onClick={() => onRowClick(mat)}
+                      className={`group hover:bg-[#f0eded] cursor-pointer transition-colors duration-150 ${index % 2 === 0 ? 'bg-surface-container-lowest' : 'bg-surface-container-low'}`}
+                    >
+                      <td className={`sticky left-0 z-10 min-w-[180px] max-w-[200px] px-4 py-3 font-mono text-sm font-semibold text-on-surface group-hover:bg-[#f0eded] ${index % 2 === 0 ? 'bg-surface-container-lowest' : 'bg-surface-container-low'}`}>
+                        <button type="button" title={mat.name} onClick={e => { e.stopPropagation(); onReports(mat) }} className="max-w-full truncate text-left hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">{mat.name}</button>
+                        {mat.latestReport && <div className="text-xs font-normal text-secondary mt-1">Kỳ nguồn: {reportPeriodLabel(mat.latestReport.reportDate, mat.latestReport.payload)}</div>}
+                        {mat.latestReport && <div className="text-xs font-normal text-secondary mt-1">{reconciliationRange([mat.latestReport])}</div>}
+                        {mat.group === 'MB' && <div className="text-xs font-normal text-secondary mt-1">ITEM: {mat.itemCode ?? payload?.itemCode ?? '—'} · Mã màu: {mat.color ?? '—'} · Hãng: {mat.brand ?? '—'} · Độ bền màu: {mat.lightFastness ?? '—'}</div>}
+                      </td>
+                      {REPORT_COLUMNS.map(col => (
+                        <td
+                          key={col.key}
+                          className={`px-3 py-3 text-right font-mono text-sm tabular-nums whitespace-nowrap ${
+                            col.key === 'lastStock' && below ? 'text-error font-semibold' : 'text-on-surface'
+                          }`}
+                        >
+                          <Num value={payload?.[col.key]} />
+                        </td>
+                      ))}
+                      {(['ac', 'ad', 'check'] as const).map(key => <td key={key} title={reconciliation.reason} className={`px-3 py-3 text-right font-mono text-sm tabular-nums whitespace-nowrap ${key === 'check' && reconciliation.warning ? 'text-error font-semibold' : 'text-on-surface'}`}><Num value={reconciliation[key]} /></td>)}
+                      <td className="px-3 py-3 text-right font-mono text-sm text-on-surface-variant tabular-nums whitespace-nowrap">
+                        {threshold != null ? threshold.toLocaleString('vi-VN') : <span className="italic text-outline">—</span>}
+                      </td>
+                      <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => onHistory(mat)} title="Lịch sử" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-outline-variant text-secondary bg-transparent hover:bg-surface-container">
+                            <span className="material-symbols-outlined text-[16px]">history</span>
+                          </button>
+                          <button onClick={() => onEdit(mat)} title="Chỉnh sửa" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-primary text-primary bg-transparent hover:bg-surface-container">
+                            <span className="material-symbols-outlined text-[16px]">edit</span>
+                          </button>
+                          <button onClick={() => onDelete(mat)} title="Xóa" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-[#ba1a1a] text-[#ba1a1a] bg-transparent hover:bg-[#ba1a1a]/10">
+                            <span className="material-symbols-outlined text-[16px]">delete</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+
+                <tr className="bg-surface-container/60 font-semibold">
+                  <td className="sticky left-0 z-10 bg-surface-container px-4 py-2 text-sm text-on-surface-variant whitespace-nowrap">TOTAL</td>
+                  {REPORT_COLUMNS.map(col => (
+                    <td key={col.key} className="px-3 py-2 text-right font-mono text-sm tabular-nums text-on-surface whitespace-nowrap">
+                      <Num value={sumBy(section.rows, col.key)} />
                     </td>
-                    <td className={`px-4 py-3 font-mono text-sm tabular-nums whitespace-nowrap ${threshold !== null && stock < threshold ? 'text-error font-semibold' : 'text-on-surface'}`}>
-                      {stock.toLocaleString('vi-VN')}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-sm text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {threshold != null ? threshold.toLocaleString('vi-VN') : <span className="italic text-outline">—</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge stock={stock} threshold={threshold} />
-                    </td>
-                    <td className="px-4 py-3 text-sm text-on-surface-variant max-w-[200px] truncate">
-                      {mat.note ?? <span className="italic text-outline">—</span>}
-                    </td>
-                    <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center gap-2">
-                        <button onClick={() => onHistory(mat)} title="Lịch sử" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-outline-variant text-secondary bg-transparent hover:bg-surface-container">
-                          <span className="material-symbols-outlined text-[16px]">history</span>
-                        </button>
-                        <button onClick={() => onEdit(mat)} title="Chỉnh sửa" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-primary text-primary bg-transparent hover:bg-surface-container">
-                          <span className="material-symbols-outlined text-[16px]">edit</span>
-                        </button>
-                        <button onClick={() => onDelete(mat)} title="Xóa" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-[#ba1a1a] text-[#ba1a1a] bg-transparent hover:bg-[#ba1a1a]/10">
-                          <span className="material-symbols-outlined text-[16px]">delete</span>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })
-            )}
-          </tbody>
+                  ))}
+                  {(['ac', 'ad', 'check'] as const).map(key => {
+                    const total = totalReconciliation(section.rows)
+                    return <td key={key} title={total.reason} className={`px-3 py-2 text-right font-mono text-sm tabular-nums whitespace-nowrap ${key === 'check' && total.warning ? 'text-error' : 'text-on-surface'}`}><Num value={total[key]} /></td>
+                  })}
+                  <td colSpan={2} />
+                </tr>
+              </tbody>
+            ))
+          )}
         </table>
       </div>
     </div>

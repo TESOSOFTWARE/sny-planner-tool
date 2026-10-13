@@ -1,12 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
-import { piPrefix, getCatalogItemCodesForPi, ItemCodeOption } from '@/lib/orders/itemCodeCatalog'
+import { piPrefix, getCatalogItemCodesForPi, FINISHED_GOODS_ITEM_CODES, ItemCodeOption } from '@/lib/orders/itemCodeCatalog'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
+    if (searchParams.has('code')) {
+      const code = (searchParams.get('code') ?? '').trim()
+      if (!code || code.length > 100) return NextResponse.json([])
+      const catalogMatch = FINISHED_GOODS_ITEM_CODES.find(option => option.code.toUpperCase() === code.toUpperCase())
+      if (catalogMatch) return NextResponse.json([catalogMatch])
+      const orders = await prisma.productionOrder.findMany({
+        where: { itemCode: { equals: code, mode: 'insensitive' } },
+        select: { itemCode: true, piNumber: true, color: true, colorVersion: true, uvPct: true, meshType: true, mbCode: true, description: true },
+        orderBy: { updatedAt: 'desc' },
+        take: 1,
+      })
+      const latest = orders[0]
+      const options: ItemCodeOption[] = latest?.itemCode ? [{
+        code: latest.itemCode.trim(),
+        label: `${latest.piNumber} · ${latest.color || 'N/A'} · ${latest.description || latest.meshType || 'Lịch sử đơn'}`,
+        prefix: piPrefix(latest.piNumber),
+        colorName: latest.color || undefined,
+        colorVersion: latest.colorVersion || 'STD',
+        uvPct: latest.uvPct != null ? Number(latest.uvPct) : undefined,
+        meshType: latest.meshType || undefined,
+        mbCode: latest.mbCode || undefined,
+      }] : []
+      return NextResponse.json(options)
+    }
     const pi = (searchParams.get('pi') ?? '').trim()
     const prefix = piPrefix(pi)
 

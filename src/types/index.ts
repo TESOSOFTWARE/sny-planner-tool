@@ -183,6 +183,9 @@ export interface ParsedOrder {
   // Validation status fields for preview UI
   isValid?: boolean
   validationErrors?: string[]
+  validationWarnings?: string[]
+  rawPacking?: string | null
+  rawUnit?: string | null
 }
 
 export type OrderImportStatus = 'new' | 'identical' | 'conflict' | 'invalid'
@@ -258,6 +261,7 @@ export interface PackingDecision {
 }
 
 export interface PackingConfirmBody {
+  period: import('@/lib/excel/parsePackingReport').PackingPeriod
   outputs: ParsedPackingOutput[]
   fileName: string
   expectedSnapshot: string

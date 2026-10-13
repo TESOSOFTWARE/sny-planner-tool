@@ -1,101 +1,68 @@
 // src/app/api/schedule/import/confirm/route.ts
 // POST /api/schedule/import/confirm
-// Receives the preview payload + user decisions, executes the atomic transaction:
+// Re-parses the source upload and validates preview/catalogue before the atomic transaction:
 //   1. Backup deleted assignments → ScheduleImportLog
-//   2. Delete existing tháng 7 assignments (+ optional borderline)
-//   3. Create draft ProductionOrders for new PI numbers
+//   2. Replace assignments in the acknowledged month (+ optional borderline)
+//   3. Resolve approved first-line links and create RESERVED placeholders
 //   4. Create MachineAssignments for all valid PI
-//   5. Upsert MachineSpec (40 machines)
+//   5. Update changed MachineSpec widths only with explicit opt-in
 // Any failure → full rollback, nothing is written.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
+import { parseScheduleReport } from '@/lib/excel/parseScheduleReport'
+import { buildScheduleImportPlan, schedulePlanSnapshot } from '@/lib/schedule/importPlan'
+import { getSchedulePeriodConfirmation, schedulePeriodKey } from '@/lib/schedule/importPeriod'
 import { outputFallsWithinSchedule, resolveScheduleReplacement, scheduleOutputBounds } from '@/lib/schedule/importSafety'
 
 export const maxDuration = 60  // Large transaction may take time
 
-interface AssignmentRef {
-  id:        string
-  machineId: string
-  piNumber:  string
-  startDate: string
-  endDate:   string
-  productionMeters?: number
-}
-
-interface AssignmentToCreate {
-  machineId: string
-  piNumber:  string
-  startDate: string
-  endDate:   string
-}
-
-interface MachineSpecEntry {
-  machineId: string
-  widthM:    number
-}
-
-interface ConfirmBody {
+interface ConfirmDecisions {
+  updateMachineSpecs?: boolean
+  deleteBorderline: boolean
+  acknowledgedPeriod?: string
   assignmentSnapshot: { id: string; orderId: string; updatedAt: string }[]
-  toDelete:             AssignmentRef[]
-  deleteBorderline:     boolean
-  borderlineAssignment: AssignmentRef | null
-  borderlineAssignments?: AssignmentRef[]
-  toCreateDraftOrders:  string[]         // piNumber[]
-  toCreateAssignments:  AssignmentToCreate[]
-  machineSpecs:         MachineSpecEntry[]
-  year:                 number
-  month:                number
-  summary: {
-    deleteCount:         number
-    assignmentsToCreate: number
-    draftsToCreate:      number
-    ambiguousCount:      number
-    invalidCount:        number
-  }
-  ambiguousPiNumbers?: string[]
 }
-
 export async function POST(req: NextRequest) {
-  let body: ConfirmBody
+  let form: FormData, body: ConfirmDecisions
   try {
-    body = await req.json()
+    form = await req.formData()
+    body = JSON.parse(String(form.get('decisions') ?? ''))
   } catch {
-    return NextResponse.json({ success: false, error: 'Invalid JSON body.' }, { status: 400 })
+    return NextResponse.json({success: false, error: 'Gửi file và lựa chọn xác nhận hợp lệ.'}, {status: 422})
   }
-
-  const {
-    toDelete,
-    deleteBorderline,
-    borderlineAssignment,
-    toCreateDraftOrders,
-    toCreateAssignments,
-    machineSpecs,
-    year,
-    month,
-    summary,
-  } = body
-
-  // Validation
-  if (typeof deleteBorderline !== 'boolean' || !Array.isArray(toDelete) || !Array.isArray(machineSpecs) || !Array.isArray(body.assignmentSnapshot) || !Array.isArray(toCreateAssignments) || !Array.isArray(toCreateDraftOrders)) {
-    return NextResponse.json({ success: false, error: 'Payload không hợp lệ.' }, { status: 400 })
+  const file = form.get('file'), sheetName = String(form.get('sheetName') ?? ''), expectedSnapshot = String(form.get('expectedSnapshot') ?? '')
+  if (!(file instanceof Blob) || !(file instanceof File) || !file.name.toLowerCase().endsWith('.xlsx') || file.size > 20 * 1024 * 1024 || !sheetName.trim()) {
+    return NextResponse.json({success: false, error: 'File .xlsx hoặc sheet không hợp lệ (tối đa 20 MB).'}, {status: 422})
   }
-  if (!Number.isInteger(year) || year < 2020 || year > 2100 || !Number.isInteger(month) || month < 1 || month > 12) {
-    return NextResponse.json({ success: false, error: 'Năm/tháng import không hợp lệ.' }, { status: 400 })
+  if (!body || typeof body.deleteBorderline !== 'boolean' || (body.updateMachineSpecs !== undefined && typeof body.updateMachineSpecs !== 'boolean') ||
+      !Array.isArray(body.assignmentSnapshot) || body.assignmentSnapshot.some(row => !row || typeof row.id !== 'string' || typeof row.orderId !== 'string' || typeof row.updatedAt !== 'string') || !/^[a-f0-9]{64}$/.test(expectedSnapshot)) {
+    return NextResponse.json({success: false, error: 'Lựa chọn xác nhận không hợp lệ.'}, {status: 400})
   }
-  if (toCreateAssignments.some(a => !a || typeof a.machineId !== 'string' || !a.machineId.trim() ||
-    typeof a.piNumber !== 'string' || !a.piNumber.trim() ||
-    !Number.isFinite(Date.parse(a.startDate)) || !Number.isFinite(Date.parse(a.endDate)) ||
-    Date.parse(a.startDate) > Date.parse(a.endDate))) {
-    return NextResponse.json({ success: false, error: 'Khoảng ngày hoặc mã máy/PI không hợp lệ.' }, { status: 400 })
+  const buffer = Buffer.from(await file.arrayBuffer())
+  let parsed
+  try { parsed = parseScheduleReport(buffer, sheetName) } catch (error) {
+    return NextResponse.json({success: false, error: error instanceof Error ? error.message : 'Không đọc được file Excel.'}, {status: 422})
   }
-
+  const periodConfirmation = getSchedulePeriodConfirmation(parsed)
+  if (periodConfirmation && body.acknowledgedPeriod !== schedulePeriodKey(periodConfirmation.importPeriod)) {
+    return NextResponse.json({success: false, error: 'Kỳ trong tên sheet khác tiêu đề bên trong. Vui lòng xem trước và xác nhận kỳ.', periodConfirmation}, {status: 422})
+  }
+  const {machineSpecs, year, month} = parsed
+  const {deleteBorderline} = body
   try {
     const result = await prisma.$transaction(async (tx) => {
     // Block concurrent schedule edits and output writes until the replacement
     // commits. Table locks also cover new rows, unlike locking existing IDs.
     await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
-    await tx.$executeRawUnsafe('LOCK TABLE "machine_assignments", "knitting_daily_output" IN SHARE ROW EXCLUSIVE MODE')
+    await tx.$executeRawUnsafe('LOCK TABLE "production_orders", "machine_assignments", "knitting_daily_output" IN SHARE ROW EXCLUSIVE MODE')
+    const catalogue = await tx.productionOrder.findMany({select: {id: true, piNumber: true, subLineIndex: true, isPlaceholder: true}})
+    if (schedulePlanSnapshot(buffer, parsed.sheetName, catalogue) !== expectedSnapshot) {
+      throw new ScheduleConflict('STALE_ORDER_CATALOGUE', 'Dữ liệu đơn đã thay đổi, xem trước lại.')
+    }
+    const plan = buildScheduleImportPlan(parsed, catalogue)
+    const {toCreateAssignments} = plan
+    const summary = {assignmentsToCreate: toCreateAssignments.length, draftsToCreate: plan.toCreateDraftOrders.length, ambiguousCount: plan.needsManual.length, invalidCount: plan.invalidCellCount}
     const monthStart = new Date(`${year}-${String(month).padStart(2, '0')}-01T00:00:00+07:00`)
     const nextMonthStart = new Date(month === 12
       ? `${year + 1}-01-01T00:00:00+07:00`
@@ -173,38 +140,9 @@ export async function POST(req: NextRequest) {
 
       // ── STEP 2: Delete existing assignments ───────────────────────────────
 
-      // ── STEP 3: Create draft ProductionOrders for new PI numbers ──────────
-      // customer = sentinel string (file has no customer data)
-      // isDraft = true, dataSource = 'import'
-      let createdDrafts: { id: string; piNumber: string }[] = []
-      const safePiNumbers = new Set(safeAssignments.map(a => a.piNumber.toLowerCase()))
-      const draftsToCreate = toCreateDraftOrders.filter(pi => safePiNumbers.has(pi.toLowerCase()))
-      if (draftsToCreate.length > 0) {
-        createdDrafts = await tx.productionOrder.createManyAndReturn({
-          data: draftsToCreate.map(pi => ({
-            piNumber:     pi,
-            customer:     'Chưa xác định (import từ lịch máy)',
-            isDraft:      false,
-            lifecycleStatus: 'RESERVED',
-            isPlaceholder: true,
-            dataSource:   'import',
-            subLineIndex: 0,
-            orderDate:    new Date(),
-          })),
-          select: { id: true, piNumber: true },
-          skipDuplicates: true,  // safety: skip if PI already exists (race condition)
-        })
-      }
-
       // ── STEP 4: Build piNumber → orderId map ──────────────────────────────
       const piToId = new Map<string, string>()
 
-      // From newly created drafts
-      for (const o of createdDrafts) {
-        piToId.set(o.piNumber.toLowerCase(), o.id)
-      }
-
-      // From existing orders (PI in file but not in toCreateDraftOrders)
       const existingPiNumbers = Array.from(
         new Set(
           safeAssignments
@@ -212,22 +150,20 @@ export async function POST(req: NextRequest) {
         )
       )
 
-      for (const pi of existingPiNumbers) {
-        // Already resolved from drafts? Skip.
-
-        // Case-insensitive lookup for existing order
-        // Pick subLineIndex 0 (only unambiguous single-subline PI are in this list)
-        const existing = await tx.productionOrder.findMany({
-          where: {
-            piNumber: { equals: pi, mode: 'insensitive' },
-          },
-          select: { id: true },
-        })
-        if (existing.length === 1) piToId.set(pi.toLowerCase(), existing[0].id)
-        else throw new ScheduleConflict('UNRESOLVED_SCHEDULE_PI', `PI ${pi} không có đơn duy nhất. Hãy xử lý liên kết rồi preview lại.`)
+      const safeDrafts = plan.toCreateDraftOrders.filter(draft => existingPiNumbers.includes(draft.piNumber))
+      const createdDrafts = safeDrafts.length > 0 ? await tx.productionOrder.createManyAndReturn({
+        data: safeDrafts.map(draft => ({piNumber: draft.piNumber, customer: 'Chưa xác định (import từ lịch máy)', isDraft: false, lifecycleStatus: 'RESERVED', isPlaceholder: true, dataSource: 'import', subLineIndex: 0, orderDate: new Date()})),
+        select: {id: true, piNumber: true},
+      }) : []
+      for (const assignment of safeAssignments) {
+        const existing = toCreateAssignments.find(row => row.piNumber === assignment.piNumber)?.orderId
+        const orderId = existing ?? createdDrafts.find(row => row.piNumber === assignment.piNumber)?.id
+        if (!orderId) throw new ScheduleConflict('UNRESOLVED_SCHEDULE_PI', `PI ${assignment.piNumber} chưa liên kết được. Vui lòng xem trước lại.`)
+        piToId.set(assignment.piNumber.toLowerCase(), orderId)
       }
 
-      const draftOrderIds = new Set(
+      const draftOrderIds = new Set<string>(createdDrafts.map(row => row.id))
+      for (const row of (
         (await tx.productionOrder.findMany({
           where: {
             id: { in: Array.from(piToId.values()) },
@@ -240,8 +176,7 @@ export async function POST(req: NextRequest) {
             ],
           },
           select: { id: true },
-        })).map(order => order.id)
-      )
+        })))) draftOrderIds.add(row.id)
 
       // Promote any pure DRAFT orders to RESERVED so they match AC-03 / AC-04 guard
       if (draftOrderIds.size > 0) {
@@ -252,8 +187,7 @@ export async function POST(req: NextRequest) {
       }
 
       // ── STEP 5: Create MachineAssignments ────────────────────────────────
-      // Resolve every replacement before deleting anything; unresolved PI
-      // rolls back draft creation and backup as well.
+      // Resolve every replacement before deleting anything; unresolved PI rolls back the backup.
       const deleteResult = await tx.machineAssignment.deleteMany({
         where: { id: { in: idsToDelete } },
       })
@@ -264,6 +198,7 @@ export async function POST(req: NextRequest) {
           orderId:   piToId.get(a.piNumber.toLowerCase())!,
           startDate: new Date(a.startDate),
           endDate:   new Date(a.endDate),
+          endDateSource: "IMPORTED" as const,
           isPlaceholder: draftOrderIds.has(piToId.get(a.piNumber.toLowerCase())!),
         }))
 
@@ -271,13 +206,33 @@ export async function POST(req: NextRequest) {
         data: assignmentRows,
       })
 
-      // ── STEP 6: Upsert MachineSpec (40 machines) ─────────────────────────
-      for (const spec of machineSpecs) {
-        await tx.machineSpec.upsert({
-          where:  { machineId: spec.machineId },
-          create: { machineId: spec.machineId, widthM: spec.widthM },
-          update: { widthM: spec.widthM },
-        })
+      // Count every superseded placeholder separately, including other months
+      // and assignments retained because output protects them. Nothing is moved
+      // outside this import and no placeholder order is deleted.
+      const remainingGroups = plan.supersededDrafts.length > 0 ? await tx.machineAssignment.groupBy({
+        by: ['orderId'],
+        where: {orderId: {in: plan.supersededDrafts.map(draft => draft.draftOrderId)}},
+        _count: true,
+      }) : []
+      const remainingById = new Map(remainingGroups.map(group => [group.orderId, group._count]))
+      const supersededDrafts = plan.supersededDrafts.map(draft => ({
+        draftOrderId: draft.draftOrderId,
+        draftPiNumber: draft.draftPiNumber,
+        realPiNumber: draft.realPiNumber,
+        movedCount: safeAssignments.filter(row => row.piNumber === draft.realPiNumber).length,
+        remainingAssignments: remainingById.get(draft.draftOrderId) ?? 0,
+      }))
+
+      // Widths are independent of scheduling: preserve them unless explicitly selected.
+      let specsUpserted = 0
+      if (body.updateMachineSpecs === true && machineSpecs.length > 0) {
+        const storedSpecs = await tx.machineSpec.findMany({ where: { machineId: { in: machineSpecs.map(spec => spec.machineId) } }, select: { machineId: true, widthM: true } })
+        const widths = new Map(storedSpecs.map(spec => [spec.machineId, Number(spec.widthM)]))
+        for (const spec of machineSpecs) {
+          if (widths.get(spec.machineId) === spec.widthM) continue
+          await tx.machineSpec.upsert({ where: { machineId: spec.machineId }, create: spec, update: { widthM: spec.widthM } })
+          specsUpserted++
+        }
       }
 
       return {
@@ -287,7 +242,11 @@ export async function POST(req: NextRequest) {
         deleted:       deleteResult.count,
         created:       createResult.count,
         draftsCreated: createdDrafts.length,
-        specsUpserted: machineSpecs.length,
+        supersededDrafts,
+        firstLineLinked: plan.firstLineLinks.filter(link => existingPiNumbers.includes(link.piNumber)).map(link => ({...link, cellCount: safeAssignments.filter(row => row.piNumber === link.piNumber).length})),
+        draftOrdersCreated: safeDrafts.map(draft => ({...draft, cellCount: safeAssignments.filter(row => row.piNumber === draft.piNumber).length, orderId: createdDrafts.find(row => row.piNumber === draft.piNumber)!.id})),
+        needsManual: plan.needsManual,
+        specsUpserted,
         piUnresolved:  toCreateAssignments.filter(
           a => !piToId.has(a.piNumber.toLowerCase())
         ).length,
@@ -297,7 +256,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       imported: result,
-      needsManualAssignment: body.ambiguousPiNumbers ?? [],
+      needsManualAssignment: result.needsManual,
       message: `Import thành công: tạo ${result.created} lịch, giữ nguyên ${result.preserved} lịch có sản lượng và ${result.preservedConflict} lịch cũ thuộc phần xung đột, bỏ qua ${result.skippedProtected.length} lịch mới xung đột; tạo ${result.draftsCreated} đơn nháp, cập nhật ${result.specsUpserted} thông số máy.`,
     })
   } catch (err) {

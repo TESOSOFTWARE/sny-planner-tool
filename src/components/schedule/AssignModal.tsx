@@ -9,13 +9,19 @@
 //   - Dropdown shows each sub-line with structured label
 //   - Detail panel appears immediately after selecting a sub-line
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { lineLabel } from '@/lib/schedule/piDisplay'
+import { useScheduleModalFocus } from './useModalFocus'
+import ProductionDurationSummary from './ProductionDurationSummary'
+import { useAssignmentDates } from './useAssignmentDates'
+import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { getUnassignedOrders } from '@/app/schedule/actions'
+import PiOrderPanel from './PiOrderPanel'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Order = Awaited<ReturnType<typeof getUnassignedOrders>>[number]
+type Order = Awaited<ReturnType<typeof getUnassignedOrders>>['orders'][number]
 
 interface Props {
   isOpen: boolean
@@ -35,7 +41,7 @@ function formatOrderLabel(o: Order): string {
   const isDraft = o.lifecycleStatus === 'DRAFT' || (o.isDraft && o.lifecycleStatus !== 'PLACEHOLDER' && !o.isPlaceholder)
   const isPlaceholder = o.lifecycleStatus === 'PLACEHOLDER' || o.isPlaceholder
   const tag = isDraft ? '📌 [Nháp] ' : isPlaceholder ? '⏳ [Giữ chỗ] ' : ''
-  const base = `${tag}${o.piNumber} · Dòng ${o.subLineIndex + 1} — ${widthStr} · ${colorStr} · ${gsmStr}`
+  const base = `${tag}${o.piNumber} · Dòng ${lineLabel(o)}${o.calculatedStatus === 'DONE' ? ' · Hoàn thành' : ''} — ${widthStr} · ${colorStr} · ${gsmStr}`
   return o.meshType ? `${base} · ${o.meshType}` : base
 }
 
@@ -69,7 +75,7 @@ function SubLineDetailPanel({ o }: { o: Order }) {
     <div className="rounded-lg bg-surface-container-low border-[0.5px] border-outline-variant px-3 py-2 mt-2 space-y-2">
       <div className="flex items-center justify-between">
         <p className="text-label-sm font-inter font-semibold text-primary">
-          {o.piNumber} · Dòng {o.subLineIndex + 1}
+          {o.piNumber} · Dòng {lineLabel(o)}
         </p>
         {isDraft ? (
           <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/15 text-amber-700 border border-amber-500/30 uppercase">
@@ -116,6 +122,8 @@ function SubLineDetailPanel({ o }: { o: Order }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function AssignModal({ isOpen, onClose, machineId, startDate, onSuccess }: Props) {
+  const modalRef = useRef<HTMLDivElement>(null)
+  useScheduleModalFocus(isOpen, onClose, modalRef)
   const [orders,               setOrders]               = useState<Order[]>([])
   const [selectedOrderId,      setSelectedOrderId]      = useState('')
   const [endDate,              setEndDate]              = useState('')
@@ -123,10 +131,23 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
   const [estimatedDailyOutput, setEstimatedDailyOutput] = useState('')
   const [error,                setError]                = useState('')
   const [isLoading,            setIsLoading]            = useState(false)
+  const [includeFinished, setIncludeFinished] = useState(false)
+  const [hiddenCount, setHiddenCount] = useState(0)
+  const [loadingOrders, setLoadingOrders] = useState(false)
+
+  const loadOrders = useCallback(async (include: boolean) => {
+    setLoadingOrders(true)
+    try {
+      const data = await getUnassignedOrders(include)
+      setOrders(data.orders); setHiddenCount(data.hiddenCount)
+      setSelectedOrderId(current => data.orders.some(o => o.id === current) ? current : '')
+    } catch { setError('Không tải được danh sách dòng hàng') } finally { setLoadingOrders(false) }
+  }, [])
 
   useEffect(() => {
     if (isOpen) {
-      getUnassignedOrders().then(setOrders).catch(console.error)
+      setIncludeFinished(false)
+      void loadOrders(false)
       if (startDate) {
         // Pre-fill end date with start date
         setEndDate(format(startDate, 'yyyy-MM-dd'))
@@ -137,7 +158,13 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
       setEstimatedDailyOutput('')
       setError('')
     }
-  }, [isOpen, startDate])
+  }, [isOpen, startDate, loadOrders])
+
+  const requestedStart = startDate ? format(startDate, 'yyyy-MM-dd') : ''
+  const dates = useAssignmentDates({
+    enabled: isOpen && !!startDate, startDate: requestedStart, endDate,
+    allocatedMeters, estimatedDailyOutput, setEndDate,
+  })
 
   if (!isOpen || !startDate) return null
 
@@ -147,6 +174,7 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    if (dates.loading || dates.error) { setError(dates.error || 'Đang tính lịch, vui lòng đợi.'); return }
 
     setIsLoading(true)
 
@@ -171,6 +199,7 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
           orderId:   selectedOrderId,
           startDate: startISO,
           endDate:   endISO,
+          endDateSource: dates.endDateSource,
           ...(allocatedMeters      !== '' && { allocatedMeters:      Number(allocatedMeters) }),
           ...(estimatedDailyOutput !== '' && { estimatedDailyOutput: Number(estimatedDailyOutput) }),
         }),
@@ -184,6 +213,7 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
       if (!res.ok) {
         throw new Error(data.message || data.error || 'Lỗi không xác định')
       }
+      if (data.warnings?.length) toast.warning(data.warnings.join(' '))
       onSuccess()
       onClose()
     } catch (err: unknown) {
@@ -199,6 +229,7 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
       onClick={onClose}
     >
       <div
+        ref={modalRef} role="dialog" aria-modal="true" aria-label="Xếp máy"
         className="bg-surface rounded-xl shadow-lg w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
@@ -221,8 +252,8 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
           <div className="space-y-md">
             {/* Machine (read-only) */}
             <div>
-              <label className="block text-label-sm font-medium text-secondary mb-xs">Máy</label>
-              <input
+              <label htmlFor="assign-machine" className="block text-label-sm font-medium text-secondary mb-xs">Máy</label>
+              <input id="assign-machine"
                 type="text"
                 disabled
                 value={machineId}
@@ -232,12 +263,13 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
 
             {/* Order / sub-line selector */}
             <div>
-              <label className="block text-label-sm font-medium text-secondary mb-xs">
+              <label htmlFor="assign-order-select" className="block text-label-sm font-medium text-secondary mb-xs">
                 Đơn hàng — Dòng hàng
               </label>
               <select
                 id="assign-order-select"
                 required
+                disabled={loadingOrders}
                 value={selectedOrderId}
                 onChange={e => setSelectedOrderId(e.target.value)}
                 className="w-full h-10 px-sm rounded-lg border-[0.5px] border-outline bg-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none text-body-md"
@@ -249,32 +281,38 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-xs text-secondary">
+                {loadingOrders ? 'Đang tải dòng hàng…' : includeFinished ? 'Đang hiện cả dòng đã kết thúc lịch' : `Đang ẩn ${hiddenCount} dòng đã kết thúc lịch`}
+                {' · '}
+                <button type="button" disabled={loadingOrders} onClick={() => { const next = !includeFinished; setIncludeFinished(next); void loadOrders(next) }} className="text-primary underline disabled:opacity-50">{includeFinished ? 'Ẩn' : 'Hiện'}</button>
+              </p>
 
               {/* Detail panel — renders immediately after selection */}
               {selectedOrder && <SubLineDetailPanel o={selectedOrder} />}
+              {selectedOrder && <PiOrderPanel piNumber={selectedOrder.piNumber} selectedOrderId={selectedOrder.id} />}
             </div>
 
             {/* Date range */}
             <div className="flex gap-sm">
               {/* Start date (read-only — from clicked cell) */}
               <div className="flex-1">
-                <label className="block text-label-sm font-medium text-secondary mb-xs">Bắt đầu</label>
-                <input
+                <label htmlFor="assign-start-date" className="block text-label-sm font-medium text-secondary mb-xs">Bắt đầu</label>
+                <input id="assign-start-date"
                   type="text"
                   disabled
-                  value={format(startDate, 'dd/MM/yyyy')}
+                  value={(dates.plan?.startDate || requestedStart).split('-').reverse().join('/')}
                   className="w-full h-10 px-sm rounded-lg border-[0.5px] border-outline-variant bg-surface-container-lowest text-on-surface-variant"
                 />
               </div>
               {/* End date (editable) */}
               <div className="flex-1">
-                <label className="block text-label-sm font-medium text-secondary mb-xs">Kết thúc</label>
-                <input
+                <label htmlFor="assign-end-date" className="block text-label-sm font-medium text-secondary mb-xs">Kết thúc</label>
+                <input id="assign-end-date"
                   type="date"
                   required
                   min={format(startDate, 'yyyy-MM-dd')}
                   value={endDate}
-                  onChange={e => setEndDate(e.target.value)}
+                  onChange={e => dates.setManualEndDate(e.target.value)}
                   className="w-full h-10 px-sm rounded-lg border-[0.5px] border-outline bg-surface focus:border-primary outline-none"
                 />
               </div>
@@ -282,8 +320,8 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
 
             {/* Allocated meters */}
             <div>
-              <label className="block text-label-sm font-medium text-secondary mb-xs">Số mét phân công</label>
-              <input
+              <label htmlFor="assign-allocated-meters" className="block text-label-sm font-medium text-secondary mb-xs">Số mét phân công</label>
+              <input id="assign-allocated-meters"
                 type="number"
                 min={1}
                 step={1}
@@ -296,8 +334,8 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
 
             {/* Estimated daily output */}
             <div>
-              <label className="block text-label-sm font-medium text-secondary mb-xs">
-                Sản lượng dự kiến (m/ngày)
+              <label htmlFor="assign-estimatedDailyOutput" className="block text-label-sm font-medium text-secondary mb-xs">
+                Năng suất (m/ngày)
               </label>
               <input
                 id="assign-estimatedDailyOutput"
@@ -312,6 +350,10 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
             </div>
           </div>
 
+          <ProductionDurationSummary allocatedMeters={allocatedMeters} estimatedDailyOutput={estimatedDailyOutput}
+            startDate={requestedStart} plan={dates.plan} loading={dates.loading} error={dates.error}
+            mode={dates.mode} onUseComputed={dates.useComputedDates} />
+
           {/* Actions */}
           <div className="mt-xl flex justify-end gap-sm">
             <button
@@ -323,7 +365,7 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
             </button>
             <button
               type="submit"
-              disabled={isLoading || !selectedOrderId}
+              disabled={isLoading || !selectedOrderId || dates.loading || !!dates.error}
               className="inline-flex items-center justify-center gap-sm bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors"
             >
               {isLoading ? 'Đang lưu...' : 'Xếp máy'}

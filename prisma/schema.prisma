@@ -29,8 +29,8 @@ model ProductionOrder {
   // Fabric specs (optional for draft orders, required for approved orders)
   widthM        Float?   // roll width in metres (e.g. 4.0)
   lengthM       Float?   // order length in metres
-  gsm           Int?     // grams per square metre (e.g. 165)
-  productionGsm Int?     // GSM sản xuất thực tế (Sprint I2) — optional, dùng tính requiredYarnKg
+  gsm           Float?     // grams per square metre (e.g. 13.45)
+  productionGsm Float?     // GSM sản xuất thực tế (Sprint I2) — optional (vd 13.45), dùng tính requiredYarnKg
   color         String?  // e.g. "BLACK", "WHITE"
   mbCode       String?  // Mã Masterbatch màu — e.g. "MYD4501A", "7079", "LS309315"
   itemCode     String?  // Item Code tự do theo dòng đơn (không unique, không bắt buộc)
@@ -66,9 +66,9 @@ model ProductionOrder {
 
   // Hàng gia công tráng màng ngoài (Lamination Outsource)
   isLaminated           Boolean  @default(false)      // Cờ hàng tráng màng ngoài
-  rawFabricGsm          Int?                          // GSM vải mộc dệt xưởng (vd: 325)
-  coatingGsm            Int?                          // GSM màng tráng ngoài (vd: 105)
-  finishedGsm           Int?                          // GSM thành phẩm xuất khẩu (vd: 430)
+  rawFabricGsm          Float?                          // GSM vải mộc dệt xưởng (vd: 325.25)
+  coatingGsm            Float?                          // GSM màng tráng ngoài (vd: 105.5)
+  finishedGsm           Float?                          // GSM thành phẩm xuất khẩu (vd: 430.75)
 
   // Quản lý Dung sai (Tolerance Management)
   toleranceQtyPct       Float?   @default(10.0) // Dung sai số lượng ±10%
@@ -174,12 +174,23 @@ enum MaterialGroup {
   KOREA
 }
 
+enum MaterialSubGroup {
+  NGUYEN_SINH // HDPE nguyên sinh — tồn = First + In − OutUsing − OutTape
+  TAI_CHE     // HDPE tái chế     — tồn = First + In − OutUsing − Reject − OutTape
+}
+
 model Material {
   id           String   @id @default(cuid())
   name         String   // e.g. "MF", "UV 4%", "Tái chế", "FR", "IR"
   group        MaterialGroup @default(KOREA)
+  // MoM §3.2 — tách nhựa nguyên sinh với tái chế. Chỉ dùng cho group = HDPE;
+  // file nguồn để chúng ở hai khối riêng với công thức tồn KHÁC NHAU
+  // (tái chế trừ REJECT, nguyên sinh không) nên phải phân biệt được.
+  subGroup     MaterialSubGroup?
   color        String?  // Dùng chủ yếu cho nhóm MB
   brand        String?  // Hãng sản xuất (cho nhóm MB)
+  // MoM §3.2 — cột LIGHT FASTNESS của bảng M/B trong file nguồn. Chỉ dùng cho group = MB.
+  lightFastness String?
   currentStock Decimal  @db.Decimal(10, 2)  // kg hiện có
   stockReportDate DateTime? @db.Date
   stockReportDirty Boolean @default(false)
@@ -232,11 +243,22 @@ model MachineAssignment {
   startDate DateTime
   endDate   DateTime
 
+  // P01 — ngày kết thúc đang lưu đến từ đâu. Phân biệt "hệ thống đề xuất" với
+  // "người dùng tự chọn", và giữ lịch cũ/lịch import không bị tính lại hàng loạt
+  // khi cấu hình lịch nghỉ thay đổi.
+  endDateSource EndDateSource @default(MANUAL)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([machineId, startDate, orderId])
   @@map("machine_assignments")
+}
+
+enum EndDateSource {
+  MANUAL   // người dùng gõ tay — hệ thống không bao giờ tự đổi
+  COMPUTED // hệ thống tính từ mét/năng suất/lịch nghỉ, người dùng đã chấp nhận
+  IMPORTED // đến từ file Excel — giữ nguyên, không tính lại
 }
 
 model MaterialTransaction {
@@ -493,4 +515,47 @@ model ProductColorRecipe {
 
   @@unique([colorName, colorVersion])
   @@map("product_color_recipes")
+}
+
+// P01 — Lịch nghỉ dùng chung toàn nhà máy. Không có lịch riêng theo máy.
+// Mỗi tháng được cấu hình là một dòng. Tháng KHÔNG có dòng thì dùng
+// DEFAULT_NON_WORKING_WEEKDAYS trong src/lib/schedule/factoryCalendar.ts.
+model FactoryCalendarMonth {
+  id        String @id @default(cuid())
+  yearMonth String @unique // 'YYYY-MM', vd '2026-11'
+
+  // TẬP ĐẦY ĐỦ ngày nghỉ trong tuần của tháng này. 0 = CN ... 6 = T7.
+  // THAY THẾ hoàn toàn mặc định, KHÔNG cộng dồn — tháng nghỉ cả CN lẫn T7
+  // phải ghi [0, 6]; ghi [6] nghĩa là tháng đó ĐI LÀM Chủ nhật.
+  nonWorkingWeekdays Int[]
+
+  note      String?
+  updatedBy String? // định danh người sửa; để trống tới khi có auth
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("factory_calendar_months")
+}
+
+// P01 — Ngoại lệ từng ngày, ƯU TIÊN CAO HƠN quy tắc tháng.
+// Chỉ tạo dòng cho ngày thực sự là ngoại lệ, không tạo bản ghi cho mọi ngày.
+model FactoryCalendarException {
+  id   String   @id @default(cuid())
+  date DateTime @unique @db.Date // @db.Date để không lệch timezone
+
+  isWorking Boolean // false = nghỉ; true = làm bù vào ngày vốn nghỉ
+  kind      CalendarExceptionKind
+  note      String?
+
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("factory_calendar_exceptions")
+}
+
+enum CalendarExceptionKind {
+  HOLIDAY // lễ VN — grid tô đậm
+  CLOSURE // nghỉ vì lý do khác (bảo trì, sự kiện) — grid tô màu ngày nghỉ
+  MAKEUP  // làm bù vào ngày vốn nghỉ theo lịch tuần
 }

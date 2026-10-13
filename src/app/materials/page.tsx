@@ -4,8 +4,9 @@
 // M3 Materials — functional inventory tracking page.
 // Replaces the MOCK page. Planner manually manages stock levels and thresholds.
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import AddMaterialModal from '@/components/materials/AddMaterialModal'
+import ImportMaterialHistoryModal from '@/components/materials/ImportMaterialHistoryModal'
 import EditMaterialModal, { type SerializedMaterial } from '@/components/materials/EditMaterialModal'
 import MaterialsTable from '@/components/materials/MaterialsTable'
 import TransactionHistoryModal from '@/components/materials/TransactionHistoryModal'
@@ -13,9 +14,9 @@ import ImportMaterialReportModal from '@/components/materials/ImportMaterialRepo
 import ImportKnittingModal from '@/components/materials/ImportKnittingModal'
 import MaterialSidePanel from '@/components/materials/MaterialSidePanel'
 
+import MaterialReportsModal from '@/components/materials/MaterialReportsModal'
+
 import HDPETab from '@/components/materials/HDPETab'
-import MBTab from '@/components/materials/MBTab'
-import KoreaTab from '@/components/materials/KoreaTab'
 import ExtruderTab from '@/components/materials/ExtruderTab'
 import ImportExtruderModal from '@/components/materials/ImportExtruderModal'
 import WarpingTab from '@/components/materials/WarpingTab'
@@ -99,11 +100,17 @@ function DeleteDialog({ material, onConfirm, onCancel, isDeleting }: DeleteDialo
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function MaterialsPage() {
+  const fetchVersion = useRef(0)
+  const [requestedReportDate, setRequestedReportDate] = useState('')
+  const [reportDate, setReportDate] = useState<string | null>(null)
+  const [reportDates, setReportDates] = useState<string[]>([])
+  const [reportsTarget, setReportsTarget] = useState<SerializedMaterial | null>(null)
   const [materials, setMaterials]     = useState<SerializedMaterial[]>([])
   const [isLoading, setIsLoading]     = useState(true)
   const [fetchError, setFetchError]   = useState<string | null>(null)
   const [showAddModal, setShowAddModal]       = useState(false)
   const [showImportModal, setShowImportModal]           = useState(false)
+  const [showHistoryImportModal, setShowHistoryImportModal] = useState(false)
   const [showKnittingModal, setShowKnittingModal]       = useState(false)
   const [panelMaterial, setPanelMaterial]               = useState<SerializedMaterial | null>(null)
   const [editTarget, setEditTarget]                     = useState<SerializedMaterial | null>(null)
@@ -116,24 +123,28 @@ export default function MaterialsPage() {
   const [showKnittingDetailModal, setShowKnittingDetailModal] = useState(false)
   const [showRollingModal, setShowRollingModal]         = useState(false)
   
-  const [activeTab, setActiveTab] = useState<'EXTRUDER' | 'WARPING' | 'KNITTING_DETAIL' | 'ROLLING' | 'PACKING' | 'HDPE' | 'MB' | 'KOREA'>('EXTRUDER')
+  const [activeTab, setActiveTab] = useState<'HDPE' | 'EXTRUDER' | 'WARPING' | 'KNITTING_DETAIL' | 'ROLLING'>('HDPE')
 
   // ── Fetch all materials ────────────────────────────────────────────────────
 
   const fetchMaterials = useCallback(async () => {
+    const version = ++fetchVersion.current
     setIsLoading(true)
     setFetchError(null)
     try {
-      const res = await fetch('/api/materials')
-      const data = await res.json() as { success: boolean; materials?: SerializedMaterial[]; error?: string }
+      const res = await fetch(`/api/materials?reportGroup=HDPE${requestedReportDate ? `&reportDate=${encodeURIComponent(requestedReportDate)}` : ''}`)
+      const data = await res.json() as { success: boolean; materials?: SerializedMaterial[]; reportDate?: string | null; reportDates?: string[]; error?: string }
+      if (version !== fetchVersion.current) return
       if (!res.ok || !data.success) { setFetchError(data.error ?? 'Không thể tải dữ liệu.'); return }
       setMaterials(data.materials ?? [])
+      setReportDate(data.reportDate ?? null)
+      setReportDates(data.reportDates ?? [])
     } catch {
-      setFetchError('Lỗi mạng — không thể kết nối máy chủ.')
+      if (version === fetchVersion.current) setFetchError('Lỗi mạng — không thể kết nối máy chủ.')
     } finally {
-      setIsLoading(false)
+      if (version === fetchVersion.current) setIsLoading(false)
     }
-  }, [])
+  }, [requestedReportDate])
 
   useEffect(() => { fetchMaterials() }, [fetchMaterials])
 
@@ -157,7 +168,7 @@ export default function MaterialsPage() {
 
   // ── Derived summary stats (null-safe) ──────────────────────────────────────
 
-  const activeMaterials = materials.filter(m => m.group === activeTab)
+  const activeMaterials = materials.filter(m => activeTab === 'HDPE' && (m.group === 'HDPE' || m.group === 'MB'))
 
   // Only count materials where minThreshold is set (not null)
   const lowStockCount = activeMaterials.filter((m) => {
@@ -173,12 +184,12 @@ export default function MaterialsPage() {
     <div className="max-w-[1440px] mx-auto px-8 py-8">
 
       {/* Page header */}
-      <div className="flex items-start justify-between mb-6">
+      <div className="flex flex-wrap gap-3 items-start justify-between mb-6">
         <div>
           <h1 className="text-2xl font-inter font-semibold text-primary tracking-tight">Materials</h1>
           <p className="text-sm font-noto text-secondary mt-1">Quản lý tồn kho nguyên liệu</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             id="btn-download-knitting-template"
             onClick={() => window.location.href = '/api/knitting/template'}
@@ -215,10 +226,11 @@ export default function MaterialsPage() {
       )}
 
       {/* Tab Navigation */}
-      <div className="flex gap-2 border-b-[0.5px] border-outline-variant mb-6 overflow-x-auto">
-        {(['EXTRUDER', 'WARPING', 'KNITTING_DETAIL', 'ROLLING', 'PACKING', 'HDPE', 'MB', 'KOREA'] as const).map((tab) => (
+      <div role="tablist" aria-label="Công đoạn và nguyên liệu" className="flex gap-2 border-b-[0.5px] border-outline-variant mb-6 overflow-x-auto">
+        {(['HDPE', 'EXTRUDER', 'WARPING', 'KNITTING_DETAIL', 'ROLLING'] as const).map((tab) => (
           <button
             key={tab}
+            role="tab" aria-selected={activeTab === tab}
             onClick={() => setActiveTab(tab)}
             className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-[1px] whitespace-nowrap ${
               activeTab === tab
@@ -231,39 +243,33 @@ export default function MaterialsPage() {
               : tab === 'WARPING'
               ? 'Warping'
               : tab === 'KNITTING_DETAIL'
-              ? 'Knitting Detail'
+              ? 'Knitting'
               : tab === 'ROLLING'
               ? 'Rolling'
-              : tab === 'PACKING'
-              ? 'Đóng gói'
-              : tab === 'MB'
-              ? 'Masterbatch'
-              : tab === 'KOREA'
-              ? 'Korea & Khác'
               : tab}
           </button>
         ))}
       </div>
 
       {/* Summary cards (Material stock - only shown for material tabs) */}
-      {(activeTab !== 'EXTRUDER' && activeTab !== 'WARPING' && activeTab !== 'KNITTING_DETAIL' && activeTab !== 'ROLLING' && activeTab !== 'PACKING') && (
+      {activeTab === 'HDPE' && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
           <SummaryCard
-            label="Total Materials"
+            label="Số nguyên liệu"
             value={activeMaterials.length}
             icon="inventory_2"
             accent="text-on-surface"
             border="border-outline-variant"
           />
           <SummaryCard
-            label="Low Stock Alerts"
+            label="Cảnh báo tồn hiện tại"
             value={lowStockCount}
             icon="warning"
             accent={lowStockCount > 0 ? 'text-error' : 'text-[#15803d]'}
             border={lowStockCount > 0 ? 'border-error/30' : 'border-[#22c55e]/30'}
           />
           <SummaryCard
-            label="Total Stock"
+            label="Tổng tồn hiện tại"
             value={`${totalKg.toLocaleString('vi-VN', { minimumFractionDigits: 0, maximumFractionDigits: 1 })} kg`}
             icon="scale"
             accent="text-primary"
@@ -298,50 +304,37 @@ export default function MaterialsPage() {
             />
           )}
           {activeTab === 'ROLLING' && (
-            <RollingTab
-              onImport={() => setShowRollingModal(true)}
-            />
-          )}
-          {activeTab === 'PACKING' && (
-            <PackingTab />
+            <div className="space-y-8">
+              <section aria-label="Rolling"><h2 className="text-lg font-semibold text-primary mb-4">Rolling</h2><RollingTab onImport={() => setShowRollingModal(true)} /></section>
+              <section aria-label="Đóng gói"><h2 className="text-lg font-semibold text-primary mb-4">Đóng gói</h2><PackingTab /></section>
+            </div>
           )}
           {activeTab === 'HDPE' && (
             <HDPETab
-              materials={activeMaterials}
+              materials={materials.filter(m => m.group === 'HDPE' || m.group === 'MB')}
+              reportDate={reportDate}
+              reportDates={reportDates}
+              onReportDateChange={setRequestedReportDate}
+              onReports={setReportsTarget}
               onEdit={setEditTarget}
               onDelete={setDeleteTarget}
               onHistory={setHistoryTarget}
               onRowClick={setPanelMaterial}
               onImport={() => setShowImportModal(true)}
-            />
-          )}
-          {activeTab === 'MB' && (
-            <MBTab
-              materials={activeMaterials}
-              onEdit={setEditTarget}
-              onDelete={setDeleteTarget}
-              onHistory={setHistoryTarget}
-              onRowClick={setPanelMaterial}
-              onImport={() => setShowImportModal(true)}
-            />
-          )}
-          {activeTab === 'KOREA' && (
-            <KoreaTab
-              materials={activeMaterials}
-              onEdit={setEditTarget}
-              onDelete={setDeleteTarget}
-              onHistory={setHistoryTarget}
-              onRowClick={setPanelMaterial}
-              onImport={() => setShowImportModal(true)}
+              onImportHistory={() => setShowHistoryImportModal(true)}
             />
           )}
         </>
       )}
 
+      {reportsTarget && <MaterialReportsModal material={reportsTarget} initialMonth={(reportDate ?? '').slice(0, 7)} onClose={() => setReportsTarget(null)} />}
+
+      {showHistoryImportModal && <ImportMaterialHistoryModal onImported={fetchMaterials} onClose={() => setShowHistoryImportModal(false)} />}
+
       {/* Add modal */}
       {showAddModal && (
         <AddMaterialModal
-          defaultGroup={(activeTab === 'HDPE' || activeTab === 'MB' || activeTab === 'KOREA') ? activeTab : 'HDPE'}
+          defaultGroup="HDPE"
           onAdded={() => { fetchMaterials(); setShowAddModal(false) }}
           onClose={() => setShowAddModal(false)}
         />

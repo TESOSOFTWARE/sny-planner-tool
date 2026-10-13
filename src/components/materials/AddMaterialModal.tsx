@@ -3,7 +3,8 @@
 // src/components/materials/AddMaterialModal.tsx
 // Modal for adding a new material. Local state only — no react-hook-form needed.
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
 
 interface Props {
   onAdded: () => void
@@ -24,8 +25,12 @@ interface SerializedMaterial {
 }
 
 export default function AddMaterialModal({ onAdded, onClose, defaultGroup = 'KOREA' }: Props) {
+  const modalRef = useRef<HTMLDivElement>(null)
+  useScheduleModalFocus(true, onClose, modalRef)
   const [name, setName]               = useState('')
   const [group, setGroup]             = useState<'HDPE' | 'MB' | 'KOREA'>(defaultGroup)
+  const [subGroup, setSubGroup] = useState<'NGUYEN_SINH' | 'TAI_CHE' | ''>('')
+  const [lightFastness, setLightFastness] = useState('')
   const [color, setColor]             = useState('')
   const [brand, setBrand]             = useState('')
   const [currentStock, setCurrentStock] = useState('')
@@ -52,6 +57,8 @@ export default function AddMaterialModal({ onAdded, onClose, defaultGroup = 'KOR
         body: JSON.stringify({
           name: name.trim(),
           group,
+          subGroup: group === 'HDPE' ? subGroup || null : null,
+          lightFastness: group === 'MB' ? lightFastness.trim() || null : null,
           color: color.trim() || undefined,
           brand: brand.trim() || undefined,
           currentStock: stock,
@@ -89,14 +96,15 @@ export default function AddMaterialModal({ onAdded, onClose, defaultGroup = 'KOR
       onClick={onClose}
     >
       <div
-        className="bg-surface rounded-xl shadow-lg w-full max-w-md overflow-hidden"
+        ref={modalRef} role="dialog" aria-modal="true" aria-label="Thêm nguyên liệu"
+        className="bg-surface rounded-xl shadow-lg w-full max-w-md max-h-[90vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
 
         {/* Header */}
         <div className="px-6 py-4 border-b-[0.5px] border-outline-variant flex justify-between items-center">
-          <h3 className="text-base font-inter font-semibold text-on-surface">Add material</h3>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface transition-colors">
+          <h3 className="text-base font-inter font-semibold text-on-surface">Thêm nguyên liệu</h3>
+          <button aria-label="Đóng" onClick={onClose} className="text-on-surface-variant hover:text-on-surface transition-colors">
             <span className="material-symbols-outlined text-[20px]">close</span>
           </button>
         </div>
@@ -141,6 +149,24 @@ export default function AddMaterialModal({ onAdded, onClose, defaultGroup = 'KOR
               className={inputCls()}
             />
           </div>
+
+
+          {group === 'HDPE' && (
+            <div>
+              <label htmlFor="material-subgroup" className="block text-xs font-medium text-secondary mb-1">Phân loại nhựa</label>
+              <select id="material-subgroup" value={subGroup} onChange={e => setSubGroup(e.target.value as 'NGUYEN_SINH' | 'TAI_CHE' | '')} className={inputCls()}>
+                <option value="">Chưa phân loại</option>
+                <option value="NGUYEN_SINH">Nguyên sinh</option>
+                <option value="TAI_CHE">Tái chế</option>
+              </select>
+            </div>
+          )}
+          {group === 'MB' && (
+            <div>
+              <label htmlFor="material-light-fastness" className="block text-xs font-medium text-secondary mb-1">Độ bền màu</label>
+              <input id="material-light-fastness" type="text" maxLength={100} value={lightFastness} onChange={e => setLightFastness(e.target.value)} className={inputCls()} />
+            </div>
+          )}
 
           {/* Màu và Hãng (chỉ hiện khi nhóm MB) */}
           {group === 'MB' && (
@@ -228,14 +254,14 @@ export default function AddMaterialModal({ onAdded, onClose, defaultGroup = 'KOR
               onClick={onClose}
               className="inline-flex items-center justify-center border border-primary bg-transparent hover:bg-surface-container text-primary text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors"
             >
-              Cancel
+              Hủy
             </button>
             <button
               type="submit"
               disabled={isLoading}
               className="inline-flex items-center justify-center bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors"
             >
-              {isLoading ? 'Đang lưu…' : 'Add'}
+              {isLoading ? 'Đang lưu…' : 'Thêm'}
             </button>
           </div>
         </form>

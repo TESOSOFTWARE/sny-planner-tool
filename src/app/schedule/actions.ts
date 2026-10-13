@@ -8,12 +8,10 @@
 //   so AssignModal can show structured label and detail panel.
 
 import { prisma } from '@/lib/db'
+import { scheduleOrderChoices } from '@/lib/orderStatus'
 
-export async function getUnassignedOrders() {
+export async function getUnassignedOrders(includeFinished = false) {
   const orders = await prisma.productionOrder.findMany({
-    where: {
-      status: { not: 'DONE' },
-    },
     select: {
       id: true,
       piNumber: true,
@@ -28,12 +26,14 @@ export async function getUnassignedOrders() {
       meshType: true,
       lengthM: true,
       qty: true,
+      assignments: { select: { startDate: true, endDate: true } },
     },
     // No Prisma orderBy — JS sort below handles numeric piNumber correctly
   })
   // Numeric-aware sort: KTQ26-2 < KTQ26-10 (not string order 1, 10, 2, 20)
-  return orders.sort((a, b) =>
+  const sorted = orders.sort((a, b) =>
     a.piNumber.localeCompare(b.piNumber, undefined, { numeric: true }) ||
     a.subLineIndex - b.subLineIndex
   )
+  return scheduleOrderChoices(sorted, includeFinished)
 }
