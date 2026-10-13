@@ -53,6 +53,9 @@ npm-cache/
 *.test.ts
 !src/**/*.test.ts
 !src/**/*.spec.ts
+# Migration SQL + rollback: phải version được, nếu không teammate chạy
+# prisma migrate diff sẽ thấy drift mà không có file giải thích vì sao.
+!prisma/sql/*.sql
 
 *.MD
 

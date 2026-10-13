@@ -3,7 +3,9 @@
 // src/components/materials/ImportPackingReportModal.tsx
 // 3-step modal: Upload Excel Statistical Report → Preview Dry-Run → Confirm Import to DB.
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
+import type { PackingPeriod } from '@/lib/excel/parsePackingReport'
 import type { PackingDecision } from '@/types'
 
 interface Props {
@@ -30,6 +32,9 @@ interface PreviewResponse {
   fileName: string
   totalRowsParsed: number
   availableSheets: string[]
+  period: PackingPeriod | null
+  outOfPeriodOutputs: PreviewOutput[]
+  skippedRows: { total: number; header: number; blank: number }
   outputs: PreviewOutput[]
   expectedSnapshot: string
   decisions: PackingDecision[]
@@ -40,6 +45,8 @@ interface PreviewResponse {
 type Step = 'upload' | 'preview' | 'success'
 
 export default function ImportPackingReportModal({ onImported, onClose }: Props) {
+  const modalRef = useRef<HTMLDivElement>(null)
+  useScheduleModalFocus(true, onClose, modalRef)
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<File | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -75,8 +82,8 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
       setPreview(data)
       setReplaceDates([])
       setStep('preview')
-    } catch (err: any) {
-      setError(err.message || 'Có lỗi xảy ra khi đọc file Excel')
+    } catch (err: unknown) {
+      setError((err instanceof Error ? err.message : '') || 'Có lỗi xảy ra khi đọc file Excel')
     } finally {
       setIsLoading(false)
     }
@@ -96,6 +103,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
         body: JSON.stringify({
           outputs: preview.outputs,
           fileName: preview.fileName,
+          period: preview.period,
           expectedSnapshot: preview.expectedSnapshot,
           replaceDates,
         }),
@@ -114,8 +122,8 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
       setSuccessMsg(`Đã tạo ${data.insertedCount} ngày, cập nhật ${data.updatedCount} ngày và giữ nguyên ${data.unchangedCount} ngày sản lượng Đóng gói.`)
       setStep('success')
       onImported()
-    } catch (err: any) {
-      setError(err.message || 'Lỗi khi lưu dữ liệu vào cơ sở dữ liệu')
+    } catch (err: unknown) {
+      setError((err instanceof Error ? err.message : '') || 'Lỗi khi lưu dữ liệu vào cơ sở dữ liệu')
     } finally {
       setIsLoading(false)
     }
@@ -126,11 +134,11 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl max-h-[90vh] flex flex-col">
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="packing-import-title" className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between border-b pb-4">
           <div>
-            <h2 className="text-xl font-bold text-slate-800">
+            <h2 id="packing-import-title" className="text-xl font-bold text-slate-800">
               Import Báo Cáo Đóng Gói
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -138,6 +146,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
             </p>
           </div>
           <button
+            aria-label="Đóng"
             onClick={onClose}
             className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
           >
@@ -170,14 +179,14 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
                       setError(null)
                     }
                   }}
-                  className="hidden"
+                  className="sr-only focus:not-sr-only focus:outline focus:outline-2 focus:outline-primary"
                   id="excel-packing-upload"
                 />
                 <label
                   htmlFor="excel-packing-upload"
                   className="cursor-pointer space-y-2 block"
                 >
-                  <div className="text-4xl">📦</div>
+                  <div aria-hidden="true" className="text-4xl">📦</div>
                   <div className="text-sm font-medium text-slate-700">
                     {file ? file.name : 'Nhấn để chọn file Báo cáo Đóng gói (.xlsx)'}
                   </div>
@@ -201,10 +210,14 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
           {/* STEP 2: Preview */}
           {step === 'preview' && preview && (
             <div className="space-y-4">
+              <p className="text-sm font-semibold">Kỳ đối chiếu: {preview.period ? `${preview.period.month.slice(5)}/${preview.period.month.slice(0, 4)} (${preview.period.source === 'filename' ? 'theo tên file' : 'suy ra từ tháng có nhiều dòng nhất — tên file không có tháng'})` : 'Chưa xác định'}</p>
+              {!preview.outputs.length && <p role="alert" className="text-sm text-error">Không có dòng thuộc kỳ {preview.period ? `${preview.period.month.slice(5)}/${preview.period.month.slice(0, 4)}` : 'đối chiếu'} có sản lượng để xác nhận.</p>}
+              {preview.outOfPeriodOutputs.length > 0 && <div className="rounded border border-outline-variant p-3 text-xs"><p className="font-semibold">Ngoài kỳ file: {preview.outOfPeriodOutputs.length} dòng — bị loại khỏi xác nhận</p><ul className="max-h-32 overflow-auto">{preview.outOfPeriodOutputs.map((row, index) => <li key={index}>{row.date.split('-').reverse().join('/')} · {row.cellRef}</li>)}</ul></div>}
+              <p className="text-xs">Được phép xác nhận: {preview.outputs.length} ngày · Bỏ qua: {preview.skippedRows.total + preview.skippedRows.header + preview.skippedRows.blank} dòng (tổng / tiêu đề / trống)</p>
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-xl bg-emerald-50 p-3 text-emerald-800 border border-emerald-100">
-                  <div className="text-xs text-emerald-600 font-medium">Số Ngày Có Số Liệu</div>
-                  <div className="text-xl font-bold">{preview.totalRowsParsed} ngày</div>
+                  <div className="text-xs text-emerald-600 font-medium">Số dòng ngày đọc được</div>
+                  <div className="text-xl font-bold">{preview.totalRowsParsed} dòng</div>
                 </div>
                 <div className="rounded-xl bg-slate-50 p-3 text-slate-700 border border-slate-200">
                   <div className="text-xs text-slate-500 font-medium">File Nguồn</div>
@@ -229,7 +242,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
                   <tbody className="divide-y divide-slate-100">
                     {preview.outputs.slice(0, 10).map((row, idx) => (
                       <tr key={idx} className="hover:bg-slate-50">
-                        <td className="px-3 py-1.5 font-medium text-slate-800">{row.date}</td>
+                        <td className="px-3 py-1.5 font-medium text-slate-800">{row.date.split('-').reverse().join('/')}</td>
                         <td className="px-3 py-1.5 text-slate-600">{row.qtyDay ?? '-'}</td>
                         <td className="px-3 py-1.5 text-slate-600">{row.totalMDay != null ? Number(row.totalMDay).toLocaleString() : '-'}</td>
                         <td className="px-3 py-1.5 text-slate-600">{row.weightDay != null ? Number(row.weightDay).toLocaleString() : '-'}</td>
@@ -249,7 +262,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
               <div className="space-y-2 text-xs">
                 {preview.decisions.map(decision => (
                   <div key={decision.date} className="flex items-center justify-between rounded border border-slate-200 px-2 py-1">
-                    <span>{decision.date} — {decision.status === 'new' ? 'Mới' : decision.status === 'identical' ? 'Giống dữ liệu hiện tại' : 'Cần thay thế'}</span>
+                    <span>{decision.date.split('-').reverse().join('/')} — {decision.status === 'new' ? 'Mới' : decision.status === 'identical' ? 'Giống dữ liệu hiện tại' : 'Cần thay thế'}</span>
                     {decision.status === 'replace' && <label className="inline-flex items-center gap-1"><input type="checkbox" checked={replaceDates.includes(decision.date)} onChange={() => setReplaceDates(current => current.includes(decision.date) ? current.filter(date => date !== decision.date) : [...current, decision.date])} /> Xác nhận thay thế</label>}
                   </div>
                 ))}
@@ -307,7 +320,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
               <button
                 type="button"
                 onClick={handleConfirm}
-                disabled={isLoading || !replacementsAcknowledged}
+                disabled={isLoading || !replacementsAcknowledged || !preview?.outputs.length}
                 className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl flex items-center gap-2"
               >
                 {isLoading && <span className="animate-spin">⏳</span>}

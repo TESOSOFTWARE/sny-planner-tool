@@ -3,7 +3,8 @@
 // src/components/materials/AddTransactionModal.tsx
 // Modal for manually adding a single IN/OUT transaction for a material.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
 import type { SerializedMaterial } from './EditMaterialModal'
 
 interface Props {
@@ -27,6 +28,8 @@ function todayISO() {
 const inputCls = 'w-full h-10 px-3 rounded-lg border-[0.5px] border-outline bg-surface text-on-surface text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors'
 
 export default function AddTransactionModal({ material, onAdded, onClose }: Props) {
+  const modalRef = useRef<HTMLDivElement>(null)
+  useScheduleModalFocus(true, onClose, modalRef)
   const [txType,   setTxType]   = useState('in')
   const [qty,      setQty]      = useState('')
   const [txDate,   setTxDate]   = useState(todayISO())
@@ -35,6 +38,21 @@ export default function AddTransactionModal({ material, onAdded, onClose }: Prop
   const [note,     setNote]     = useState('')
   const [error,    setError]    = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [piNumbers, setPiNumbers] = useState<string[]>([])
+  const [piError, setPiError] = useState('')
+  useEffect(() => {
+    let ignore = false
+    async function loadPis() {
+      try {
+        const response = await fetch(`/api/materials/pi?q=${encodeURIComponent(orderId.trim())}`)
+        const data = await response.json() as { success: boolean; piNumbers?: string[]; error?: string }
+        if (!response.ok || !data.success) throw new Error(data.error ?? 'Không thể tải gợi ý mã PI.')
+        if (!ignore) { setPiNumbers(data.piNumbers ?? []); setPiError('') }
+      } catch { if (!ignore) { setPiNumbers([]); setPiError('Chưa tải được gợi ý; có thể nhập mã PI trực tiếp.') } }
+    }
+    void loadPis()
+    return () => { ignore = true }
+  }, [orderId])
 
   // Show MB% input when material name contains "MB" or "M/B" or "MASTERBATCH", or txType = "in"
   const showMbPct =
@@ -87,7 +105,7 @@ export default function AddTransactionModal({ material, onAdded, onClose }: Prop
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-surface rounded-xl shadow-lg w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-label="Nhập / Xuất kho" className="bg-surface rounded-xl shadow-lg w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
 
         {/* Header */}
         <div className="px-6 py-4 border-b-[0.5px] border-outline-variant flex justify-between items-center">
@@ -95,7 +113,7 @@ export default function AddTransactionModal({ material, onAdded, onClose }: Prop
             <h3 className="text-base font-inter font-semibold text-on-surface">Nhập / Xuất kho</h3>
             <p className="text-xs text-secondary mt-0.5">{material.name}</p>
           </div>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface transition-colors">
+          <button aria-label="Đóng phiếu" onClick={onClose} className="text-on-surface-variant hover:text-on-surface transition-colors">
             <span className="material-symbols-outlined text-[20px]">close</span>
           </button>
         </div>
@@ -181,15 +199,19 @@ export default function AddTransactionModal({ material, onAdded, onClose }: Prop
 
           {/* Mã đơn hàng */}
           <div>
-            <label className="block text-xs font-medium text-secondary mb-1">Mã đơn hàng</label>
+            <label htmlFor="add-tx-orderid" className="block text-xs font-medium text-secondary mb-1">Mã đơn hàng</label>
             <input
               id="add-tx-orderid"
               type="text"
+              list="material-transaction-pis"
               value={orderId}
               onChange={e => setOrderId(e.target.value)}
               placeholder="e.g. GBN26-099"
               className={inputCls}
             />
+            <datalist id="material-transaction-pis">{piNumbers.map(pi => <option key={pi} value={pi} />)}</datalist>
+            <p className="text-xs text-secondary mt-1">Không bắt buộc. Nếu nhập mã PI, hệ thống kiểm tra đơn hàng trước khi lưu.</p>
+            {piError && <p className="text-xs text-secondary mt-1">{piError}</p>}
           </div>
 
           {/* Ghi chú */}

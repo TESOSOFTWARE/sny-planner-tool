@@ -4,7 +4,8 @@
 // 3-step modal: (1) file upload → (2) preview → (3) confirm → success.
 // Pattern giống ImportKnittingModal.tsx.
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
 
 interface Props {
   onImported: () => void
@@ -43,6 +44,8 @@ interface ConfirmResponse {
 type Step = 'upload' | 'preview' | 'success'
 
 export default function ImportExtruderModal({ onImported, onClose }: Props) {
+  const modalRef = useRef<HTMLDivElement>(null)
+  useScheduleModalFocus(true, onClose, modalRef)
   const [step, setStep]         = useState<Step>('upload')
   const [file, setFile]         = useState<File | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -102,22 +105,22 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
       onClick={onClose}
     >
-      <div
+      <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="extruder-import-title"
         className="bg-surface rounded-xl shadow-lg w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
         <div className="px-6 py-4 border-b-[0.5px] border-outline-variant flex justify-between items-center shrink-0">
           <div>
-            <h3 className="text-base font-inter font-semibold text-on-surface">Import báo cáo Extruder</h3>
+            <h3 id="extruder-import-title" className="text-base font-inter font-semibold text-on-surface">Import báo cáo Extruder</h3>
             <p className="text-xs text-secondary mt-0.5">
               {step === 'upload'  && 'Bước 1: Chọn file Excel'}
               {step === 'preview' && 'Bước 2: Xem trước và xác nhận'}
               {step === 'success' && 'Import thành công'}
             </p>
           </div>
-          <button onClick={onClose} className="text-on-surface-variant hover:text-on-surface transition-colors">
-            <span className="material-symbols-outlined text-[20px]">close</span>
+          <button aria-label="Đóng" onClick={onClose} className="text-on-surface-variant hover:text-on-surface transition-colors">
+            <span aria-hidden="true" className="material-symbols-outlined text-[20px]">close</span>
           </button>
         </div>
 
@@ -126,7 +129,7 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
 
           {error && (
             <div className="flex items-start gap-2 p-3 rounded-lg bg-error-container border border-error/30 text-error text-sm">
-              <span className="material-symbols-outlined text-[18px] shrink-0 mt-0.5">error</span>
+              <span aria-hidden="true" className="material-symbols-outlined text-[18px] shrink-0 mt-0.5">error</span>
               {error}
             </div>
           )}
@@ -135,7 +138,7 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
           {step === 'upload' && (
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-secondary mb-1">
+                <label htmlFor="import-extruder-file" className="block text-xs font-medium text-secondary mb-1">
                   File Excel (.xlsx) <span className="text-error">*</span>
                 </label>
                 <input
@@ -147,7 +150,7 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
                 />
                 {file && (
                   <p className="text-xs text-secondary mt-1">
-                    <span className="material-symbols-outlined text-[14px] align-middle mr-1">description</span>
+                    <span aria-hidden="true" className="material-symbols-outlined text-[14px] align-middle mr-1">description</span>
                     {file.name} ({(file.size / 1024).toFixed(0)} KB)
                   </p>
                 )}
@@ -210,7 +213,7 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
 
               {/* Warning about idempotent */}
               <div className="bg-[#FFF8E7] border border-[#F59E0B] rounded-lg p-3 text-xs text-[#92400E]">
-                <span className="material-symbols-outlined text-[14px] align-middle mr-1">info</span>
+                <span aria-hidden="true" className="material-symbols-outlined text-[14px] align-middle mr-1">info</span>
                 Records cũ cùng máy + cùng ngày sẽ bị <strong>xóa và thay thế</strong> bởi dữ liệu mới (idempotent).
               </div>
             </div>
@@ -219,7 +222,7 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
           {/* ── STEP 3: SUCCESS ── */}
           {step === 'success' && (
             <div className="flex flex-col items-center justify-center py-8 gap-4">
-              <span className="material-symbols-outlined text-[48px] text-[#15803d]">check_circle</span>
+              <span aria-hidden="true" className="material-symbols-outlined text-[48px] text-[#15803d]">check_circle</span>
               <p className="text-base font-semibold text-on-surface text-center">{successMsg}</p>
               <p className="text-sm text-secondary text-center">Dữ liệu đã được lưu vào hệ thống.</p>
             </div>
@@ -251,7 +254,7 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
                   className="px-5 py-2 bg-primary text-on-primary rounded-md text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   {isLoading && (
-                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <svg aria-hidden="true" className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                     </svg>
@@ -274,7 +277,7 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
                     className="px-5 py-2 bg-primary text-on-primary rounded-md text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
                   >
                     {isLoading && (
-                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <svg aria-hidden="true" className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                       </svg>

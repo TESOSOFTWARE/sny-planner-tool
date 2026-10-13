@@ -16,6 +16,7 @@
 //   - Description keyword boundary: "SHADE", "NET", "WINDBREAK", etc.
 
 import * as XLSX from 'xlsx'
+import { parseScheduleTitlePeriod, type SchedulePeriod } from '@/lib/schedule/importPeriod'
 
 // ── PI extraction constants ────────────────────────────────────────────────────
 
@@ -23,7 +24,7 @@ import * as XLSX from 'xlsx'
 const DESCRIPTION_KEYWORDS = new Set([
   'SHADE', 'FENCE', 'BIRD', 'HAIL', 'WINDBREAK', 'GUARD', 'GRAIN',
   'DIAMOND', 'HEX', 'QUAD', 'KIWI', 'DEBRIS', 'SCAFFOLDING',
-  'MONO', 'TAPE', 'BODY', 'EDGE',
+  'MONO', 'TAPE', 'BODY', 'EDGE', 'RECTANGULAR', 'INSECT', 'MESH', 'BEE', 'DIMAOND', 'SAHDE',
 ])
 
 /** Raw strings that should be completely skipped (no draft order created) */
@@ -68,9 +69,13 @@ export interface ParseScheduleResult {
   assignments:     ParsedAssignment[]
   machineSpecs:    MachineSpecParsed[]
   availableSheets: string[]
+  sheetName: string
+  sheetTitle: string
+  titlePeriod: SchedulePeriod | null
   year:            number
   month:           number  // 1-indexed (7 = July)
   daysInMonth:     number
+  yellowDayDates:  string[] // Suggestions only; importing the schedule never saves holidays.
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -110,6 +115,35 @@ function extractPiFromRaw(raw: string): string[] {
   return normalized ? [normalized] : []
 }
 
+/** Match actual known PI values, never infer a PI from its shape. */
+export function matchSchedulePi(raw: string, knownPiNumbers: readonly string[]): { piNumbers: string[]; needsManual: boolean; kind: 'single' | 'multi' | 'unknown' | 'collision' } {
+  const clean = raw.trim().replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim()
+  if (!clean || clean.toLowerCase() === 'off' || SKIP_EXACT.has(clean) || SKIP_PREFIX.some(prefix => clean.startsWith(prefix))) {
+    return { piNumbers: [], needsManual: false, kind: 'single' }
+  }
+  const normalize = (value: string) => value.replace(/\([^)]*\)/g, '').replace(/\s+/g, '').toUpperCase()
+  const piNumbers: string[] = []
+  let needsManual = false
+  let collision = false
+  for (const part of clean.split('+').map(value => value.trim()).filter(Boolean)) {
+    const words = part.split(' ')
+    let matched: string[] = []
+    for (let count = words.length; count > 0; count--) {
+      const prefix = normalize(words.slice(0, count).join(' '))
+      matched = Array.from(new Set(knownPiNumbers.filter(pi => normalize(pi) === prefix)))
+      if (matched.length > 0) break
+    }
+    if (matched.length === 1) piNumbers.push(matched[0])
+    else { needsManual = true; collision ||= matched.length > 1; piNumbers.push(draftPiCode(part)) }
+  }
+  return { piNumbers: Array.from(new Set(piNumbers)), needsManual, kind: collision ? 'collision' : needsManual ? 'unknown' : (clean.includes('+') || knownPiNumbers.filter(pi => pi === piNumbers[0]).length > 1) ? 'multi' : 'single' }
+}
+
+export function draftPiCode(raw: string): string {
+  const withoutSuffix = raw.replace(/\s+-[A-Za-z].*$/, '').replace(/-\s+[A-Za-z].*$/, '')
+  return (extractPiFromRaw(withoutSuffix)[0] ?? '').replace(/[-+\s]+$/, '').trim()
+}
+
 function normalizePiCode(candidate: string): string {
   let p = candidate.trim().replace(/[-+,\s]+$/, '').trim()
   if (!p) return ''
@@ -139,38 +173,64 @@ function dayToISO(year: number, month: number, day: number): string {
  * Parse production schedule Excel file.
  * @param buffer  Raw file bytes
  * @param sheetName  Sheet to parse, e.g. "20.7.2026". If not found, throws with list of available sheets.
+ * @param knownPiNumbers Runtime catalogue: unknown or colliding normalized PI require manual linking.
  */
 export function parseScheduleReport(
   buffer: Buffer,
   sheetName: string,
+  knownPiNumbers?: readonly string[],
 ): ParseScheduleResult {
-  const wb = XLSX.read(buffer, { raw: false })
+  const wb = XLSX.read(buffer, { raw: false, cellStyles: true })
   const availableSheets = wb.SheetNames
 
-  // Resolve sheet
-  let ws: XLSX.WorkSheet | undefined = wb.Sheets[sheetName]
-  if (!ws) {
-    // Try case-insensitive / partial match fallback
-    const fallback = availableSheets.find(s =>
-      s.toLowerCase() === sheetName.toLowerCase()
+  // Resolve the requested sheet without guessing between normalized names.
+  let resolvedSheetName = availableSheets.includes(sheetName) ? sheetName : undefined
+  if (!resolvedSheetName) {
+    const caseInsensitiveMatches = availableSheets.filter(
+      name => name.toLowerCase() === sheetName.toLowerCase(),
     )
-    ws = fallback ? wb.Sheets[fallback] : undefined
+    if (caseInsensitiveMatches.length > 1) {
+      throw new Error(
+        `Tên sheet "${sheetName}" không duy nhất khi so khớp không phân biệt chữ hoa/thường. Các sheet khớp: ${caseInsensitiveMatches.join(', ')}`,
+      )
+    }
+    resolvedSheetName = caseInsensitiveMatches[0]
   }
-  if (!ws) {
+  if (!resolvedSheetName) {
+    const normalizedMatches = availableSheets.filter(
+      name => name.trim().toLowerCase() === sheetName.trim().toLowerCase(),
+    )
+    if (normalizedMatches.length > 1) {
+      throw new Error(
+        `Tên sheet "${sheetName}" khớp nhiều sheet sau khi bỏ khoảng trắng đầu/cuối. Vui lòng nhập đúng tên sheet. Các sheet khớp: ${normalizedMatches.join(', ')}`,
+      )
+    }
+    resolvedSheetName = normalizedMatches[0]
+  }
+  const ws = resolvedSheetName ? wb.Sheets[resolvedSheetName] : undefined
+  if (!ws || !resolvedSheetName) {
     throw new Error(
       `Sheet "${sheetName}" không tìm thấy. Các sheet trong file: ${availableSheets.join(', ')}`,
     )
   }
 
-  // Detect year/month from sheet name "DD.M.YYYY" or "DD.MM.YYYY"
-  let year = 2026, month = 7
-  const sheetMatch = sheetName.match(/^(\d+)\.(\d+)\.(\d{4})$/)
-  if (sheetMatch) {
-    month = parseInt(sheetMatch[2], 10)
-    year  = parseInt(sheetMatch[3], 10)
+  // Detect period from the actual resolved sheet name, allowing Excel's
+  // duplicate-sheet suffix and trailing whitespace (e.g. "2.1.2026 (2) ").
+  const sheetMatch = resolvedSheetName.match(/^\s*(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+\(\d+\))?\s*$/)
+  if (!sheetMatch) {
+    throw new Error(
+      `Không xác định được tháng/năm từ tên sheet "${resolvedSheetName}". Hãy chọn sheet có tên ngày theo dạng DD.MM.YYYY (có thể có hậu tố (N)).`,
+    )
   }
-
-  const daysInMonthVal = new Date(year, month, 0).getDate()  // day 0 of next month = last day of this month
+  const day = parseInt(sheetMatch[1], 10)
+  const month = parseInt(sheetMatch[2], 10)
+  const year = parseInt(sheetMatch[3], 10)
+  const daysInMonthVal = new Date(year, month, 0).getDate()
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonthVal) {
+    throw new Error(
+      `Ngày trong tên sheet "${resolvedSheetName}" không hợp lệ. Hãy dùng ngày theo dạng DD.MM.YYYY.`,
+    )
+  }
 
   // Build merge lookup: "row,col" → top-left cell of the merged region
   const merges: XLSX.Range[] = ((ws as Record<string, unknown>)['!merges'] as XLSX.Range[]) || []
@@ -238,7 +298,8 @@ export function parseScheduleReport(
 
         const startDay = topLeft.c - DAY_COL_START + 1
         const endDay   = end.c    - DAY_COL_START + 1
-        const piNumbers = extractPiFromRaw(rawVal)
+        const match = knownPiNumbers === undefined ? { piNumbers: extractPiFromRaw(rawVal), needsManual: false } : matchSchedulePi(rawVal, knownPiNumbers)
+        const piNumbers = match.piNumbers
 
         assignments.push({
           machineId,
@@ -248,7 +309,7 @@ export function parseScheduleReport(
           endDay,
           startDate: dayToISO(year, month, startDay),
           endDate:   dayToISO(year, month, endDay),
-          isAmbiguous: piNumbers.some(p => AMBIGUOUS_PI.has(p)),
+          isAmbiguous: match.needsManual || (knownPiNumbers === undefined && piNumbers.some(p => AMBIGUOUS_PI.has(p))),
           isInvalid:   piNumbers.length === 0,
         })
       } else {
@@ -257,7 +318,8 @@ export function parseScheduleReport(
         if (!rawVal) continue
 
         const day = c - DAY_COL_START + 1
-        const piNumbers = extractPiFromRaw(rawVal)
+        const match = knownPiNumbers === undefined ? { piNumbers: extractPiFromRaw(rawVal), needsManual: false } : matchSchedulePi(rawVal, knownPiNumbers)
+        const piNumbers = match.piNumbers
 
         assignments.push({
           machineId,
@@ -267,12 +329,26 @@ export function parseScheduleReport(
           endDay:   day,
           startDate: dayToISO(year, month, day),
           endDate:   dayToISO(year, month, day),
-          isAmbiguous: piNumbers.some(p => AMBIGUOUS_PI.has(p)),
+          isAmbiguous: match.needsManual || (knownPiNumbers === undefined && piNumbers.some(p => AMBIGUOUS_PI.has(p))),
           isInvalid:   piNumbers.length === 0,
         })
       }
     }
   }
 
-  return { assignments, machineSpecs, availableSheets, year, month, daysInMonth: daysInMonthVal }
+  const sheetTitle = cellValue(3, 0) // A4 is the monthly title in the source schedule.
+  const titlePeriod = parseScheduleTitlePeriod(sheetTitle)
+  const yellowDayDates: string[] = []
+  // The source workbook's numbered day header is row 6. Ignore product fills,
+  // other header rows and non-yellow colors rather than guessing a holiday.
+  for (let c = DAY_COL_START; c <= Math.min(DAY_COL_END, DAY_COL_START + daysInMonthVal - 1); c++) {
+    const cell = ws[XLSX.utils.encode_cell({ r: 5, c })] as XLSX.CellObject | undefined
+    const style = cell?.s as { patternType?: string; fgColor?: { rgb?: string } } | undefined
+    const color = style?.fgColor?.rgb?.toUpperCase()
+    if (Number(cell?.v) === c - DAY_COL_START + 1 && style?.patternType === 'solid'
+      && (color === 'FFFF00' || color === 'FFFFFF00')) {
+      yellowDayDates.push(dayToISO(year, month, c - DAY_COL_START + 1).slice(0, 10))
+    }
+  }
+  return { assignments, machineSpecs, availableSheets, sheetName: resolvedSheetName, sheetTitle, titlePeriod, year, month, daysInMonth: daysInMonthVal, yellowDayDates }
 }

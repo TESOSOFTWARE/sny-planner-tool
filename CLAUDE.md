@@ -1,5 +1,8 @@
+@AGENTS.md
+
 # CLAUDE.md — SNY Planner Tool
-> Ground truth for all AI coding agents (Antigravity, Cursor).
+> Ground truth for all AI coding agents (Antigravity, Cursor, Claude Code).
+> `AGENTS.md` được import ở dòng đầu — nó là nguồn luật + bảng định tuyến skill. File này bổ sung bối cảnh dự án, không thay thế nó.
 > READ THIS ENTIRE FILE before generating any code.
 > If context in this file conflicts with your judgment → this file wins.
 > Last sprint DONE: Import Rolling & Đóng gói (Sprint J1 & J2) ✅

@@ -1,8 +1,17 @@
+import { missingInferredPacking } from '@/lib/excel/orderListPacking'
 // src/lib/validations/order.ts
 // Zod v4 validation schema for creating a new ProductionOrder.
 // Used on BOTH client (react-hook-form resolver) and server (API route).
 
 import { z } from 'zod'
+
+// At most two decimal places; tolerance only compensates IEEE-754 error.
+export function hasGsmPrecision(value: number): boolean {
+  const scaled = value * 100
+  return Number.isFinite(value) && Math.abs(scaled - Math.round(scaled)) <= 4 * Number.EPSILON * Math.max(1, Math.abs(scaled))
+}
+
+const gsmPrecisionError = 'GSM tối đa 2 chữ số thập phân (vd 13.45)'
 
 export function isValidISODate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
@@ -107,13 +116,13 @@ export const createOrderSchema = z.object({
 
   gsm: z
     .number().finite()
-    .int('GSM must be a whole number')
+    .refine(hasGsmPrecision, gsmPrecisionError)
     .gt(0, 'GSM must be greater than 0')
     .max(500, 'GSM must be 500 or less'),
 
   productionGsm: z
     .number().finite()
-    .int('GSM sản xuất must be a whole number')
+    .refine(hasGsmPrecision, gsmPrecisionError)
     .gt(0, 'GSM sản xuất must be greater than 0')
     .max(500, 'GSM sản xuất must be 500 or less')
     .nullable()
@@ -245,9 +254,9 @@ export const createOrderSchema = z.object({
 
   // Dual-GSM & Tolerance
   isLaminated: z.boolean().default(false),
-  rawFabricGsm: z.number().int().positive().nullable().optional(),
-  coatingGsm: z.number().int().positive().nullable().optional(),
-  finishedGsm: z.number().int().positive().nullable().optional(),
+  rawFabricGsm: z.number().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+  coatingGsm: z.number().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+  finishedGsm: z.number().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
   toleranceQtyPct: z.number().positive().default(10.0).nullable().optional(),
   toleranceSpecPct: z.number().positive().default(5.0).nullable().optional(),
 
@@ -337,7 +346,7 @@ export const updateOrderSchema = z.object({
 
   gsm: z
     .number().finite()
-    .int('GSM must be a whole number')
+    .refine(hasGsmPrecision, gsmPrecisionError)
     .gt(0, 'GSM must be greater than 0')
     .max(500, 'GSM must be 500 or less')
     .nullable()
@@ -345,7 +354,7 @@ export const updateOrderSchema = z.object({
 
   productionGsm: z
     .number().finite()
-    .int('GSM sản xuất must be a whole number')
+    .refine(hasGsmPrecision, gsmPrecisionError)
     .gt(0, 'GSM sản xuất must be greater than 0')
     .max(500, 'GSM sản xuất must be 500 or less')
     .nullable()
@@ -461,9 +470,9 @@ export const updateOrderSchema = z.object({
 
   // Dual-GSM & Tolerance
   isLaminated: z.boolean().optional(),
-  rawFabricGsm: z.number().int().positive().nullable().optional(),
-  coatingGsm: z.number().int().positive().nullable().optional(),
-  finishedGsm: z.number().int().positive().nullable().optional(),
+  rawFabricGsm: z.number().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+  coatingGsm: z.number().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+  finishedGsm: z.number().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
   toleranceQtyPct: z.number().positive().nullable().optional(),
   toleranceSpecPct: z.number().positive().nullable().optional(),
 
@@ -535,7 +544,7 @@ export const desertSandVersionIssue = {
   path: ['colorVersion'],
 }
 
-export const importedOrderRowSchema = z
+function createImportedOrderRowSchema(allowInferredPacking: boolean) { return z
   .object({
     piNumber:     z.string().min(1, 'PI Number là bắt buộc').max(50).transform((v) => v.trim()),
     subLineIndex: z.number().int().min(0),
@@ -543,8 +552,8 @@ export const importedOrderRowSchema = z
     orderDate:    isoDateSchema('Ngày đặt không hợp lệ (YYYY-MM-DD)'),
     widthM:       z.number().finite().gt(0, 'Khổ m phải > 0').max(20),
     lengthM:      z.number().finite().gt(0).max(100_000).nullable().optional(),
-    gsm:          z.number().finite().int().gt(0, 'GSM phải > 0').max(500),
-    productionGsm: z.number().finite().int().gt(0).max(500).nullable().optional(),
+    gsm:          z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).gt(0, 'GSM phải > 0').max(500),
+    productionGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).gt(0).max(500).nullable().optional(),
     color:        z.string().min(1, 'Màu là bắt buộc').max(50).transform((v) => v.trim().toUpperCase()),
     colorVersion: z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
     colorRecipeSnapshot: z.string().nullable().optional(),
@@ -557,6 +566,8 @@ export const importedOrderRowSchema = z
     rollLength:   z.number().finite().gt(0).nullable().optional(),
     pieceLength:  z.number().finite().gt(0).nullable().optional(),
 
+    rawPacking: z.string().nullable().optional(),
+    rawUnit: z.string().nullable().optional(),
     primaryPackingType: z.enum(['ROLL', 'BALE', 'CARTON', 'HEMMED']).default('ROLL'),
     subPackingType: z.enum(['CARTON', 'BALE']).nullable().optional(),
     hasPaperCore: z.boolean().default(false),
@@ -574,9 +585,9 @@ export const importedOrderRowSchema = z
     // (không default) để hàng import cũ thiếu field vẫn parse y như trước.
     outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).nullable().optional(),
     isLaminated:  z.boolean().optional(),
-    rawFabricGsm: z.number().finite().int().positive().nullable().optional(),
-    coatingGsm:   z.number().finite().int().positive().nullable().optional(),
-    finishedGsm:  z.number().finite().int().positive().nullable().optional(),
+    rawFabricGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+    coatingGsm:   z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+    finishedGsm:  z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
     toleranceQtyPct:  z.number().finite().positive().nullable().optional(),
     toleranceSpecPct: z.number().finite().positive().nullable().optional(),
     uvPct:        z.number().finite().min(0).max(100).nullable().optional(),
@@ -633,6 +644,7 @@ export const importedOrderRowSchema = z
   )
   .refine(
     (data) => {
+      if (allowInferredPacking && missingInferredPacking(data) === 'CARTON') return true
       if (data.primaryPackingType === 'CARTON') {
         return data.piecesPerCarton != null && data.piecesPerCarton > 0
       }
@@ -642,6 +654,7 @@ export const importedOrderRowSchema = z
   )
   .refine(
     (data) => {
+      if (allowInferredPacking && missingInferredPacking(data) === 'BALE') return true
       if (data.primaryPackingType === 'BALE') {
         return data.piecesPerBale != null && data.piecesPerBale > 0
       }
@@ -668,6 +681,12 @@ export const importedOrderRowSchema = z
     { message: 'Hàng tráng màng ngoài bắt buộc có GSM dệt mộc và GSM thành phẩm', path: ['rawFabricGsm'] }
   )
   .refine(desertSandVersionOk, desertSandVersionIssue)
+
+}
+
+// Strict schema remains shared by manual edits and approval.
+export const importedOrderRowSchema = createImportedOrderRowSchema(false)
+export const orderListImportRowSchema = createImportedOrderRowSchema(true)
 
 export const MAX_IMPORTED_ORDER_ROWS = 5000
 
@@ -697,8 +716,8 @@ export const draftOrderStateSchema = z.object({
   orderDate: isoDateSchema('Ngày đặt không hợp lệ (YYYY-MM-DD)'),
   widthM: z.number().finite().gt(0).max(20).nullable().optional(),
   lengthM: z.number().finite().gt(0).max(100_000).nullable().optional(),
-  gsm: z.number().finite().int().gt(0).max(500).nullable().optional(),
-  productionGsm: z.number().finite().int().gt(0).max(500).nullable().optional(),
+  gsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).gt(0).max(500).nullable().optional(),
+  productionGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).gt(0).max(500).nullable().optional(),
   color: z.string().min(1).max(50).transform((v) => v.trim().toUpperCase()).nullable().optional(),
   colorVersion: z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
   colorRecipeSnapshot: z.string().nullable().optional(),
@@ -727,9 +746,9 @@ export const draftOrderStateSchema = z.object({
   // V4.1 (mục 5): giữ lại qua state-parse của đơn nháp — lý do như importedOrderRowSchema.
   outerWrapping: z.enum(['POLYBAG', 'TARPAULIN', 'NONE']).nullable().optional(),
   isLaminated: z.boolean().optional(),
-  rawFabricGsm: z.number().finite().int().positive().nullable().optional(),
-  coatingGsm: z.number().finite().int().positive().nullable().optional(),
-  finishedGsm: z.number().finite().int().positive().nullable().optional(),
+  rawFabricGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+  coatingGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+  finishedGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
   toleranceQtyPct: z.number().finite().positive().nullable().optional(),
   toleranceSpecPct: z.number().finite().positive().nullable().optional(),
 
@@ -780,8 +799,8 @@ export const lineSchema = z
     colorVersion: z.string().max(50).nullable().optional(),
     colorRecipeSnapshot: z.string().nullable().optional(),
     widthM:      z.number().finite().gt(0, 'Khổ phải lớn hơn 0').max(20),
-    gsm:         z.number().finite().int().gt(0, 'GSM phải lớn hơn 0').max(500),
-    productionGsm: z.number().finite().int().gt(0, 'GSM sản xuất phải lớn hơn 0').max(500).nullable().optional(),
+    gsm:         z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).gt(0, 'GSM phải lớn hơn 0').max(500),
+    productionGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).gt(0, 'GSM sản xuất phải lớn hơn 0').max(500).nullable().optional(),
     orderType:   z.enum(['meters', 'rolls', 'pieces']).default('meters'),
     lengthM:     z.number().finite().gt(0).max(100_000).nullable().optional(),
     qty:         z.number().finite().int().gt(0).nullable().optional(),
@@ -805,9 +824,9 @@ export const lineSchema = z
 
     // Dual-GSM & Tolerance
     isLaminated: z.boolean().default(false),
-    rawFabricGsm: z.number().finite().int().positive().nullable().optional(),
-    coatingGsm: z.number().finite().int().positive().nullable().optional(),
-    finishedGsm: z.number().finite().int().positive().nullable().optional(),
+    rawFabricGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+    coatingGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+    finishedGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
     toleranceQtyPct: z.number().finite().positive().default(10.0).nullable().optional(),
     toleranceSpecPct: z.number().finite().positive().default(5.0).nullable().optional(),
 
@@ -918,6 +937,7 @@ export const lineSchema = z
   .refine(desertSandVersionOk, desertSandVersionIssue)
 
 export const multiLineOrderSchema = z.object({
+  requireNewPi: z.boolean().optional(),
   // Shared fields — apply to all sub-lines
   piNumber:    z.string().min(1, 'PI Number là bắt buộc').max(50).transform((v) => v.trim()),
   customer:    z.string().min(1, 'Khách hàng là bắt buộc').max(100).transform((v) => v.trim()),
@@ -945,8 +965,8 @@ export const draftLineSchema = z.object({
   colorVersion: z.string().max(50).nullable().optional(),
   colorRecipeSnapshot: z.string().nullable().optional(),
   widthM:      z.number().finite().gt(0).max(20).nullable().optional(),
-  gsm:         z.number().finite().int().gt(0).max(500).nullable().optional(),
-  productionGsm: z.number().finite().int().gt(0).max(500).nullable().optional(),
+  gsm:         z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).gt(0).max(500).nullable().optional(),
+  productionGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).gt(0).max(500).nullable().optional(),
   orderType:   z.enum(['meters', 'rolls', 'pieces']).default('rolls'),
   lengthM:     z.number().finite().gt(0).max(100_000).nullable().optional(),
   qty:         z.number().finite().int().gt(0).nullable().optional(),
@@ -969,9 +989,9 @@ export const draftLineSchema = z.object({
 
   // Dual-GSM & Tolerance
   isLaminated: z.boolean().default(false),
-  rawFabricGsm: z.number().finite().int().positive().nullable().optional(),
-  coatingGsm: z.number().finite().int().positive().nullable().optional(),
-  finishedGsm: z.number().finite().int().positive().nullable().optional(),
+  rawFabricGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+  coatingGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
+  finishedGsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).positive().nullable().optional(),
   toleranceQtyPct: z.number().finite().positive().default(10.0).nullable().optional(),
   toleranceSpecPct: z.number().finite().positive().default(5.0).nullable().optional(),
 
@@ -1032,6 +1052,7 @@ export const draftLineSchema = z.object({
   .refine(desertSandVersionOk, desertSandVersionIssue)
 
 export const draftMultiLineOrderSchema = z.object({
+  requireNewPi: z.boolean().optional(),
   piNumber:    z.string().min(1, 'PI Number là bắt buộc').max(50).transform((v) => v.trim()),
   customer:    z.string().min(1, 'Khách hàng là bắt buộc').max(100).transform((v) => v.trim()),
   customerId:  z.string().nullable().optional(),

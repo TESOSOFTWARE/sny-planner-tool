@@ -197,7 +197,7 @@ export default function KnittingDetailTab({ onImport }: Props) {
             <table className="w-full text-xs font-inter">
               <thead>
                 <tr className="bg-surface-container border-b-[0.5px] border-outline-variant">
-                  {['Ngày', 'Máy Dệt', 'Size(m)', 'Cm/Phút', 'M/Ngày', 'Ca', 'Khổ(m)', 'Màu sắc', 'Trọng lượng(kg)', 'Chiều dài(m)', 'Quantity', 'Ghi chú vận hành', 'Mã PI'].map(h => (
+                  {['Ngày', 'Máy Dệt', 'Size(m)', 'Cm/Phút', 'M/Ngày', 'Ca', 'Khổ(m)', 'Màu sắc', 'Trọng lượng(kg)', 'Chiều dài(m)', 'Quantity', 'Ghi chú vận hành', 'Loại lưới'].map(h => (
                     <th key={h} className="px-3 py-3 text-left font-medium text-secondary uppercase tracking-wider whitespace-nowrap">
                       {h}
                     </th>

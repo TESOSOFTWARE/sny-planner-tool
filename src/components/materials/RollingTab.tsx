@@ -212,7 +212,7 @@ export default function RollingTab({ onImport }: Props) {
             <thead className="bg-surface-container text-secondary font-medium uppercase border-b border-outline-variant">
               <tr>
                 <th className="px-4 py-3 font-semibold">Ngày</th>
-                <th className="px-4 py-3 font-semibold">Mã PI (OrderRef)</th>
+                <th className="px-4 py-3 font-semibold">Khách / đơn</th>
                 <th className="px-4 py-3 font-semibold">Màu</th>
                 <th className="px-4 py-3 font-semibold text-right">Khổ (m)</th>
                 <th className="px-4 py-3 font-semibold text-right">Dài (m)</th>

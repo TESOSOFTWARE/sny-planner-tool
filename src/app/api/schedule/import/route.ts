@@ -7,7 +7,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { outputFallsWithinSchedule, scheduleOutputBounds } from '@/lib/schedule/importSafety'
+import { buildScheduleImportPlan, schedulePlanSnapshot } from '@/lib/schedule/importPlan'
 import { parseScheduleReport } from '@/lib/excel/parseScheduleReport'
+import { getSchedulePeriodConfirmation, schedulePeriodKey } from '@/lib/schedule/importPeriod'
+import { loadFactoryCalendar } from '@/lib/schedule/factoryCalendar'
+import { isWorkingDay } from '@/lib/schedule/productionDuration'
 
 export const maxDuration = 30
 
@@ -27,7 +31,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Chưa tải file lên. Gửi file trong field "file".' }, { status: 400 })
   }
 
-  const sheetName = formData.get('sheetName')?.toString() ?? '20.7.2026'
+  const sheetName = formData.get('sheetName')?.toString() ?? ''
+  if (!sheetName.trim()) {
+    return NextResponse.json({ success: false, error: 'Vui lòng chọn một sheet trong file Excel.' }, { status: 400 })
+  }
 
   const fileName = file instanceof File ? file.name : 'upload'
   if (!fileName.toLowerCase().endsWith('.xlsx')) {
@@ -40,15 +47,28 @@ export async function POST(req: NextRequest) {
 
   // ── 2. Parse Excel ────────────────────────────────────────────────────────
   let parsed
+  let buf: Buffer
   try {
-    const buf = Buffer.from(await file.arrayBuffer())
+    buf = Buffer.from(await file.arrayBuffer())
     parsed = parseScheduleReport(buf, sheetName)
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Lỗi đọc file Excel.'
     return NextResponse.json({ success: false, error: msg }, { status: 422 })
   }
 
-  const { assignments, machineSpecs, year, month, daysInMonth, availableSheets } = parsed
+  const periodConfirmation = getSchedulePeriodConfirmation(parsed)
+  if (periodConfirmation && formData.get('acknowledgedPeriod') !== schedulePeriodKey(periodConfirmation.importPeriod)) {
+    return NextResponse.json({
+      success: false,
+      error: 'Kỳ trong tên sheet khác tiêu đề bên trong. Vui lòng kiểm tra và xác nhận kỳ muốn import.',
+      periodConfirmation,
+    }, { status: 422 })
+  }
+
+  const dbOrders = await prisma.productionOrder.findMany({ select: { id: true, piNumber: true, subLineIndex: true, isPlaceholder: true } })
+  const plan = buildScheduleImportPlan(parsed, dbOrders)
+
+  const { assignments, machineSpecs, year, month, daysInMonth, availableSheets, sheetTitle, titlePeriod } = parsed
 
   // ── 3. Build month overlap filter ─────────────────────────────────────────
   // Use Vietnam timezone for start/end of month boundaries
@@ -123,100 +143,62 @@ export async function POST(req: NextRequest) {
         productionMeters: productionFor(a),
       }))
 
-  // ── 5. Collect PI numbers from file ───────────────────────────────────────
-  const skippedInvalid:   string[] = []
-  const skippedAmbiguous: string[] = []
-  const validPiSet = new Set<string>()  // PI numbers that will get assignments
+  const { toCreateDraftOrders, toCreateAssignments, skippedInvalid, firstLineLinks, needsManual } = plan
+  const skippedAmbiguous = needsManual.map(row => row.rawValue)
 
-  for (const a of assignments) {
-    if (a.isInvalid) {
-      if (a.rawValue && !skippedInvalid.includes(a.rawValue)) {
-        skippedInvalid.push(a.rawValue)
-      }
-      continue
-    }
-    if (a.isAmbiguous) {
-      for (const pi of a.piNumbers) {
-        if (!skippedAmbiguous.includes(pi)) skippedAmbiguous.push(pi)
-      }
-      continue
-    }
-    for (const pi of a.piNumbers) validPiSet.add(pi)
-  }
-
-  // ── 6. DB lookup: which PI numbers already exist? ─────────────────────────
-  // Use case-insensitive matching (Cvellis26-2 in file ↔ CVellis26-2 in DB)
-  const allValidPiList = Array.from(validPiSet)
-  const dbOrders = await prisma.productionOrder.findMany({
-    select: { id: true, piNumber: true, subLineIndex: true },
-  })
-
-  // Build case-insensitive map: lowercase → records
-  const dbPiMap = new Map<string, { id: string; piNumber: string; subLineIndex: number }[]>()
-  for (const o of dbOrders) {
-    const key = o.piNumber.toLowerCase()
-    if (!dbPiMap.has(key)) dbPiMap.set(key, [])
-    dbPiMap.get(key)!.push(o)
-  }
-
-  const toCreateDraftOrders: string[] = []  // PI not in DB → create draft
-  // PI already in DB with single sub-line → will be linked directly (no new draft needed)
-
-  for (const pi of allValidPiList) {
-    const existing = dbPiMap.get(pi.toLowerCase())
-    if (!existing || existing.length === 0) {
-      toCreateDraftOrders.push(pi)
-    }
-    // existing.length === 1 → will link to existing order in confirm step
-    // existing.length > 1  → would be in skippedAmbiguous (already handled above)
-  }
-
-  // ── 7. Build assignments to create ───────────────────────────────────────
-  const toCreateAssignments: Array<{
-    machineId: string
-    piNumber:  string
-    startDate: string
-    endDate:   string
-  }> = []
-
-  for (const a of assignments) {
-    if (a.isInvalid || a.isAmbiguous) continue
-    for (const pi of a.piNumbers) {
-      toCreateAssignments.push({
-        machineId: a.machineId,
-        piNumber:  pi,
-        startDate: a.startDate,
-        endDate:   a.endDate,
-      })
-    }
-  }
+  const storedSpecs = machineSpecs.length > 0
+    ? await prisma.machineSpec.findMany({ where: { machineId: { in: machineSpecs.map(spec => spec.machineId) } }, select: { machineId: true, widthM: true } })
+    : []
+  const widths = new Map(storedSpecs.map(spec => [spec.machineId, Number(spec.widthM)]))
+  const specChanges = machineSpecs.filter(spec => widths.get(spec.machineId) !== spec.widthM)
+    .map(spec => ({ machineId: spec.machineId, oldWidthM: widths.get(spec.machineId) ?? null, newWidthM: spec.widthM }))
 
   // ── 8. Return preview payload ─────────────────────────────────────────────
+  const calendar = parsed.yellowDayDates.length > 0
+    ? await loadFactoryCalendar(prisma, `${year}-${monthStr}-01`, `${year}-${monthStr}-${lastDayStr}`)
+    : null
+  const yellowDaySuggestions = parsed.yellowDayDates.map(date => ({
+    date,
+    matches: calendar ? isWorkingDay(calendar, date) === false : false,
+    hasException: Object.prototype.hasOwnProperty.call(calendar?.workingDateOverrides ?? {}, date),
+  }))
   return NextResponse.json({
     success: true,
     availableSheets,
-    sheetName,
+    sheetName: parsed.sheetName,
+    sheetTitle,
+    titlePeriod,
     year,
     month,
     daysInMonth,
+    yellowDaySuggestions,
     assignmentSnapshot: existingAssignments.map(a => ({ id: a.id, orderId: a.orderId, updatedAt: a.updatedAt.toISOString() })),
     toDelete,
     borderlineAssignments,
     // Kept for old clients; new clients use the complete list above.
     borderlineAssignment: borderlineAssignments[0] ?? null,
+    planSnapshot: schedulePlanSnapshot(buf, parsed.sheetName, dbOrders),
+    firstLineLinks,
+    supersededDrafts: plan.supersededDrafts,
+    needsManual,
     toCreateDraftOrders,
     toCreateAssignments,
     machineSpecs,
+    specChanges,
     skippedAmbiguous,
     skippedInvalid,
     summary: {
+      singleCount: plan.singleCount,
+      multiCount: plan.multiCount,
+      draftCellCount: plan.draftCellCount,
+      manualCount: needsManual.length,
       deleteCount:         toDelete.length,
       borderlineCount:     borderlineAssignments.length,
       protectedCount:      [...toDelete, ...borderlineAssignments].filter(a => a.productionMeters > 0).length,
       assignmentsToCreate: toCreateAssignments.length,
       draftsToCreate:      toCreateDraftOrders.length,
       ambiguousCount:      skippedAmbiguous.length,
-      invalidCount:        skippedInvalid.length,
+      invalidCount:        plan.invalidCellCount,
     },
   })
 }

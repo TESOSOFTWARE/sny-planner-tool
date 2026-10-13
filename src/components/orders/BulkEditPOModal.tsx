@@ -4,6 +4,14 @@
 // Modal to edit shared PO fields across all sub-lines of a piNumber.
 
 import { useState, useEffect, useRef } from 'react'
+import SuggestCombobox, { type SuggestOption } from '@/components/ui/SuggestCombobox'
+
+const loadCustomers = async (q: string, signal: AbortSignal): Promise<SuggestOption<{ id: string }>[]> => {
+  const res = await fetch(q ? `/api/customers/search?q=${encodeURIComponent(q)}` : '/api/customers', { signal })
+  if (!res.ok) throw new Error('customers')
+  const rows: { id: string; name: string }[] = await res.json()
+  return (q ? rows : rows.slice(0, 20)).map(c => ({ value: c.name, data: { id: c.id } }))
+}
 
 interface Props {
   isOpen: boolean
@@ -45,11 +53,6 @@ export default function BulkEditPOModal({
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Customer Autocomplete
-  const [customerOptions, setCustomerOptions] = useState<{ id: string; name: string }[]>([])
-  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
-  const customerRef = useRef<HTMLDivElement>(null)
-
   useEffect(() => {
     setCustomer(initialCustomer || '')
     setOrderDate(initialOrderDate ? initialOrderDate.slice(0, 10) : '')
@@ -68,37 +71,31 @@ export default function BulkEditPOModal({
     initialRemark,
   ])
 
+  // Gõ đúng tên khách đã có (không chọn từ danh sách) vẫn gán customerId.
+  // Khách vừa chọn từ danh sách đã có id chắc chắn: không tra lại theo tên (search chỉ trả 10 kết quả "chứa").
+  const pickedCustomer = useRef<{ name: string; id: string } | null>(null)
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (customerRef.current && !customerRef.current.contains(e.target as Node)) {
-        setShowCustomerDropdown(false)
-      }
+    const query = customer.trim()
+    if (!query) {
+      setCustomerId(null)
+      return
     }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
-
-  useEffect(() => {
+    if (pickedCustomer.current?.name === query) { setCustomerId(pickedCustomer.current.id); return }
+    pickedCustomer.current = null
+    const controller = new AbortController()
     const timer = setTimeout(async () => {
       try {
-        const query = customer.trim()
-        const url = query ? `/api/customers/search?q=${encodeURIComponent(query)}` : '/api/customers'
-        const res = await fetch(url)
+        const res = await fetch(`/api/customers/search?q=${encodeURIComponent(query)}`, { signal: controller.signal })
         if (res.ok) {
-          const data = await res.json()
-          setCustomerOptions(query ? data : data.slice(0, 20))
-          if (query) {
-            const exact = data.find((c: any) => c.name.toLowerCase() === query.toLowerCase())
-            setCustomerId(exact ? exact.id : null)
-          } else {
-            setCustomerId(null)
-          }
+          const data: { id: string; name: string }[] = await res.json()
+          const exact = data.find(c => c.name === query) ?? data.find(c => c.name.toLowerCase() === query.toLowerCase())
+          setCustomerId(exact ? exact.id : null)
         }
       } catch {
       }
-    }, customer.trim() ? 300 : 0)
+    }, 300)
 
-    return () => clearTimeout(timer)
+    return () => { clearTimeout(timer); controller.abort() }
   }, [customer])
 
   if (!isOpen) return null
@@ -196,39 +193,20 @@ export default function BulkEditPOModal({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Customer */}
-            <div className="relative sm:col-span-2" ref={customerRef}>
-              <label className="block text-xs font-inter font-medium text-secondary mb-1">
+            <div className="relative sm:col-span-2">
+              <label htmlFor="bulk-customer" className="block text-xs font-inter font-medium text-secondary mb-1">
                 Khách hàng <span className="text-error">*</span>
               </label>
-              <input
-                type="text"
+              <SuggestCombobox<{ id: string }>
+                id="bulk-customer"
                 value={customer}
-                onChange={(e) => {
-                  setCustomer(e.target.value)
-                  setShowCustomerDropdown(true)
-                }}
-                onFocus={() => setShowCustomerDropdown(true)}
+                onChange={setCustomer}
+                load={loadCustomers}
+                onSelect={(opt) => { pickedCustomer.current = { name: opt.value.trim(), id: opt.data!.id }; setCustomerId(opt.data!.id) }}
                 className={inputCls}
-                autoComplete="off"
+                listLabel="Khách hàng"
+                emptyText={(q) => `Chưa có khách "${q}" — sẽ tạo khách mới khi lưu`}
               />
-              {showCustomerDropdown && customerOptions.length > 0 && (
-                <div className="absolute z-10 w-full mt-1 bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-md shadow-lg max-h-48 overflow-auto">
-                  {customerOptions.map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      className="w-full text-left px-3 py-2 text-sm text-on-surface hover:bg-surface-container-low transition-colors"
-                      onClick={() => {
-                        setCustomer(opt.name)
-                        setCustomerId(opt.id)
-                        setShowCustomerDropdown(false)
-                      }}
-                    >
-                      {opt.name}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
 
             {/* Order Date */}

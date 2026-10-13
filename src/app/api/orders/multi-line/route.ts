@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: `Validation failed — ${messages}` }, { status: 422 })
   }
 
-  const { piNumber, customer, customerId, orderDate, deliveryDate, containerSize, description, remark, lines } = parsed.data
+  const { piNumber, customer, customerId, orderDate, deliveryDate, containerSize, description, remark, lines, requireNewPi } = parsed.data
   const effectiveOrderDate = orderDate && /^\d{4}-\d{2}-\d{2}$/.test(orderDate)
     ? orderDate
     : new Date().toISOString().slice(0, 10)
@@ -97,6 +97,7 @@ export async function POST(req: NextRequest) {
       const nextIndex = existing.length > 0
         ? Math.max(...existing.map((item) => item.subLineIndex)) + 1
         : 0
+      if (requireNewPi && existing.length > 0) return { conflict: true }
 
       const validatedLines: Array<{ line: typeof lines[number]; subLineIndex: number; state: ParsedOrder }> = []
       const validationErrors: string[] = []
@@ -271,6 +272,7 @@ export async function POST(req: NextRequest) {
       return { created }
     }, { timeout: 30_000, maxWait: 5_000 })
 
+    if ('conflict' in result) return NextResponse.json({ success: false, error: `PI ${piNumber} đã tồn tại — đơn lặp phải dùng PI mới` }, { status: 409 })
     if (result.invalid) return NextResponse.json({ success: false, error: `Validation failed — ${result.invalid.join('; ')}` }, { status: 422 })
     return NextResponse.json({ success: true, orders: result.created, count: result.created.length }, { status: 201 })
   } catch (err: unknown) {
