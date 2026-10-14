@@ -15,6 +15,7 @@
 //   Col 6: ORDER REF / PI CODE (e.g. "JPY26-274")
 
 import * as XLSX from 'xlsx'
+import { productionPi } from './productionPi'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,7 @@ export interface ExtruderRow {
   weightKgs:  number       // 0 is valid
   beamNote:   string | null
   orderRef:   string | null
+  sourceOrderRefs?: string[] // Whole source cells retained for catalog resolution.
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -148,6 +150,7 @@ export function parseExtruderReport(buffer: Buffer): ExtruderRow[] {
   let colTotal  = 4  // TOTAL (cumulative — DO NOT SAVE)
   let colBeam   = 5  // BEAM NOTE (e.g. "11 BEAM ( 158 SỢI)")
   let colOrder  = 6  // ORDER REF / PI CODE (e.g. "JPY26-274")
+  let colLooseNote = -1 // Unlabelled cell next to source REMARK (operations/PI).
 
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r]
@@ -187,20 +190,25 @@ export function parseExtruderReport(buffer: Buffer): ExtruderRow[] {
     }
 
     // ── 3. Detect column positions from header row (if present) ──────────────
-    if (row.some(c => typeof c === 'string' && /^(NO|COLOR|WEIGHT|DENIER)$/i.test(String(c).trim()))) {
+    if (row.some(c => typeof c === 'string' && /^(NO\.?|COLOR|WEIGHT|DENIER)$/i.test(String(c).trim()))) {
+      colBeam = -1; colOrder = -1; colLooseNote = -1
+      let colRemark = -1
       for (let c = 0; c < row.length; c++) {
         const h = toStr(row[c]).toUpperCase().trim()
-        if (h === 'NO') colNo = c
+        if (h === 'NO' || h === 'NO.') colNo = c
         else if (h === 'COLOR') colColor = c
         else if (h === 'DENIER') colDenier = c
         else if (h === 'WEIGHT') colWeight = c
         else if (h === 'TOTAL') colTotal = c
+        else if (h.replace(/\s/g, '').includes('REMARK')) colRemark = c
+        else if (h.includes('ORDER') || h.includes('REF') || h === 'PI' || h === 'PI CODE') colOrder = c
         else if (h.includes('BEAM') || h.includes('NOTE')) colBeam = c
-        else if (h.includes('ORDER') || h.includes('REMARK') || h.includes('REF') || h.includes('PI')) colOrder = c
       }
-      // Ensure colBeam and colOrder are strictly after colTotal (col 4)
-      if (colBeam <= colTotal) colBeam = colTotal + 1 // col 5
-      if (colOrder <= colBeam) colOrder = colBeam + 1  // col 6
+      if (colRemark >= 0) {
+        if (colBeam < 0) colBeam = colRemark
+        if (colOrder < 0) colOrder = colRemark
+        if (!toStr(row[colRemark + 1])) colLooseNote = colRemark + 1
+      }
       continue
     }
 
@@ -238,9 +246,11 @@ export function parseExtruderReport(buffer: Buffer): ExtruderRow[] {
     // Col 6 is ORDER REF / PI CODE (e.g. "JPY26-274")
     const rawBeam = toStr(row[colBeam])
     const rawOrder = toStr(row[colOrder])
+    const rawLooseNote = toStr(row[colLooseNote])
 
-    const beamNote = rawBeam || null
-    const orderRef = rawOrder || null
+    const refs = Array.from(new Set([productionPi(rawOrder), productionPi(rawLooseNote)].filter((ref): ref is string => ref !== null)))
+    const orderRef = refs.length === 1 ? refs[0] : null
+    const beamNote = Array.from(new Set([rawBeam, rawOrder, rawLooseNote].filter(value => value && value !== orderRef))).join(' · ') || null
 
     blockWeightSum += weightKgs
 
@@ -253,6 +263,7 @@ export function parseExtruderReport(buffer: Buffer): ExtruderRow[] {
       weightKgs,
       beamNote,
       orderRef,
+      sourceOrderRefs: Array.from(new Set([rawOrder, rawLooseNote].filter(Boolean))),
     })
   }
 

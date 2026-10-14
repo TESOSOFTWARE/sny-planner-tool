@@ -32,6 +32,9 @@ interface ApiResponse {
   success: boolean
   records: KnittingDetailRecord[]
   total:   number
+  totalWeightKgs: string
+  totalLengthM:   string
+  machineCount:   number
   error?:  string
 }
 
@@ -67,6 +70,7 @@ function ShiftBadge({ shift }: { shift: string }) {
 export default function KnittingDetailTab({ onImport }: Props) {
   const [records, setRecords]   = useState<KnittingDetailRecord[]>([])
   const [total, setTotal]       = useState(0)
+  const [summary, setSummary]   = useState({ kg: 0, m: 0, machines: 0 })
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
 
@@ -88,6 +92,7 @@ export default function KnittingDetailTab({ onImport }: Props) {
 
       setRecords(data.records)
       setTotal(data.total)
+      setSummary({ kg: Number(data.totalWeightKgs), m: Number(data.totalLengthM), machines: data.machineCount })
 
       if (!filterMachine) {
         const machines = Array.from(new Set(data.records.map(r => r.machineId))).sort()
@@ -102,9 +107,10 @@ export default function KnittingDetailTab({ onImport }: Props) {
 
   useEffect(() => { fetchRecords() }, [fetchRecords])
 
-  const totalKg = records.reduce((s, r) => s + parseFloat(r.weightKgs), 0)
-  const totalM = records.reduce((s, r) => s + (r.lengthM ? parseFloat(r.lengthM) : 0), 0)
-  const machineCount = new Set(records.map(r => r.machineId)).size
+  // Server totals over every filtered row, not only the loaded page (N12)
+  const totalKg = summary.kg
+  const totalM = summary.m
+  const machineCount = summary.machines
 
   return (
     <div className="space-y-4">

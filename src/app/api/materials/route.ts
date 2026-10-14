@@ -77,6 +77,7 @@ export async function GET(req: NextRequest) {
         createdAt:m.createdAt.toISOString(),updatedAt:m.updatedAt.toISOString(),stockReportDate:m.stockReportDate?.toISOString().slice(0,10) ?? null,
         subGroup:taxonomyById.has(m.id) ? taxonomyById.get(m.id)!.subGroup : sourceString('subGroup'),lightFastness:taxonomyById.has(m.id) ? taxonomyById.get(m.id)!.lightFastness : sourceString('lightFastness'),
         color:m.color ?? sourceString('color'),brand:m.brand ?? sourceString('brand'),
+        colorName:sourceString('colorName'),itemCode:sourceString('itemCode'),
         latestReport:snapshot?{reportDate:snapshot.reportDate.toISOString().slice(0,10),payload:snapshot.payload}:null,
       }
     })
