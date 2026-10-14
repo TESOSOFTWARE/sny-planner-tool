@@ -29,6 +29,8 @@ interface ApiResponse {
   success: boolean
   records: WarpingRecord[]
   total:   number
+  totalWeightKgs: string
+  machineCount:   number
   error?:  string
 }
 
@@ -64,6 +66,7 @@ function ShiftBadge({ shift }: { shift: string }) {
 export default function WarpingTab({ onImport }: Props) {
   const [records, setRecords]   = useState<WarpingRecord[]>([])
   const [total, setTotal]       = useState(0)
+  const [summary, setSummary]   = useState({ kg: 0, machines: 0 })
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
 
@@ -85,6 +88,7 @@ export default function WarpingTab({ onImport }: Props) {
 
       setRecords(data.records)
       setTotal(data.total)
+      setSummary({ kg: Number(data.totalWeightKgs), machines: data.machineCount })
 
       if (!filterMachine) {
         const machines = Array.from(new Set(data.records.map(r => r.machineId))).sort()
@@ -99,8 +103,9 @@ export default function WarpingTab({ onImport }: Props) {
 
   useEffect(() => { fetchRecords() }, [fetchRecords])
 
-  const totalKg = records.reduce((s, r) => s + parseFloat(r.weightKgs), 0)
-  const machineCount = new Set(records.map(r => r.machineId)).size
+  // Server totals over every filtered row, not only the loaded page (N12)
+  const totalKg = summary.kg
+  const machineCount = summary.machines
 
   return (
     <div className="space-y-4">

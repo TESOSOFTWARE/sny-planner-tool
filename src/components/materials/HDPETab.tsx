@@ -68,7 +68,7 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
     const q = query.trim().toLowerCase()
     const sameDate = materials.map(material => ({ ...material, latestReport: material.latestReport?.reportDate.slice(0, 10) === reportDate ? material.latestReport : null }))
     if (!q) return sameDate
-    return sameDate.filter(m => `${m.name} ${m.color ?? ''} ${m.brand ?? ''}`.toLowerCase().includes(q))
+    return sameDate.filter(m => `${m.name} ${m.color ?? ''} ${m.colorName ?? ''} ${m.itemCode ?? ''} ${m.brand ?? ''} ${m.latestReport?.payload.colorName ?? ''} ${m.latestReport?.payload.itemCode ?? ''}`.toLowerCase().includes(q))
   }, [materials, query, reportDate])
 
   const sections = useMemo(
@@ -196,7 +196,7 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
                         <button type="button" title={mat.name} onClick={e => { e.stopPropagation(); onReports(mat) }} className="max-w-full truncate text-left hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">{mat.name}</button>
                         {mat.latestReport && <div className="text-xs font-normal text-secondary mt-1">Kỳ nguồn: {reportPeriodLabel(mat.latestReport.reportDate, mat.latestReport.payload)}</div>}
                         {mat.latestReport && <div className="text-xs font-normal text-secondary mt-1">{reconciliationRange([mat.latestReport])}</div>}
-                        {mat.group === 'MB' && <div className="text-xs font-normal text-secondary mt-1">ITEM: {mat.itemCode ?? payload?.itemCode ?? '—'} · Mã màu: {mat.color ?? '—'} · Hãng: {mat.brand ?? '—'} · Độ bền màu: {mat.lightFastness ?? '—'}</div>}
+                        {mat.group === 'MB' && <div className="text-xs font-normal text-secondary mt-1">Item Code: {payload?.itemCode ?? mat.itemCode ?? '—'} · Mã màu: {payload?.color ?? mat.color ?? '—'} · Tên màu: {payload?.colorName ?? mat.colorName ?? '—'} · Hãng: {payload?.brand ?? mat.brand ?? '—'} · Độ bền màu: {payload?.lightFastness ?? mat.lightFastness ?? '—'}</div>}
                       </td>
                       {REPORT_COLUMNS.map(col => (
                         <td

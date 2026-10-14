@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client'
+import { productionPiResolver } from './productionPi'
 
 type OutputRow = {
   machineId: string
@@ -6,6 +7,7 @@ type OutputRow = {
   shift: string
   color: string
   orderRef: string | null
+  sourceOrderRefs?: string[]
   orderId?: string | null
   denier?: unknown
   width?: unknown
@@ -110,6 +112,19 @@ export function preserveOrderLinks<T extends OutputRow>(
   existing: OutputRow[],
   orders: { id: string; piNumber: string }[],
 ): (T & { orderId: string | null })[] {
+  const resolvePi = productionPiResolver(orders.map(order => order.piNumber))
+  incoming = incoming.map(row => {
+    const refs = Array.from(new Set([row.orderRef, ...(row.sourceOrderRefs ?? [])].filter((ref): ref is string => !!ref)))
+    const known = Array.from(new Set(refs.map(resolvePi).filter((pi): pi is string => pi !== null)))
+    if (known.length > 1) conflict('Một dòng báo cáo chứa nhiều PI trong danh mục. Cần chọn PI trước khi import.')
+    if (!known.length) return row
+    const raw = refs.find(ref => resolvePi(ref) === known[0])!
+    const keepNote = (note: string | null | undefined) => note?.split(' · ').filter(part => part !== raw).join(' · ') || null
+    return { ...row, orderRef: raw,
+      ...(row.beamNote !== undefined ? { beamNote: keepNote(row.beamNote) } : {}),
+      ...(row.machineNote !== undefined ? { machineNote: keepNote(row.machineNote) } : {}),
+    }
+  })
   const existingByStable = new Map<string, OutputRow[]>()
   const incomingByStable = new Map<string, T[]>()
   for (const row of existing) {
@@ -189,7 +204,8 @@ export function preserveOrderLinks<T extends OutputRow>(
   return incoming.map(row => {
     const linkedId = assigned.get(row)
     if (linkedId) return { ...row, orderId: linkedId }
-    const piId = row.orderRef ? byPi.get(normalize(row.orderRef)) ?? null : null
+    const pi = resolvePi(row.orderRef)
+    const piId = pi ? byPi.get(normalize(pi)) ?? null : null
     return { ...row, orderId: piId }
   })
 }

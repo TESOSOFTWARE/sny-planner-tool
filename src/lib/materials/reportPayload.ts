@@ -8,6 +8,10 @@ export function materialReportPayload(row: ParsedMaterialRow) {
     outBroken: row.outBroken, outTape: row.outTape, outReject: row.outReject, lastStock: row.lastStock,
     ...(row.subGroup ? { subGroup: row.subGroup } : {}),
     ...(row.lightFastness ? { lightFastness: row.lightFastness } : {}),
+    ...(row.color ? { color: row.color } : {}),
+    ...(row.colorName ? { colorName: row.colorName } : {}),
+    ...(row.brand ? { brand: row.brand } : {}),
+    ...(row.itemCode ? { itemCode: row.itemCode } : {}),
   }
 }
 
@@ -15,14 +19,16 @@ export function sameMaterialReport(payload: unknown, row: ParsedMaterialRow) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false
   const stored = payload as Record<string, unknown>
   const proposed = materialReportPayload(row)
-  const keys = [...Object.keys(proposed), 'subGroup', 'lightFastness']
+  const keys = [...Object.keys(proposed), 'subGroup', 'lightFastness', 'color', 'colorName', 'brand', 'itemCode']
   return keys.every(key => (stored[key] ?? null) === ((proposed as Record<string, unknown>)[key] ?? null))
 }
 
 // Import fills missing catalog metadata; it never replaces a manual classification.
-export function importedTaxonomy(row: ParsedMaterialRow, material?: { subGroup?: string | null; lightFastness?: string | null }) {
+export function importedTaxonomy(row: ParsedMaterialRow, material?: { subGroup?: string | null; lightFastness?: string | null; color?: string | null; brand?: string | null }) {
   return {
     ...(!material?.subGroup && row.subGroup ? { subGroup: row.subGroup } : {}),
     ...(!material?.lightFastness && row.lightFastness ? { lightFastness: row.lightFastness } : {}),
+    ...(row.group === 'MB' && !material?.color && row.color ? { color: row.color } : {}),
+    ...(row.group === 'MB' && !material?.brand && row.brand ? { brand: row.brand } : {}),
   }
 }

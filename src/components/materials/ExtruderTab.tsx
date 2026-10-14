@@ -23,6 +23,8 @@ interface ApiResponse {
   success: boolean
   records: ExtruderRecord[]
   total:   number
+  totalWeightKgs: string
+  machineCount:   number
   error?:  string
 }
 
@@ -64,6 +66,7 @@ function ShiftBadge({ shift }: { shift: string }) {
 export default function ExtruderTab({ onImport }: Props) {
   const [records, setRecords]   = useState<ExtruderRecord[]>([])
   const [total, setTotal]       = useState(0)
+  const [summary, setSummary]   = useState({ kg: 0, machines: 0 })
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
 
@@ -88,6 +91,7 @@ export default function ExtruderTab({ onImport }: Props) {
 
       setRecords(data.records)
       setTotal(data.total)
+      setSummary({ kg: Number(data.totalWeightKgs), machines: data.machineCount })
 
       // Cập nhật danh sách máy có sẵn (chỉ từ lần load không filter theo máy)
       if (!filterMachine) {
@@ -103,9 +107,9 @@ export default function ExtruderTab({ onImport }: Props) {
 
   useEffect(() => { fetchRecords() }, [fetchRecords])
 
-  // Summary stats
-  const totalKg = records.reduce((s, r) => s + parseFloat(r.weightKgs), 0)
-  const machineCount = new Set(records.map(r => r.machineId)).size
+  // Summary stats: server totals over every filtered row, not only the loaded page (N12)
+  const totalKg = summary.kg
+  const machineCount = summary.machines
 
   return (
     <div className="space-y-4">
