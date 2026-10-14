@@ -21,6 +21,7 @@
 //   Col 12: REMARK / PI CODE (orderRef - string, e.g. "JPY26-274")
 
 import * as XLSX from 'xlsx'
+import { productionPi } from './productionPi'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,7 @@ export interface WarpingRow {
   quantity:          number | null
   weightKgs:         number       // 0 is valid
   orderRef:          string | null
+  sourceOrderRefs?: string[]
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -208,7 +210,7 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
         else if (h === 'QUANTITY' || h === 'QTY') colQuantity = c
         else if (h === 'WEIGHT') colWeight = c
         else if (h === 'TOTAL') colTotal = c
-        else if (h.includes('REMARK') || h.includes('ORDER') || h.includes('PI')) colRemark = c
+        else if (h.replace(/\s/g, '').includes('REMARK') || h.includes('ORDER') || h === 'PI' || h === 'PI CODE') colRemark = c
       }
       continue
     }
@@ -256,7 +258,7 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
     const quantity          = toNum(row[colQuantity])
     const rawWeight         = toNum(row[colWeight])
     const weightKgs         = rawWeight != null ? Math.max(0, rawWeight) : 0
-    const orderRef          = toStr(row[colRemark]) || null
+    const orderRef          = productionPi(row[colRemark])
 
     blockWeightSum += weightKgs
 
@@ -275,6 +277,7 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
       quantity,
       weightKgs,
       orderRef,
+      sourceOrderRefs: toStr(row[colRemark]) ? [toStr(row[colRemark])] : [],
     })
   }
 

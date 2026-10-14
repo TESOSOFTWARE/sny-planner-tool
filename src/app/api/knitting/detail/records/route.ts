@@ -35,7 +35,8 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const [records, total] = await Promise.all([
+    // Stats cover every filtered row, not just this page (N12).
+    const [records, total, sum, machines] = await Promise.all([
       prisma.knittingDailyDetail.findMany({
         where,
         orderBy: [{ reportDate: 'desc' }, { machineId: 'asc' }, { shift: 'asc' }],
@@ -43,6 +44,8 @@ export async function GET(req: NextRequest) {
         take: limit,
       }),
       prisma.knittingDailyDetail.count({ where }),
+      prisma.knittingDailyDetail.aggregate({ where, _sum: { weightKgs: true, lengthM: true } }),
+      prisma.knittingDailyDetail.findMany({ where, distinct: ['machineId'], select: { machineId: true } }),
     ])
 
     const serialized = records.map(r => ({
@@ -68,6 +71,9 @@ export async function GET(req: NextRequest) {
       success: true,
       records: serialized,
       total,
+      totalWeightKgs: sum._sum.weightKgs?.toString() ?? '0',
+      totalLengthM: sum._sum.lengthM?.toString() ?? '0',
+      machineCount: machines.length,
       page,
       limit,
     })

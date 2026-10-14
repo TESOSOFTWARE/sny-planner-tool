@@ -59,7 +59,7 @@ export function planHistoryImport(rows: ParsedMaterialReportDay[], materials: Hi
       if (status === 'conflict_existing') {
         reasons = ['Giữ báo cáo đã có; dùng import một ngày nếu cần sửa.']
         const incoming = historyPayload(row)
-        differences = ['firstStock', 'lastStock', 'inQty', 'outUsing', 'outBroken', 'outTape', 'outReject', 'reportPeriodEnd'].flatMap(field => {
+        differences = ['firstStock', 'lastStock', 'inQty', 'outUsing', 'outBroken', 'outTape', 'outReject', 'reportPeriodEnd', 'color', 'colorName', 'brand', 'itemCode', 'lightFastness', 'subGroup'].flatMap(field => {
           const value = (incoming as Record<string, unknown>)[field] ?? null
           return (payload[field] ?? null) === value ? [] : [{ field, stored: payload[field] ?? null, incoming: value }]
         })

@@ -19,6 +19,10 @@ export interface ParsedMaterialRow {
   group?: MaterialGroupInput
   subGroup?: 'NGUYEN_SINH' | 'TAI_CHE'
   lightFastness?: string
+  color?: string
+  colorName?: string
+  brand?: string
+  itemCode?: string
   firstStock: number
   inQty: number
   outUsing: number
@@ -86,6 +90,20 @@ export function inspectMaterialBlocks(buffer: Buffer, group: MaterialGroupInput)
 function findExactHeader(headers: string[], aliases: string[]): number {
   const accepted = new Set(aliases.map((alias) => normalizeCell(alias)))
   return headers.findIndex((header) => accepted.has(header))
+}
+
+// [MoM §3.2] The source M/B table has two COLOR columns: code, then name.
+function mbMetadata(row: unknown[], headers: string[]) {
+  const colors = headers.flatMap((header, index) => header === 'COLOR' ? [index] : [])
+  const text = (col: number) => col >= 0 ? String(row[col] ?? '').trim() || undefined : undefined
+  const fastness = findExactHeader(headers, ['LIGHT FASTNESS', 'ĐỘ BỀN MÀU'])
+  return {
+    color: text(findExactHeader(headers, ['COLOR CODE', 'MÃ MÀU']) >= 0 ? findExactHeader(headers, ['COLOR CODE', 'MÃ MÀU']) : colors[0] ?? -1),
+    colorName: text(findExactHeader(headers, ['COLOR NAME', 'TÊN MÀU']) >= 0 ? findExactHeader(headers, ['COLOR NAME', 'TÊN MÀU']) : colors[1] ?? -1),
+    brand: text(findExactHeader(headers, ['PRODUCTION', 'MANUFACTURER', 'HÃNG'])),
+    itemCode: text(findExactHeader(headers, ['ITEM', 'ITEM CODE'])),
+    lightFastness: text(fastness),
+  }
 }
 
 function parseNumber(value: unknown): number | null {
@@ -165,10 +183,11 @@ export function parseMaterialReport(
     if (labels.includes('COLOR') && labels.includes('LIGHT FASTNESS')) { mbHeaders = labels; continue }
     if (labels.some(label => isSectionLabel(label))) continue
     const lightHeaderCol = rowGroup === 'MB' ? (mbHeaders.indexOf('LIGHT FASTNESS') >= 0 ? mbHeaders.indexOf('LIGHT FASTNESS') : lightFastnessCol) : -1
-    // The customer's M/B heading spans a qualitative cell and its adjacent numeric grade.
-    const rowLightCol = lightHeaderCol >= 0 && lightHeaderCol + 1 < firstStockCol && !mbHeaders[lightHeaderCol + 1] && parseNumber(row[lightHeaderCol + 1]) != null ? lightHeaderCol + 1 : lightHeaderCol
+    // Keep the legacy material-name identity, excluding the unlabelled numeric
+    // cell. Its meaning is unknown; it is never imported as LIGHT FASTNESS.
+    const unlabelledCol = lightHeaderCol >= 0 && lightHeaderCol + 1 < firstStockCol && !mbHeaders[lightHeaderCol + 1] && parseNumber(row[lightHeaderCol + 1]) != null ? lightHeaderCol + 1 : -1
     const nameParts = row.slice(0, Math.max(firstStockCol, 0))
-      .filter((_, index) => index !== subGroupCol && index !== rowLightCol && index !== lightHeaderCol)
+      .filter((_, index) => index !== subGroupCol && index !== unlabelledCol && index !== lightHeaderCol)
       .map((cell) => String(cell ?? '').trim())
       .filter(Boolean)
     const materialName = nameParts.join(' ').trim()
@@ -180,7 +199,7 @@ export function parseMaterialReport(
       : rawSubGroup === 'TAI_CHE' || rawSubGroup === 'TÁI CHẾ' ? 'TAI_CHE' : undefined
     if (rawSubGroup && !mappedSubGroup) validationErrors.push('Phân loại nhựa không hợp lệ')
     const subGroup = rowGroup === 'HDPE' ? mappedSubGroup ?? sourceSubGroup : undefined
-    const lightFastness = rowGroup === 'MB' && rowLightCol >= 0 ? String(row[rowLightCol] ?? '').trim() || undefined : undefined
+    const lightFastness = rowGroup === 'MB' ? mbMetadata(row, mbHeaders.length ? mbHeaders : headers).lightFastness : undefined
     if (lightFastness && lightFastness.length > 100) validationErrors.push('Độ bền màu tối đa 100 ký tự')
     const firstStock = numericValue(row[firstStockCol], { required: true, allowNegative: false }, 'FIRST STOCK', validationErrors)
     const lastStock = numericValue(row[lastStockCol], { required: true, allowNegative: false }, 'LAST STOCK', validationErrors)
@@ -194,6 +213,7 @@ export function parseMaterialReport(
       group: rowGroup,
       ...(subGroup ? { subGroup } : {}),
       ...(lightFastness ? { lightFastness } : {}),
+      ...(rowGroup === 'MB' ? mbMetadata(row, mbHeaders.length ? mbHeaders : headers) : {}),
       firstStock,
       inQty,
       outUsing,
@@ -324,13 +344,9 @@ export function parseMaterialReportHistory(buffer: Buffer, group: MaterialGroupI
       const value = (col: number, label: string, required = false) => col < 0 ? 0 : numericValue(row[col], { required, allowNegative: !required && label !== 'IN' }, label, validationErrors)
       const movements: [string, number][] = [['inQty', inCol], ['outUsing', usingCol], ['outBroken', brokenCol], ['outTape', tapeCol], ['outReject', rejectCol]]
       const missingFields = movements.filter(([, col]) => col < 0 || row[col] == null || String(row[col]).trim() === '').map(([key]) => key)
-      const metadata = (label: string) => {
-        const col = mbHeader.indexOf(label)
-        return col >= 0 && row[col] != null ? String(row[col]).trim() || undefined : undefined
-      }
       result.push({ materialName, ...blockDate, ...(missingFields.length ? { missingFields } : {}), group: section === 'MB' ? 'MB' : group,
         ...(group === 'HDPE' && section !== 'MB' ? { subGroup: section } : {}),
-        ...(section === 'MB' ? { color: metadata('COLOR'), brand: metadata('PRODUCTION'), lightFastness: metadata('LIGHT FASTNESS'), itemCode: metadata('ITEM') } : {}),
+        ...(section === 'MB' ? mbMetadata(row, mbHeader.length ? mbHeader : header) : {}),
         firstStock: value(firstCol, 'FIRST STOCK', true), inQty: value(inCol, 'IN'),
         outUsing: value(usingCol, 'OUT USING'), outBroken: value(brokenCol, 'HDPE BROKEN'),
         outTape: value(tapeCol, 'OUT TAPE'), outReject: value(rejectCol, 'REJECT'), lastStock: value(lastCol, 'LAST STOCK', true),

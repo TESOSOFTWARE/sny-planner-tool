@@ -8,6 +8,8 @@ import { prisma } from '@/lib/db'
 import { preserveOrderLinks, OutputLinkConflict } from '@/lib/excel/preserveOrderLinks'
 import { z } from 'zod'
 
+export const maxDuration = 60  // Matches the 60s transaction timeout below
+
 // ── Zod schema cho từng row ──────────────────────────────────────────────────
 
 const extruderRowSchema = z.object({
@@ -19,6 +21,7 @@ const extruderRowSchema = z.object({
   weightKgs:  z.number().min(0),
   beamNote:   z.string().nullable(),
   orderRef:   z.string().nullable(),
+  sourceOrderRefs: z.array(z.string()).max(2).optional(),
 })
 
 const confirmBodySchema = z.object({
@@ -55,24 +58,16 @@ export async function POST(req: NextRequest) {
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
       await tx.$executeRawUnsafe('LOCK TABLE "extruder_daily_output" IN SHARE ROW EXCLUSIVE MODE')
-      const existingRows = await tx.extruderDailyOutput.findMany({
-        where: { OR: Array.from(groupKeys).map(key => {
-          const [machineId, date] = key.split('::')
-          return { machineId, reportDate: new Date(date) }
-        }) },
-      })
+      const groups = { OR: Array.from(groupKeys).map(key => {
+        const [machineId, date] = key.split('::')
+        return { machineId, reportDate: new Date(date) }
+      }) }
+      const existingRows = await tx.extruderDailyOutput.findMany({ where: groups })
       const orderRows = await tx.productionOrder.findMany({ select: { id: true, piNumber: true } })
       const linkedRows = preserveOrderLinks(rows, existingRows, orderRows)
-      // Delete existing records cho các [machineId, reportDate] trong file
-      for (const key of Array.from(groupKeys)) {
-        const [machineId, reportDateStr] = key.split('::')
-        await tx.extruderDailyOutput.deleteMany({
-          where: {
-            machineId,
-            reportDate: new Date(reportDateStr),
-          },
-        })
-      }
+      // Delete existing records cho các [machineId, reportDate] trong file — một lệnh,
+      // vì xoá từng nhóm làm vượt timeout transaction trên Neon (N13).
+      await tx.extruderDailyOutput.deleteMany({ where: groups })
 
       // Insert tất cả rows mới
       const data = linkedRows.map(row => ({
@@ -90,7 +85,7 @@ export async function POST(req: NextRequest) {
 
       await tx.extruderDailyOutput.createMany({ data })
       insertedCount = data.length
-    })
+    }, { timeout: 60_000, maxWait: 5_000 })
   } catch (err) {
     if (err instanceof OutputLinkConflict) {
       return NextResponse.json({ success: false, code: 'OUTPUT_LINK_CONFLICT', error: err.message }, { status: 409 })

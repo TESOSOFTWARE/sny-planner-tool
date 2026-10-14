@@ -8,6 +8,8 @@ import { prisma } from '@/lib/db'
 import { preserveOrderLinks, OutputLinkConflict } from '@/lib/excel/preserveOrderLinks'
 import { z } from 'zod'
 
+export const maxDuration = 60  // Matches the 60s transaction timeout below
+
 const knittingDetailRowSchema = z.object({
   machineId:      z.string().min(1),
   reportDate:     z.string(),
@@ -22,6 +24,7 @@ const knittingDetailRowSchema = z.object({
   quantity:       z.number().nullable(),
   weightKgs:      z.number().min(0),
   orderRef:       z.string().nullable(),
+  sourceOrderRefs: z.array(z.string()).max(2).optional(),
   machineNote:    z.string().nullable(),
   machineSizeM:   z.number().nullable(),
   cmPerMin:       z.number().nullable(),
@@ -61,24 +64,16 @@ export async function POST(req: NextRequest) {
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
       await tx.$executeRawUnsafe('LOCK TABLE "knitting_daily_detail" IN SHARE ROW EXCLUSIVE MODE')
-      const existingRows = await tx.knittingDailyDetail.findMany({
-        where: { OR: Array.from(groupKeys).map(key => {
-          const [machineId, date] = key.split('::')
-          return { machineId, reportDate: new Date(date) }
-        }) },
-      })
+      const groups = { OR: Array.from(groupKeys).map(key => {
+        const [machineId, date] = key.split('::')
+        return { machineId, reportDate: new Date(date) }
+      }) }
+      const existingRows = await tx.knittingDailyDetail.findMany({ where: groups })
       const orderRows = await tx.productionOrder.findMany({ select: { id: true, piNumber: true } })
       const linkedRows = preserveOrderLinks(rows, existingRows, orderRows)
-      // Rule B: Delete existing records in knitting_daily_detail for [machineId, reportDate] pairs in the file
-      for (const key of Array.from(groupKeys)) {
-        const [machineId, reportDateStr] = key.split('::')
-        await tx.knittingDailyDetail.deleteMany({
-          where: {
-            machineId,
-            reportDate: new Date(reportDateStr),
-          },
-        })
-      }
+      // Rule B: Delete existing records in knitting_daily_detail for [machineId, reportDate] pairs in the file —
+      // one statement; a delete per group (400 for a month) exceeded the transaction timeout on Neon (N13).
+      await tx.knittingDailyDetail.deleteMany({ where: groups })
 
       // Insert new rows into knitting_daily_detail
       const data = linkedRows.map(row => ({
@@ -107,7 +102,7 @@ export async function POST(req: NextRequest) {
 
       await tx.knittingDailyDetail.createMany({ data })
       insertedCount = data.length
-    })
+    }, { timeout: 60_000, maxWait: 5_000 })
   } catch (err) {
     if (err instanceof OutputLinkConflict) {
       return NextResponse.json({ success: false, code: 'OUTPUT_LINK_CONFLICT', error: err.message }, { status: 409 })

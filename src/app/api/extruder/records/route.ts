@@ -37,7 +37,8 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const [records, total] = await Promise.all([
+    // Stats cover every filtered row, not just this page (N12).
+    const [records, total, sum, machines] = await Promise.all([
       prisma.extruderDailyOutput.findMany({
         where,
         orderBy: [{ reportDate: 'desc' }, { machineId: 'asc' }, { shift: 'asc' }],
@@ -45,6 +46,8 @@ export async function GET(req: NextRequest) {
         take: limit,
       }),
       prisma.extruderDailyOutput.count({ where }),
+      prisma.extruderDailyOutput.aggregate({ where, _sum: { weightKgs: true } }),
+      prisma.extruderDailyOutput.findMany({ where, distinct: ['machineId'], select: { machineId: true } }),
     ])
 
     // Serialize Decimal fields to strings for JSON transport
@@ -61,6 +64,8 @@ export async function GET(req: NextRequest) {
       success: true,
       records: serialized,
       total,
+      totalWeightKgs: sum._sum.weightKgs?.toString() ?? '0',
+      machineCount: machines.length,
       page,
       limit,
     })

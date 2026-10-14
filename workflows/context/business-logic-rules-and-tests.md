@@ -19,7 +19,7 @@ Nguồn: [công thức](../../sny-planner-tool/src/lib/calculations/orderWeight.
 
 ## Các giới hạn đang được code hóa
 
-- Khổ > 0 và <= 20 m; GSM đơn/GSM sản xuất là số nguyên > 0 và <= 500; tổng mét <= 100.000 cho cả ba kiểu đơn. Đây là giới hạn validation hiện tại, chưa có tài liệu chứng minh là giới hạn vật lý của xưởng.
+- Khổ > 0 và <= 20 m; GSM đơn/GSM sản xuất nhận tối đa 2 chữ số thập phân, > 0 và <= 500; ba trường GSM dệt mộc/tráng/thành phẩm giữ cận dương hiện có và cũng nhận tối đa 2 chữ số thập phân; tổng mét <= 100.000 cho cả ba kiểu đơn. Đây là giới hạn validation hiện tại, chưa có tài liệu chứng minh là giới hạn vật lý của xưởng.
 - UV% và FR% trong 0–100 nếu nhập. Chọn `frFlag = true` thì FR% phải > 0, kể cả lưu nháp qua kiểm tra trạng thái cuối. Không chọn FR chưa có rule bắt buộc FR% phải trống/0.
 - Số kim, số dàn, số dòng eyelet nếu nhập phải nguyên dương; chưa thấy rule buộc có màu/quy cách eyelet khi bật `hasEyelet`.
 - Ngày đặt/giao được kiểm tra ngày lịch hợp lệ ở schema chung; chưa thấy rule ngày giao phải sau ngày đặt hoặc ngày kết thúc lịch phải trước hạn giao. Đường sửa hàng loạt PI không dùng cùng bộ kiểm tra đầy đủ này.
@@ -30,6 +30,19 @@ Nguồn: [công thức](../../sny-planner-tool/src/lib/calculations/orderWeight.
 - Trường nguồn đơn phân biệt `manual`, `import`, `seed`; tài liệu nói dữ liệu seed không dùng cho AI tương lai. Đây chưa phải chức năng huấn luyện AI đã triển khai.
 
 Nguồn: [validation](../../sny-planner-tool/src/lib/validations/order.ts), [schema](../../sny-planner-tool/prisma/schema.prisma), [PO Summary](../../sny-planner-tool/src/components/orders/POSummaryTable.tsx), [khách hàng](../../sny-planner-tool/src/app/api/customers/[id]/route.ts), các route confirm ở [phần workflow](business-logic-workflows.md).
+
+## Quyết định nghiệp vụ đã chốt từ dữ liệu `[QĐ anh Trí 13/10]`
+
+Chốt thay cho xác nhận của khách, dựa trên ORDER LIST 2023-2026 (669 PI), MasterData, lịch sản xuất và DB DEV. Bằng chứng ở [đề xuất K-1→K-10](../../../REPORT/13102026/CLAUDE/DE_XUAT_TU_DU_LIEU_K1_K10_13102026.md).
+
+- **Item Code chỉ tự điền loại lưới.** Không tự điền màu, UV, MB. Ký hiệu màu trong mã lệch màu đơn thật ở 3/6 PI đối chiếu được; `KAR` = Karcher Yellow chỉ để tham khảo (K-7).
+- **Loại lưới tự điền được sửa tay**, kèm cảnh báo lệch (K-2). "Gợi ý sản phẩm" = loại lưới + mô tả (K-3).
+- **Đoạn số trong Item Code là khổ / chiều dài nhưng chỉ gần đúng** (ví dụ khổ 2.5 m mã ghi `02`), nên **không tự điền khổ/dài**. Không có danh sách chọn UV (K-8).
+- **GSM:** tối đa 2 chữ số thập phân, ≤ 500. Lớn nhất thấy được là 480; có giá trị lẻ thật 75.5 và 13.45 (K-5). Không có đơn cũ bị làm tròn cần sửa trong DB DEV (K-5b).
+- **Dòng trùng Item Code trong một PI là hợp lệ** (5,8% PI có dòng giống hệt quy cách). Chỉ cảnh báo nhẹ, không chặn (K-9).
+- **Repeat để trống số PI, không gợi ý số tiếp theo.** Số PI được cấp ngoài hệ thống: 31% PI không theo dạng `<KH><YY>-<số>`, số nhảy cóc trong cùng khách+năm (K-10).
+- **Import lịch giữ cơ chế tạo đơn nháp** cho tên không giống PI (K-6, theo quyết định 12/10).
+- **Còn chờ khách:** K-1 (file Item Code theo dòng), K-4: khi Repeat có giữ **đúng công thức đã chốt của đơn gốc** không. Hiện tại Repeat chép `color` + `colorVersion` (A/B/STD) + `mbCode` của đơn gốc. Khi lưu đơn mới ở trạng thái APPROVED, `colorRecipeSnapshot` được chụp từ **công thức hiện hành** của màu + phiên bản đó, chứ không lấy snapshot của đơn gốc. Nếu công thức đã sửa sau ngày đơn gốc (DB DEV có 4/10 công thức từng sửa), đơn lặp sẽ sản xuất theo công thức mới.
 
 ## Test thể hiện hệ thống phải làm gì
 

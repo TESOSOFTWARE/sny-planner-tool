@@ -11,6 +11,10 @@ import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
 /** 7 cột của bảng HDPE trong file nguồn — nằm trong payload của MaterialReportSnapshot. */
 export interface MaterialReportPayload {
   itemCode?: string
+  color?: string
+  colorName?: string
+  brand?: string
+  lightFastness?: string
   sourceDateLabel?: string
   reportPeriodEnd?: string
   materialName?: string
@@ -33,6 +37,7 @@ export interface SerializedMaterial {
   brand: string | null
   /** Độ bền màu, chỉ dùng cho group MB. */
   itemCode?: string | null
+  colorName?: string | null
   lightFastness?: string | null
   currentStock: string
   minThreshold: string | null  // null = chưa đặt ngưỡng

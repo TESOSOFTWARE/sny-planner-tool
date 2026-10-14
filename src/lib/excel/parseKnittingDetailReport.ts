@@ -32,6 +32,7 @@
 //   machineNote (col 19) is in the header row starting with '*'.
 
 import * as XLSX from 'xlsx'
+import { productionPi } from './productionPi'
 
 export interface KnittingDetailRow {
   machineId:      string       // "M-001".."M-040"
@@ -49,6 +50,7 @@ export interface KnittingDetailRow {
   weightKgs:      number
 
   orderRef:       string | null // PI code
+  sourceOrderRefs?: string[]
   machineNote:    string | null // operational note (starts with '*')
 
   // Machine level stats
@@ -287,7 +289,7 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
         else if (h.includes('WEIGHT(KG)') || (h === 'WEIGHT' && c > 5)) colWeightKg = c
         else if (h.includes('TOTAL(KG)')) colTotalKg = c
         else if (h.includes('TOTAL(M)')) colTotalM = c
-        else if (h.includes('REMARK') || h.includes('ORDER') || h.includes('PI')) colRemark = c
+        else if (h.replace(/\s/g, '').includes('REMARK') || h.includes('ORDER') || h === 'PI' || h === 'PI CODE') colRemark = c
       }
       continue
     }
@@ -339,19 +341,8 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
 
     const remarkText = toStr(row[colRemark])
 
-    // Heuristic for Remark column:
-    // If data row Remark starts with '*' or contains operational terms -> use data row machineNote
-    // Else -> orderRef (PI code), and machineNote inherits from currentMachineNote (from header row)
-    let orderRef: string | null = null
-    let machineNote: string | null = currentMachineNote // inherits from machine header if available!
-
-    if (remarkText) {
-      if (remarkText.startsWith('*') || /thay\s*dàn|đổi\s*màu|sửa\s*máy|bảo\s*trì/i.test(remarkText)) {
-        machineNote = remarkText
-      } else {
-        orderRef = remarkText
-      }
-    }
+    const orderRef = productionPi(remarkText)
+    const machineNote = Array.from(new Set([currentMachineNote, !orderRef ? remarkText : null].filter(Boolean))).join(' · ') || null
 
     blockWeightSum += weightKgs
 
@@ -369,6 +360,7 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
       quantity,
       weightKgs,
       orderRef,
+      sourceOrderRefs: remarkText ? [remarkText] : [],
       machineNote,
       machineSizeM:   currentMachineSizeM,
       cmPerMin:       currentCmPerMin,
