@@ -1,4 +1,5 @@
 'use client'
+import { prepareReportUpload, ReportUploadError } from '@/lib/excel/uploadTrim'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
@@ -32,8 +33,10 @@ export default function ImportMaterialHistoryModal({ onImported, onClose }: Prop
     if (!file || (confirm && (!preview || preview.counts.new === 0))) return
     setBusy(true); setError('')
     try {
+      const uploadFile = confirm ? file : await prepareReportUpload(file, 'HDPE')
+      if (!confirm) setFile(uploadFile)
       const body = new FormData()
-      body.append('file', file)
+      body.append('file', uploadFile)
       if (confirm && preview) body.append('expectedSnapshot', preview.expectedSnapshot)
       const response = await fetch(`/api/materials/import-history${confirm ? '/confirm' : ''}`, { method: 'POST', body })
       const data = await response.json() as HistoryImportPreview & { created?: number; error?: string }
@@ -52,7 +55,7 @@ export default function ImportMaterialHistoryModal({ onImported, onClose }: Prop
         if (typeof data.expectedSnapshot !== 'string' || !data.expectedSnapshot || !Array.isArray(data.periods) || !Array.isArray(data.skippedRows) || !data.counts || !Number.isFinite(data.counts.new) || data.counts.new < 0 || data.periods.some(period => !period.counts || typeof period.reportDate !== 'string') || data.skippedRows.some(row => !Array.isArray(row.reasons))) throw new Error('Invalid preview')
         setPreview(data)
       }
-    } catch { if (!confirm) setPreview(null); setError('Lỗi kết nối hoặc phản hồi không hợp lệ. Vui lòng thử lại.') }
+    } catch (error: unknown) { if (!confirm) setPreview(null); setError(error instanceof ReportUploadError ? error.message : 'Lỗi kết nối hoặc phản hồi không hợp lệ. Vui lòng thử lại.') }
     finally { setBusy(false) }
   }
   const skipped = preview?.skippedRows.filter(row => row.status !== 'identical') ?? []

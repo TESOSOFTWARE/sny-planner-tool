@@ -21,6 +21,7 @@
 //   Col 12: REMARK / PI CODE (orderRef - string, e.g. "JPY26-274")
 
 import * as XLSX from 'xlsx'
+import { reportSheetMatches } from './reportSheetMatches'
 import { productionPi } from './productionPi'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -118,7 +119,7 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
 
   // Find sheet named "WARPING" (case-insensitive, trim whitespace)
   const sheetName = workbook.SheetNames.find(
-    (n) => n.trim().toUpperCase() === 'WARPING'
+    (n) => reportSheetMatches(n, 'WARPING')
   )
   if (!sheetName) {
     const available = workbook.SheetNames.join(', ')

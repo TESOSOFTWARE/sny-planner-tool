@@ -25,6 +25,7 @@
 //   Verified: serial 46199 → 2026-04-28T00:00:00Z ✓
 
 import * as XLSX from 'xlsx'
+import { reportSheetMatches } from './reportSheetMatches'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -78,7 +79,7 @@ export function parseKnittingReport(buffer: Buffer): KnittingDayData[] {
 
   // Exact sheet name match (confirmed Q1)
   const sheetName = workbook.SheetNames.find(
-    (n) => n.trim().toUpperCase() === 'KNITTING'
+    (n) => reportSheetMatches(n, 'KNITTING')
   )
   if (!sheetName) {
     const available = workbook.SheetNames.join(', ')

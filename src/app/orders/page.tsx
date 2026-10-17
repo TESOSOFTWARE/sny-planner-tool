@@ -56,6 +56,8 @@ export default async function OrdersPage() {
         isPlaceholder: true,
         assignments: {
           select: {
+            id: true,
+            updatedAt: true,
             startDate: true,
             endDate: true,
           },
@@ -69,6 +71,8 @@ export default async function OrdersPage() {
       ...o,
       orderDate: o.orderDate.toISOString(),
       assignments: o.assignments.map((a) => ({
+        id: a.id,
+        updatedAt: a.updatedAt.toISOString(),
         startDate: a.startDate.toISOString(),
         endDate: a.endDate.toISOString(),
       })),

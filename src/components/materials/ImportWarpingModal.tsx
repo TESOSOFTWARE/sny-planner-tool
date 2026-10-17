@@ -1,4 +1,5 @@
 'use client'
+import { prepareReportUpload, ReportUploadError } from '@/lib/excel/uploadTrim'
 
 // src/components/materials/ImportWarpingModal.tsx
 // 3-step modal for importing Warping daily output report (.xlsx)
@@ -63,14 +64,17 @@ export default function ImportWarpingModal({ onImported, onClose }: Props) {
     setIsLoading(true)
 
     try {
+      const uploadFile = await prepareReportUpload(file, 'WARPING')
+      setFile(uploadFile)
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', uploadFile)
       const res  = await fetch('/api/warping/import', { method: 'POST', body: fd })
       const data = await res.json() as PreviewResponse
       if (!res.ok || !data.success) { setError(data.error ?? 'Không thể đọc file.'); return }
       setPreview(data)
       setStep('preview')
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof ReportUploadError) { setError(error.message); return }
       setError('Lỗi mạng — không thể kết nối máy chủ.')
     } finally {
       setIsLoading(false)
@@ -144,6 +148,7 @@ export default function ImportWarpingModal({ onImported, onClose }: Props) {
                 <input
                   id="import-warping-file"
                   type="file"
+                  disabled={isLoading}
                   accept=".xlsx"
                   onChange={e => { setFile(e.target.files?.[0] ?? null); setError(null) }}
                   className="w-full text-sm text-on-surface file:mr-3 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-on-primary hover:file:bg-primary/90 cursor-pointer"

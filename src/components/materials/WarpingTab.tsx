@@ -67,7 +67,7 @@ export default function WarpingTab({ onImport }: Props) {
   const [records, setRecords]   = useState<WarpingRecord[]>([])
   const [total, setTotal]       = useState(0)
   const [summary, setSummary]   = useState({ kg: 0, machines: 0 })
-  const [isLoading, setIsLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
 
   const [filterDate, setFilterDate]       = useState('')
@@ -106,6 +106,7 @@ export default function WarpingTab({ onImport }: Props) {
   // Server totals over every filtered row, not only the loaded page (N12)
   const totalKg = summary.kg
   const machineCount = summary.machines
+  const summaryUnavailable = isLoading || !!fetchError
 
   return (
     <div className="space-y-4">
@@ -161,17 +162,18 @@ export default function WarpingTab({ onImport }: Props) {
 
       {/* Error banner */}
       {fetchError && (
-        <div className="flex items-center gap-2 p-3 bg-error-container border border-error/30 rounded-lg text-error text-sm">
+        <div role="alert" className="flex flex-wrap items-center gap-2 p-3 bg-error-container border border-error/30 rounded-lg text-error text-sm">
           <span className="material-symbols-outlined text-[18px]">error</span>
           {fetchError}
+          <button type="button" onClick={() => void fetchRecords()} disabled={isLoading} className="ml-auto rounded border border-error px-3 py-1 font-medium focus-visible:ring-2 focus-visible:ring-error disabled:opacity-50">Thử lại</button>
         </div>
       )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-3 gap-4">
-        <StatCard label="Tổng dòng" value={total}                                                                                    icon="format_list_numbered" />
-        <StatCard label="Số máy"    value={machineCount}                                                                             icon="precision_manufacturing" />
-        <StatCard label="Tổng sản lượng" value={`${totalKg.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} kg`}              icon="scale" />
+        <StatCard label="Tổng dòng" value={summaryUnavailable ? '—' : total}                                                                                    icon="format_list_numbered" />
+        <StatCard label="Số máy"    value={summaryUnavailable ? '—' : machineCount}                                                                             icon="precision_manufacturing" />
+        <StatCard label="Tổng sản lượng" value={summaryUnavailable ? '—' : `${totalKg.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} kg`} icon="scale" />
       </div>
 
       {/* Table */}
@@ -183,7 +185,7 @@ export default function WarpingTab({ onImport }: Props) {
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
             </svg>
           </div>
-        ) : records.length === 0 ? (
+        ) : fetchError ? null : records.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <span className="material-symbols-outlined text-[48px] text-outline mb-3">waves</span>
             <p className="text-sm text-secondary">

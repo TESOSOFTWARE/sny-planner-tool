@@ -1,4 +1,5 @@
 'use client'
+import { prepareReportUpload, ReportUploadError } from '@/lib/excel/uploadTrim'
 
 // src/components/materials/ImportRollingReportModal.tsx
 // 3-step modal: Upload Excel Statistical Report → Preview Dry-Run → Confirm Import to DB.
@@ -68,8 +69,10 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
     setIsLoading(true)
 
     try {
+      const uploadFile = await prepareReportUpload(file, 'ROLLING')
+      setFile(uploadFile)
       const formData = new FormData()
-      formData.append('file', file)
+      formData.append('file', uploadFile)
       formData.append('month', String(selectedPeriod.month))
       formData.append('year', String(selectedPeriod.year))
 
@@ -87,7 +90,8 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
       setPreview(data)
       setAcknowledgeLoss(false)
       setStep('preview')
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof ReportUploadError) { setError(error.message); return }
       setError('Lỗi kết nối máy chủ.')
     } finally {
       setIsLoading(false)
@@ -183,6 +187,7 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
               <div className="border-2 border-dashed border-outline-variant rounded-xl p-8 text-center hover:border-primary/50 transition-colors">
                 <input
                   type="file"
+                  disabled={isLoading}
                   accept=".xlsx"
                   id="rolling-file-input"
                   onChange={(e) => {

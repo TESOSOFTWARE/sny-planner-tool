@@ -312,6 +312,8 @@ export interface OrderTableItem {
   isDraft: boolean
   isPlaceholder: boolean
   assignments: {
+    id: string
+    updatedAt: string
     startDate: string
     endDate: string
   }[]

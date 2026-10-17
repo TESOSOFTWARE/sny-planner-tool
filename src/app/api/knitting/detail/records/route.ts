@@ -50,6 +50,7 @@ export async function GET(req: NextRequest) {
 
     const serialized = records.map(r => ({
       ...r,
+      meshType:     r.meshType,
       width:        r.width?.toString() ?? null,
       weightSpec:   r.weightSpec?.toString() ?? null,
       lengthM:      r.lengthM?.toString() ?? null,

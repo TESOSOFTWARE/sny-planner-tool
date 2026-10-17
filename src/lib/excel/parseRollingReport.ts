@@ -3,6 +3,7 @@
 // Long-format parsing of 6 primary shift/size metric labels per order item per date.
 
 import * as XLSX from 'xlsx'
+import { reportSheetMatches } from './reportSheetMatches'
 import { rollingPeriodFromFileName, validateRollingPeriod, type RollingPeriod } from '@/lib/materials/rollingPeriod'
 
 export interface ParsedRollingMetric {
@@ -66,7 +67,7 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
   const wb = XLSX.read(buffer, { raw: false, cellDates: true })
   const availableSheets = wb.SheetNames
 
-  const sheetName = availableSheets.find((s) => s.toUpperCase().includes('ROLLING'))
+  const sheetName = availableSheets.find((s) => reportSheetMatches(s, 'ROLLING'))
   if (!sheetName) {
     throw new Error(`Sheet "ROLLING" không tìm thấy. Các sheet trong file: ${availableSheets.join(', ')}`)
   }

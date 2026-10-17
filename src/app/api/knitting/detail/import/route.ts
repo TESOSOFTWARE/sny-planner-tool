@@ -5,6 +5,9 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { parseKnittingDetailReport, type KnittingDetailRow } from '@/lib/excel/parseKnittingDetailReport'
+import { prisma } from '@/lib/db'
+import { productionPiResolver } from '@/lib/excel/productionPi'
+import { collectRemarkValues, knownMeshKeys } from '@/lib/excel/knittingRemark'
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024 // 25 MB
 
@@ -61,8 +64,21 @@ export async function POST(req: NextRequest) {
   const dates    = Array.from(dateSet).sort()
   const machines = Array.from(machineSet).sort()
 
+  let remarkValues
+  try {
+    const [saved, orders] = await Promise.all([
+      prisma.knittingDailyDetail.findMany({ distinct: ['meshType'], select: { meshType: true }, where: { meshType: { not: null } } }),
+      prisma.productionOrder.findMany({ select: { piNumber: true } }),
+    ])
+    remarkValues = collectRemarkValues(parsed, { knownMeshKeys: knownMeshKeys(saved.map(row => row.meshType)), resolvePi: productionPiResolver(orders.map(row => row.piNumber)) })
+  } catch (error) {
+    console.error('[KNITTING_REMARK_PREVIEW]', error)
+    return NextResponse.json({ success: false, error: 'Không tải được danh sách loại lưới và PI. Vui lòng thử lại.' }, { status: 500 })
+  }
+
   return NextResponse.json({
     success:        true,
+    remarkValues,
     totalRecords:   parsed.length,
     dates,          // ["2026-07-20", "2026-07-21"]
     machines,       // ["M-001", "M-002", ...]
