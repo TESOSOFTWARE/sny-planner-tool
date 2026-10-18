@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
     const [records, total, distinctOrders, allMatchingForStats] = await Promise.all([
       prisma.rollingDailyMetric.findMany({
         where,
-        orderBy: [{ date: 'desc' }, { orderRef: 'asc' }],
+        orderBy: [{ date: 'desc' }, { orderRef: 'asc' }, { id: 'asc' }],
         skip,
         take: limit,
         select: {

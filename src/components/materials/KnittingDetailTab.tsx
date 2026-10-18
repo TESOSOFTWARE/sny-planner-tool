@@ -3,7 +3,9 @@
 // src/components/materials/KnittingDetailTab.tsx
 // Tab hiển thị Knitting Daily Detail — bảng dữ liệu chi tiết ca/màu/đơn + thông số máy dệt.
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
+import TablePager from './TablePager'
+import { useMaterialPage } from './useMaterialPage'
 
 interface KnittingDetailRecord {
   id:             string
@@ -69,53 +71,21 @@ function ShiftBadge({ shift }: { shift: string }) {
 }
 
 export default function KnittingDetailTab({ onImport }: Props) {
-  const [records, setRecords]   = useState<KnittingDetailRecord[]>([])
-  const [total, setTotal]       = useState(0)
-  const [summary, setSummary]   = useState({ kg: 0, m: 0, machines: 0 })
-  const [isLoading, setIsLoading] = useState(true)
-  const [fetchError, setFetchError] = useState<string | null>(null)
-
   const [filterDate, setFilterDate]       = useState('')
   const [filterMachine, setFilterMachine] = useState('')
-  const [availableMachines, setAvailableMachines] = useState<string[]>([])
-
-  const fetchRecords = useCallback(async () => {
-    setIsLoading(true)
-    setFetchError(null)
-    try {
-      const params = new URLSearchParams({ limit: '300' })
-      if (filterDate)    params.set('date',      filterDate)
-      if (filterMachine) params.set('machineId', filterMachine)
-
-      const res  = await fetch(`/api/knitting/detail/records?${params}`)
-      const data = await res.json() as ApiResponse
-      if (!res.ok || !data.success) { setFetchError(data.error ?? 'Không thể tải dữ liệu.'); return }
-
-      setRecords(data.records)
-      setTotal(data.total)
-      setSummary({ kg: Number(data.totalWeightKgs), m: Number(data.totalLengthM), machines: data.machineCount })
-
-      if (!filterMachine) {
-        const machines = Array.from(new Set(data.records.map(r => r.machineId))).sort()
-        setAvailableMachines(machines)
-      }
-    } catch {
-      setFetchError('Lỗi mạng — không thể kết nối máy chủ.')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [filterDate, filterMachine])
-
-  useEffect(() => { fetchRecords() }, [fetchRecords])
+  const pagination = useMaterialPage<ApiResponse>('/api/knitting/detail/records', new URLSearchParams({ ...(filterDate ? { date: filterDate } : {}), ...(filterMachine ? { machineId: filterMachine } : {}) }).toString())
+  const { data, loading: isLoading, error: fetchError, retry: fetchRecords } = pagination
+  const records = data?.records ?? [], total = data?.total ?? 0
+  const pager = <TablePager {...pagination} total={total} label="Knitting" />
 
   // Server totals over every filtered row, not only the loaded page (N12)
-  const totalKg = summary.kg
-  const totalM = summary.m
-  const machineCount = summary.machines
+  const totalKg = Number(data?.totalWeightKgs ?? 0)
+  const totalM = Number(data?.totalLengthM ?? 0)
+  const machineCount = data?.machineCount ?? 0
   const summaryUnavailable = isLoading || !!fetchError
 
   return (
-    <div className="space-y-4">
+    <div ref={pagination.tableRef} className="space-y-4 scroll-mt-20">
       {/* Header Actions */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         {/* Filters */}
@@ -184,8 +154,9 @@ export default function KnittingDetailTab({ onImport }: Props) {
       </div>
 
       {/* Table */}
+      {pager}
       <div className="bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-lg overflow-hidden">
-        {isLoading ? (
+        {isLoading && records.length === 0 ? (
           <div className="flex items-center justify-center py-16">
             <svg className="w-6 h-6 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -202,9 +173,9 @@ export default function KnittingDetailTab({ onImport }: Props) {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div data-material-scroll aria-busy={isLoading} className={`max-h-[60vh] overflow-auto ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
             <table className="w-full text-xs font-inter">
-              <thead>
+              <thead className="sticky top-0 z-10 bg-surface-container">
                 <tr className="bg-surface-container border-b-[0.5px] border-outline-variant">
                   {['Ngày', 'Máy Dệt', 'Size(m)', 'Cm/Phút', 'M/Ngày', 'Ca', 'Khổ(m)', 'Màu sắc', 'Trọng lượng(kg)', 'Chiều dài(m)', 'Quantity', 'Ghi chú vận hành', 'Loại lưới', 'PI'].map(h => (
                     <th key={h} className="px-3 py-3 text-left font-medium text-secondary uppercase tracking-wider whitespace-nowrap">
@@ -215,7 +186,7 @@ export default function KnittingDetailTab({ onImport }: Props) {
               </thead>
               <tbody className="divide-y divide-outline-variant/50">
                 {records.map(rec => (
-                  <tr key={rec.id} className="hover:bg-[#f0eded] transition-colors duration-150">
+                  <tr key={rec.id} data-record-id={rec.id} className="hover:bg-[#f0eded] transition-colors duration-150">
                     <td className="px-3 py-2.5 font-mono text-on-surface whitespace-nowrap">
                       {new Date(rec.reportDate).toLocaleDateString('vi-VN', { timeZone: 'UTC', day: '2-digit', month: '2-digit', year: 'numeric' })}
                     </td>
@@ -270,11 +241,6 @@ export default function KnittingDetailTab({ onImport }: Props) {
               </tbody>
             </table>
 
-            <div className="border-t-[0.5px] border-outline-variant px-4 py-2 bg-surface-container">
-              <p className="text-xs font-inter text-secondary">
-                {records.length} dòng{total > records.length ? ` (hiển thị) / ${total} tổng` : ''}
-              </p>
-            </div>
           </div>
         )}
       </div>

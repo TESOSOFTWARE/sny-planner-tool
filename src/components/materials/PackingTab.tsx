@@ -3,73 +3,42 @@
 // src/components/materials/PackingTab.tsx
 // Tab displaying factory total daily outputs for Packing (SẢN LƯỢNG ĐÓNG GÓI).
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
 import { SerializedPackingOutput } from '@/types'
 import ImportPackingReportModal from './ImportPackingReportModal'
+import TablePager from './TablePager'
+import { useMaterialPage } from './useMaterialPage'
+
+interface ApiResponse {
+  success: boolean
+  error?: string
+  records: SerializedPackingOutput[]
+  pagination: { total: number }
+  stats: { uniqueDaysCount: number; sumTotalMeters: number; sumTotalWeightKg: number }
+}
 
 export default function PackingTab() {
-  const [records, setRecords] = useState<SerializedPackingOutput[]>([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [limit, setLimit] = useState(50)
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
   // Filters
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
 
-  // Stats
-  const [uniqueDaysCount, setUniqueDaysCount] = useState(0)
-  const [sumTotalMeters, setSumTotalMeters] = useState(0)
-  const [sumTotalWeightKg, setSumTotalWeightKg] = useState(0)
-
   // Modal State
   const [showImportModal, setShowImportModal] = useState(false)
 
-  const fetchRecords = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
-    try {
-      const params = new URLSearchParams()
-      params.set('page', page.toString())
-      params.set('limit', limit.toString())
-      if (startDate) params.set('startDate', startDate)
-      if (endDate) params.set('endDate', endDate)
-
-      const res = await fetch(`/api/materials/packing/records?${params.toString()}`)
-      const data = await res.json()
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Lỗi khi tải dữ liệu Đóng gói')
-      }
-
-      setRecords(data.records || [])
-      setTotal(data.pagination?.total || 0)
-      setUniqueDaysCount(data.stats?.uniqueDaysCount || 0)
-      setSumTotalMeters(data.stats?.sumTotalMeters || 0)
-      setSumTotalWeightKg(data.stats?.sumTotalWeightKg || 0)
-    } catch (err: any) {
-      setError(err.message || 'Không thể kết nối đến máy chủ')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [page, limit, startDate, endDate])
-
-  useEffect(() => {
-    fetchRecords()
-  }, [fetchRecords])
-
-  const totalPages = Math.ceil(total / limit) || 1
+  const pagination = useMaterialPage<ApiResponse>('/api/materials/packing/records', new URLSearchParams({ ...(startDate ? { startDate } : {}), ...(endDate ? { endDate } : {}) }).toString())
+  const { data, loading: isLoading, error, retry: fetchRecords } = pagination
+  const records = data?.records ?? [], total = data?.pagination.total ?? 0
+  const uniqueDaysCount = data?.stats.uniqueDaysCount ?? 0, sumTotalMeters = data?.stats.sumTotalMeters ?? 0, sumTotalWeightKg = data?.stats.sumTotalWeightKg ?? 0
+  const summaryUnavailable = isLoading || !!error
+  const pager = <TablePager {...pagination} total={total} label="Đóng gói" />
 
   const handleClearFilters = () => {
     setStartDate('')
     setEndDate('')
-    setPage(1)
   }
 
   return (
-    <div className="space-y-6">
+    <div ref={pagination.tableRef} className="space-y-6 scroll-mt-20">
       {/* Stat Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Card 1: Total Days */}
@@ -82,7 +51,7 @@ export default function PackingTab() {
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-3xl font-bold text-slate-800" suppressHydrationWarning>
-              {uniqueDaysCount.toLocaleString('vi-VN')}
+              {summaryUnavailable ? '—' : uniqueDaysCount.toLocaleString('vi-VN')}
             </span>
             <span className="text-xs text-slate-500">ngày</span>
           </div>
@@ -101,7 +70,7 @@ export default function PackingTab() {
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-3xl font-bold text-emerald-600">
-              {sumTotalMeters.toLocaleString('vi-VN')}
+              {summaryUnavailable ? '—' : sumTotalMeters.toLocaleString('vi-VN')}
             </span>
             <span className="text-xs text-slate-500">m</span>
           </div>
@@ -120,7 +89,7 @@ export default function PackingTab() {
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-3xl font-bold text-purple-600">
-              {sumTotalWeightKg.toLocaleString('vi-VN')}
+              {summaryUnavailable ? '—' : sumTotalWeightKg.toLocaleString('vi-VN')}
             </span>
             <span className="text-xs text-slate-500">kg</span>
           </div>
@@ -141,7 +110,6 @@ export default function PackingTab() {
               value={startDate}
               onChange={(e) => {
                 setStartDate(e.target.value)
-                setPage(1)
               }}
               className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
             />
@@ -155,7 +123,6 @@ export default function PackingTab() {
               value={endDate}
               onChange={(e) => {
                 setEndDate(e.target.value)
-                setPage(1)
               }}
               className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-700 focus:border-blue-500 focus:outline-none"
             />
@@ -183,8 +150,9 @@ export default function PackingTab() {
       </div>
 
       {/* Data Table / Empty State / Loading State */}
+      {pager}
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        {isLoading ? (
+        {isLoading && records.length === 0 ? (
           <div className="p-12 text-center text-slate-400 space-y-2">
             <div className="text-3xl animate-spin">⏳</div>
             <div className="text-sm">Đang tải dữ liệu Đóng gói...</div>
@@ -222,9 +190,9 @@ export default function PackingTab() {
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto">
+            <div data-material-scroll aria-busy={isLoading} className={`max-h-[60vh] overflow-auto ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                <thead className="sticky top-0 z-10 bg-slate-50 text-slate-600 border-b border-slate-200">
                   <tr>
                     <th className="px-4 py-3 font-semibold">Ngày</th>
                     <th className="px-4 py-3 font-semibold text-right">SL Ca Ngày</th>
@@ -238,7 +206,7 @@ export default function PackingTab() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {records.map((row) => (
-                    <tr key={row.id} className="hover:bg-slate-50/80 transition-colors">
+                    <tr key={row.id} data-record-id={row.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="px-4 py-3 font-medium text-slate-800 whitespace-nowrap">
                         {row.date.split('-').reverse().join('/')}
                       </td>
@@ -269,34 +237,6 @@ export default function PackingTab() {
               </table>
             </div>
 
-            {/* Pagination Controls */}
-            {total > 0 && (
-              <div className="flex flex-wrap gap-3 items-center justify-between border-t border-slate-200 px-4 py-3 bg-slate-50 text-xs text-slate-500">
-                <div>
-                  Trang <strong>{page.toLocaleString('vi-VN')}</strong>/{totalPages.toLocaleString('vi-VN')} · {total.toLocaleString('vi-VN')} dòng
-                </div>
-                <div className="flex items-center gap-1">
-                  <label className="flex items-center gap-2 mr-2">Số dòng/trang<select aria-label="Số dòng mỗi trang Đóng gói" value={limit} onChange={event => { setPage(1); setLimit(Number(event.target.value)) }} disabled={isLoading} className="rounded border border-slate-200 bg-white px-2 py-1">{[50, 100, 200].map(size => <option key={size} value={size}>{size}</option>)}</select></label>
-                  <button
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                    className="rounded-lg border bg-white px-2.5 py-1 text-slate-600 disabled:opacity-40 hover:bg-slate-100"
-                  >
-                    ← Trước
-                  </button>
-                  <span className="px-2 font-medium">
-                    {page.toLocaleString('vi-VN')}/{totalPages.toLocaleString('vi-VN')}
-                  </span>
-                  <button
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={page === totalPages}
-                    className="rounded-lg border bg-white px-2.5 py-1 text-slate-600 disabled:opacity-40 hover:bg-slate-100"
-                  >
-                    Sau →
-                  </button>
-                </div>
-              </div>
-            )}
           </>
         )}
       </div>

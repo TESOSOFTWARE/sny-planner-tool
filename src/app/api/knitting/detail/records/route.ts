@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
     const [records, total, sum, machines] = await Promise.all([
       prisma.knittingDailyDetail.findMany({
         where,
-        orderBy: [{ reportDate: 'desc' }, { machineId: 'asc' }, { shift: 'asc' }],
+        orderBy: [{ reportDate: 'desc' }, { machineId: 'asc' }, { shift: 'asc' }, { id: 'asc' }],
         skip,
         take: limit,
       }),
