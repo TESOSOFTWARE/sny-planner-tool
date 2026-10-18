@@ -11,7 +11,7 @@ export default function PackingTab() {
   const [records, setRecords] = useState<SerializedPackingOutput[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [limit] = useState(50)
+  const [limit, setLimit] = useState(50)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -240,7 +240,7 @@ export default function PackingTab() {
                   {records.map((row) => (
                     <tr key={row.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="px-4 py-3 font-medium text-slate-800 whitespace-nowrap">
-                        {row.date}
+                        {row.date.split('-').reverse().join('/')}
                       </td>
                       <td className="px-4 py-3 text-right text-slate-600 whitespace-nowrap" suppressHydrationWarning>
                         {row.qtyDay != null ? row.qtyDay.toLocaleString('vi-VN') : '-'}
@@ -270,12 +270,13 @@ export default function PackingTab() {
             </div>
 
             {/* Pagination Controls */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 bg-slate-50 text-xs text-slate-500">
+            {total > 0 && (
+              <div className="flex flex-wrap gap-3 items-center justify-between border-t border-slate-200 px-4 py-3 bg-slate-50 text-xs text-slate-500">
                 <div>
-                  Hiển thị <strong>{records.length}</strong> / <strong>{total}</strong> bản ghi
+                  Trang <strong>{page.toLocaleString('vi-VN')}</strong>/{totalPages.toLocaleString('vi-VN')} · {total.toLocaleString('vi-VN')} dòng
                 </div>
                 <div className="flex items-center gap-1">
+                  <label className="flex items-center gap-2 mr-2">Số dòng/trang<select aria-label="Số dòng mỗi trang Đóng gói" value={limit} onChange={event => { setPage(1); setLimit(Number(event.target.value)) }} disabled={isLoading} className="rounded border border-slate-200 bg-white px-2 py-1">{[50, 100, 200].map(size => <option key={size} value={size}>{size}</option>)}</select></label>
                   <button
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
                     disabled={page === 1}
@@ -284,7 +285,7 @@ export default function PackingTab() {
                     ← Trước
                   </button>
                   <span className="px-2 font-medium">
-                    Trang {page} / {totalPages}
+                    {page.toLocaleString('vi-VN')}/{totalPages.toLocaleString('vi-VN')}
                   </span>
                   <button
                     onClick={() => setPage((p) => Math.min(totalPages, p + 1))}

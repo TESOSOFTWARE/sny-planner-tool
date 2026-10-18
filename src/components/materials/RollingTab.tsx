@@ -58,6 +58,7 @@ export default function RollingTab({ onImport }: Props) {
   const [sumWeightKg, setSumWeightKg]             = useState(0)
   const [availableOrders, setAvailableOrders]     = useState<string[]>([])
   const [page, setPage]                           = useState(1)
+  const [limit, setLimit]                         = useState(100)
   const [totalPages, setTotalPages]               = useState(1)
   const [isLoading, setIsLoading]                 = useState(false)
   const [fetchError, setFetchError]               = useState<string | null>(null)
@@ -72,7 +73,7 @@ export default function RollingTab({ onImport }: Props) {
     try {
       const params = new URLSearchParams({
         page: targetPage.toString(),
-        limit: '100',
+        limit: limit.toString(),
       })
       if (filterDate)     params.set('date', filterDate)
       if (filterOrderRef) params.set('orderRef', filterOrderRef)
@@ -100,7 +101,7 @@ export default function RollingTab({ onImport }: Props) {
     } finally {
       setIsLoading(false)
     }
-  }, [filterDate, filterOrderRef])
+  }, [filterDate, filterOrderRef, limit])
 
   useEffect(() => {
     fetchRecords(1)
@@ -240,7 +241,7 @@ export default function RollingTab({ onImport }: Props) {
                   const numValue = r.metricValue ? parseFloat(r.metricValue) : 0
                   return (
                     <tr key={r.id} className="hover:bg-surface-container-high/40 transition-colors">
-                      <td className="px-4 py-2.5 font-mono text-on-surface">{r.date}</td>
+                      <td className="px-4 py-2.5 font-mono tabular-nums text-on-surface">{r.date.split('-').reverse().join('/')}</td>
                       <td className="px-4 py-2.5 font-semibold text-primary">
                         {r.orderId ? (
                           <Link href={`/orders/${r.orderId}`} className="hover:underline flex items-center gap-1">
@@ -252,8 +253,8 @@ export default function RollingTab({ onImport }: Props) {
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-on-surface">{r.color || '—'}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-on-surface">{r.widthM != null ? `${r.widthM}m` : '—'}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-on-surface">{r.lengthM != null ? `${r.lengthM}m` : '—'}</td>
+                      <td className="px-4 py-2.5 text-right font-mono tabular-nums text-on-surface">{r.widthM != null ? `${r.widthM.toLocaleString('vi-VN', { maximumFractionDigits: 20 })} m` : '—'}</td>
+                      <td className="px-4 py-2.5 text-right font-mono tabular-nums text-on-surface">{r.lengthM != null ? `${r.lengthM.toLocaleString('vi-VN', { maximumFractionDigits: 20 })} m` : '—'}</td>
                       <td className="px-4 py-2.5 font-mono text-on-surface">
                         <span className="px-2 py-0.5 bg-surface-container rounded border border-outline-variant/60">
                           {r.metricLabel}
@@ -274,12 +275,13 @@ export default function RollingTab({ onImport }: Props) {
         </div>
 
         {/* Pagination footer */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-outline-variant bg-surface-container/30 text-xs">
+        {total > 0 && (
+          <div className="flex flex-wrap gap-3 items-center justify-between px-4 py-3 border-t border-outline-variant bg-surface-container/30 text-xs">
             <span className="text-secondary" suppressHydrationWarning>
-              Hiển thị page <strong>{page}</strong> / <strong>{totalPages}</strong> ({total.toLocaleString('vi-VN')} bản ghi)
+              Trang <strong>{page.toLocaleString('vi-VN')}</strong>/{totalPages.toLocaleString('vi-VN')} · {total.toLocaleString('vi-VN')} dòng
             </span>
             <div className="flex items-center gap-2">
+              <label className="flex items-center gap-2">Số dòng/trang<select aria-label="Số dòng mỗi trang Rolling" value={limit} onChange={event => setLimit(Number(event.target.value))} disabled={isLoading} className="rounded border border-outline-variant bg-surface px-2 py-1">{[50, 100, 200].map(size => <option key={size} value={size}>{size}</option>)}</select></label>
               <button
                 onClick={() => fetchRecords(page - 1)}
                 disabled={page <= 1 || isLoading}
