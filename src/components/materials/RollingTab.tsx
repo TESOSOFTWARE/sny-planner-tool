@@ -80,7 +80,7 @@ export default function RollingTab({ onImport }: Props) {
           icon="format_list_bulleted"
         />
         <StatCard
-          label="TỔNG ĐƠN HÀNG"
+          label="Số mã ORDER"
           value={summaryUnavailable ? '—' : uniqueOrdersCount.toLocaleString('vi-VN')}
           icon="shopping_cart"
           accent="text-primary"
@@ -115,12 +115,12 @@ export default function RollingTab({ onImport }: Props) {
 
           {/* Order Ref Dropdown / Input */}
           <div className="flex items-center gap-2">
-            <span className="text-xs font-inter font-medium text-secondary">Mã đơn:</span>
+            <span className="text-xs font-inter font-medium text-secondary">ORDER/khách:</span>
             <div className="relative">
               <input
                 type="text"
                 list="rolling-order-list"
-                placeholder="Lọc theo PI..."
+                placeholder="Lọc theo ORDER/khách..."
                 value={filterOrderRef}
                 onChange={(e) => setFilterOrderRef(e.target.value)}
                 className="bg-surface border border-outline-variant rounded-md px-3 py-1.5 text-xs text-on-surface focus:outline-none focus:border-primary w-40"
@@ -173,7 +173,7 @@ export default function RollingTab({ onImport }: Props) {
             <thead className="sticky top-0 z-10 bg-surface-container text-secondary font-medium uppercase border-b border-outline-variant">
               <tr>
                 <th className="px-4 py-3 font-semibold">Ngày</th>
-                <th className="px-4 py-3 font-semibold">Khách / đơn</th>
+                <th className="px-4 py-3 font-semibold">ORDER/khách</th>
                 <th className="px-4 py-3 font-semibold">Màu</th>
                 <th className="px-4 py-3 font-semibold text-right">Khổ (m)</th>
                 <th className="px-4 py-3 font-semibold text-right">Dài (m)</th>

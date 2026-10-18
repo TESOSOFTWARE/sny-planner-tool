@@ -42,6 +42,32 @@ export interface ParseRollingResult {
   periodRequired:   boolean
 }
 
+export class RollingDateConflictError extends Error {
+  constructor(message: string) { super(message); this.name = 'RollingDateConflictError' }
+}
+
+// Validate only populated source blocks; blank repeated template blocks remain harmless.
+function assertDistinctDateBlocks(blocks: DateBlockMapping[], populated: Set<number>, period: RollingPeriod) {
+  const covered = new Map<string, DateBlockMapping[]>()
+  for (const block of blocks) {
+    if (!block.isoDate || !populated.has(block.startCol)) continue
+    const days = block.dateLabelRaw.replace(/[^\d+]/g, '').split('+').map(Number)
+    let offset = 0, previous = days[0]
+    const uniqueDays = new Set<string>()
+    for (const day of days) {
+      // Explicit labels such as 31+1 cross into the following month, for overlap checking only.
+      if (day < previous) offset++
+      previous = day
+      uniqueDays.add(new Date(Date.UTC(period.year, period.month - 1 + offset, day)).toISOString().slice(0, 10))
+    }
+    for (const day of Array.from(uniqueDays)) covered.set(day, [...(covered.get(day) ?? []), block])
+  }
+  const conflicts = Array.from(covered).filter(([, entries]) => entries.length > 1)
+  if (!conflicts.length) return
+  const details = conflicts.map(([day, entries]) => `${day.split('-').reverse().join('/')}: ${entries.map(block => `cột ${XLSX.utils.encode_col(block.startCol)}–${XLSX.utils.encode_col(block.endCol)} ("${block.dateLabelRaw}")`).join(', ')}`)
+  throw new RollingDateConflictError(`Có khối ngày trùng hoặc chồng lấn cùng chứa số liệu: ${details.join('; ')}. Vui lòng kiểm tra file và xem trước lại; hệ thống chưa nhập dữ liệu.`)
+}
+
 /**
  * Parses date label from Row 3 to YYYY-MM-DD ISO string.
  * Handles single date ("3st", "05th") and ambiguous joint labels ("04+05th", "27+28th").
@@ -78,6 +104,7 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
   const period = selectedPeriod ? validateRollingPeriod(selectedPeriod.month, selectedPeriod.year) : rollingPeriodFromFileName(fileName)
   if (!period) return { metrics: [], dateBlockMappings: [], totalOrderRows: 0, nonZeroCount: 0, summarySkipped: 0, availableSheets, fileName, period: null, periodRequired: true }
   const { month, year } = period
+  const populatedDateBlocks = new Set<number>()
 
   const rowDate = (rows[3] as unknown[]) || []
   const rowMetric = (rows[4] as unknown[]) || []
@@ -177,6 +204,7 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
           // Primary shift metric
           const numVal = Number(val)
           if (!isNaN(numVal) && numVal > 0) {
+            populatedDateBlocks.add(block.startCol)
             const rawHeader = String(rowMetric[c] ?? '').replace(/\r?\n/g, ' ').trim()
             nonZeroCount++
             const colName = XLSX.utils.encode_col(c)
@@ -206,6 +234,8 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
       }
     }
   }
+
+  assertDistinctDateBlocks(dateBlockMappings, populatedDateBlocks, period)
 
   return {
     metrics,
