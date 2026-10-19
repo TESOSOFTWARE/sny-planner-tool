@@ -53,15 +53,20 @@ export function planHistoryImport(rows: ParsedMaterialReportDay[], materials: Hi
     else if (material?.stockReportDate && row.reportDate > material.stockReportDate.toISOString().slice(0, 10)) { status = 'newer_than_stock'; reasons = ['Kỳ mới hơn ngày tồn hiện tại; dùng import báo cáo một ngày.'] }
     else if (snapshot) {
       const payload = snapshot.payload && typeof snapshot.payload === 'object' && !Array.isArray(snapshot.payload) ? snapshot.payload as Record<string, unknown> : {}
+      const snapshotTracksMissingFields = Object.prototype.hasOwnProperty.call(payload, 'missingFields')
       const samePeriod = (payload.reportPeriodEnd ?? null) === (row.reportPeriodEnd ?? null)
-        && JSON.stringify(Array.isArray(payload.missingFields) ? [...payload.missingFields].sort() : []) === JSON.stringify([...(row.missingFields ?? [])].sort())
+        && (!snapshotTracksMissingFields || JSON.stringify(Array.isArray(payload.missingFields) ? [...payload.missingFields].sort() : []) === JSON.stringify([...(row.missingFields ?? [])].sort()))
       status = sameMaterialReport(snapshot.payload, row) && samePeriod ? 'identical' : 'conflict_existing'
       if (status === 'conflict_existing') {
         reasons = ['Giữ báo cáo đã có; dùng import một ngày nếu cần sửa.']
         const incoming = historyPayload(row)
-        differences = ['firstStock', 'lastStock', 'inQty', 'outUsing', 'outBroken', 'outTape', 'outReject', 'reportPeriodEnd', 'color', 'colorName', 'brand', 'itemCode', 'lightFastness', 'subGroup'].flatMap(field => {
+        differences = ['firstStock', 'lastStock', 'inQty', 'outUsing', 'outBroken', 'outTape', 'outReject', 'reportPeriodEnd', ...(snapshotTracksMissingFields ? ['missingFields'] : []), 'color', 'colorName', 'brand', 'itemCode', 'lightFastness', 'subGroup'].flatMap(field => {
+          const storedValue = payload[field] ?? null
           const value = (incoming as Record<string, unknown>)[field] ?? null
-          return (payload[field] ?? null) === value ? [] : [{ field, stored: payload[field] ?? null, incoming: value }]
+          const equal = Array.isArray(storedValue) && Array.isArray(value)
+            ? JSON.stringify([...storedValue].sort()) === JSON.stringify([...value].sort())
+            : storedValue === value
+          return equal ? [] : [{ field, stored: storedValue, incoming: value }]
         })
       }
     }
