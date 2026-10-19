@@ -142,7 +142,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
         <div className="flex items-center justify-between border-b pb-4">
           <div>
             <h2 id="packing-import-title" className="text-xl font-bold text-slate-800">
-              Import Báo Cáo Đóng Gói
+              Import báo cáo Đóng gói
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
               Tải lên sheet &quot;SẢN LƯỢNG ĐÓNG GÓI&quot; từ file STATISTICAL REPORT hàng tháng
@@ -153,14 +153,14 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
             onClick={onClose}
             className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
           >
-            ✕
+            <span className="material-symbols-outlined text-[18px]">close</span>
           </button>
         </div>
 
         {/* Error Alert */}
         {error && (
           <div className="mt-4 rounded-xl bg-rose-50 p-3 text-sm text-rose-700 border border-rose-200">
-            ⚠️ {error}
+            <span className="material-symbols-outlined text-base align-middle">warning</span> {error}
           </div>
         )}
 
@@ -190,7 +190,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
                   htmlFor="excel-packing-upload"
                   className="cursor-pointer space-y-2 block"
                 >
-                  <div aria-hidden="true" className="text-4xl">📦</div>
+                  <span aria-hidden="true" className="material-symbols-outlined text-4xl">inventory_2</span>
                   <div className="text-sm font-medium text-slate-700">
                     {file ? file.name : 'Nhấn để chọn file Báo cáo Đóng gói (.xlsx)'}
                   </div>
@@ -201,7 +201,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
               </div>
 
               <div className="rounded-xl bg-blue-50 p-3 text-xs text-blue-800 space-y-1">
-                <div className="font-semibold text-blue-900">📌 Quy tắc parse sheet SẢN LƯỢNG ĐÓNG GÓI:</div>
+                <div className="flex items-center gap-1 font-semibold text-blue-900"><span className="material-symbols-outlined text-base">info</span>Quy tắc parse sheet SẢN LƯỢNG ĐÓNG GÓI:</div>
                 <ul className="list-disc pl-4 space-y-0.5 text-blue-700">
                   <li>Tự động tìm sheet <strong>SẢN LƯỢNG ĐÓNG GÓI</strong> trong file Excel.</li>
                   <li>Đọc số liệu theo ngày (Cột D = Ngày, E..J = SL, Mét, KG Ca Ngày &amp; Đêm).</li>
@@ -279,7 +279,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
           {/* STEP 3: Success */}
           {step === 'success' && (
             <div className="py-8 text-center space-y-3">
-              <div className="text-5xl">🎉</div>
+              <span className="material-symbols-outlined text-5xl text-primary">celebration</span>
               <div className="text-lg font-bold text-slate-800">{successMsg}</div>
               <p className="text-xs text-slate-500">
                 Dữ liệu Đóng gói đã sẵn sàng hiển thị trên bảng thống kê Đóng gói.
@@ -303,9 +303,9 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
                 type="button"
                 onClick={handlePreview}
                 disabled={!file || isLoading}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-xl flex items-center gap-2"
+                className="px-4 py-2 text-sm font-medium text-on-primary bg-primary hover:bg-primary/90 disabled:opacity-50 rounded-xl flex items-center gap-2"
               >
-                {isLoading && <span className="animate-spin">⏳</span>}
+                {isLoading && <span className="material-symbols-outlined animate-spin">progress_activity</span>}
                 Đọc thử File Excel (Preview)
               </button>
             </>
@@ -327,7 +327,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
                 disabled={isLoading || !replacementsAcknowledged || !preview?.outputs.length}
                 className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl flex items-center gap-2"
               >
-                {isLoading && <span className="animate-spin">⏳</span>}
+                {isLoading && <span className="material-symbols-outlined animate-spin">progress_activity</span>}
                 Xác Nhận Import Vào DB
               </button>
             </>

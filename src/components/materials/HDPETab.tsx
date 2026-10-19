@@ -4,6 +4,7 @@ import { useState, useMemo } from 'react'
 import { reportPeriodLabel } from './MaterialReportsModal'
 import type { SerializedMaterial, MaterialReportPayload } from './EditMaterialModal'
 import { reconcileStock, reconciliationRange, totalReconciliation } from '@/lib/materials/reconciliation'
+import MaterialActionsMenu from './MaterialActionsMenu'
 
 interface Props {
   materials: SerializedMaterial[] // HDPE + MB, selected common date
@@ -24,13 +25,13 @@ interface Props {
  * Giữ nguyên lỗi chính tả gốc ở nhãn (FISRT/OUT USEING) để khách đối chiếu được.
  */
 const REPORT_COLUMNS = [
-  { key: 'firstStock', label: 'First Stock' },
-  { key: 'inQty', label: 'In' },
-  { key: 'outBroken', label: 'HDPE Broken' },
-  { key: 'outTape', label: 'Xuất Tape' },
-  { key: 'outReject', label: 'Reject' },
-  { key: 'outUsing', label: 'Out Useing' },
-  { key: 'lastStock', label: 'Last Stock' },
+  { key: 'firstStock', label: 'First Stock', sublabel: 'Tồn đầu' },
+  { key: 'inQty', label: 'In', sublabel: 'Nhập' },
+  { key: 'outBroken', label: 'HDPE Broken', sublabel: 'HDPE lỗi' },
+  { key: 'outTape', label: 'Xuất Tape', sublabel: 'Xuất cho Tape' },
+  { key: 'outReject', label: 'Reject', sublabel: 'Loại' },
+  { key: 'outUsing', label: 'Out Useing', sublabel: 'Sử dụng' },
+  { key: 'lastStock', label: 'Last Stock', sublabel: 'Tồn cuối' },
 ] as const
 
 type ReportKey = (typeof REPORT_COLUMNS)[number]['key']
@@ -129,9 +130,14 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
       </div>
 
       <p className="text-sm font-medium text-primary">{reportDate ? `Báo cáo ngày ${reportDate.split('-').reverse().join('/')}` : 'Chưa có báo cáo HDPE'}</p>
-      <p className="text-xs text-secondary">Bảng chỉ hiển thị báo cáo của ngày đã chọn, khác với tồn hiện tại trong sổ kho. Dấu — là thiếu chỉ số trong báo cáo. TOTAL để trống nếu có dòng thiếu hoặc khác khoảng ngày nguồn.</p>
-      <p className="text-xs text-secondary">Đối chiếu chuẩn hoá: AC = Tồn đầu + Nhập − Out Useing − Xuất Tape; nhựa tái chế trừ thêm Reject. Broken giữ theo nguồn, không trừ vào AC. AD lấy tồn cuối nguồn; check chỉ cảnh báo, không tự sửa tồn.</p>
-      <p className="text-xs text-secondary">Thiếu số liệu nguồn để tính AC; ô trống không được coi là 0. Dấu — trong cột đối chiếu có chú thích lý do.</p>
+      <details className="text-xs text-secondary rounded border border-outline-variant px-3 py-2">
+        <summary className="cursor-pointer font-medium text-on-surface">Giải thích số liệu và đối chiếu</summary>
+        <div className="mt-2 space-y-1">
+          <p>Bảng chỉ hiển thị báo cáo của ngày đã chọn, khác với tồn hiện tại trong sổ kho. Dấu — là thiếu chỉ số trong báo cáo. TOTAL để trống nếu có dòng thiếu hoặc khác khoảng ngày nguồn.</p>
+          <p>Đối chiếu chuẩn hoá: AC = Tồn đầu + Nhập − Out Useing − Xuất Tape; nhựa tái chế trừ thêm Reject. Broken giữ theo nguồn, không trừ vào AC. AD lấy tồn cuối nguồn; check chỉ cảnh báo, không tự sửa tồn.</p>
+          <p>Thiếu số liệu nguồn để tính AC; ô trống không được coi là 0. Dấu — trong cột đối chiếu có chú thích lý do.</p>
+        </div>
+      </details>
       <div className="bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-lg overflow-x-auto">
         <table className="w-full min-w-[1000px]">
           <thead className="sticky top-0 z-20">
@@ -144,10 +150,10 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
                   key={col.key}
                   className="px-3 py-3 text-right text-xs font-inter font-medium text-secondary uppercase tracking-widest whitespace-nowrap"
                 >
-                  {col.label}
+                  <span className="block">{col.label}</span><span className="block normal-case tracking-normal text-[11px] font-normal text-outline">{col.sublabel}</span>
                 </th>
               ))}
-              {['AC', 'AD', 'check'].map(label => <th key={label} className="px-3 py-3 text-right text-xs font-medium text-secondary whitespace-nowrap">{label}</th>)}
+              {[['AC', 'Tồn tính lại'], ['AD', 'Tồn cuối báo cáo'], ['CHECK', 'Chênh lệch']].map(([label, sublabel]) => <th key={label} className="px-3 py-3 text-right text-xs font-medium text-secondary whitespace-nowrap"><span className="block">{label}</span><span className="block normal-case text-[11px] font-normal text-outline">{sublabel}</span></th>)}
               <th className="px-3 py-3 text-right text-xs font-inter font-medium text-secondary uppercase tracking-widest whitespace-nowrap">
                 Ngưỡng TT
               </th>
@@ -167,7 +173,7 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
             </tbody>
           ) : (
             sections.map(section => (
-              <tbody key={section.id} className="divide-y divide-outline-variant/50">
+              <tbody key={section.id} className="border-t-4 border-surface divide-y divide-outline-variant/50">
                 <tr className="bg-surface-container-low">
                   <td
                     colSpan={colCount}
@@ -193,11 +199,11 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
                       onClick={() => onRowClick(mat)}
                       className={`group hover:bg-[#f0eded] cursor-pointer transition-colors duration-150 ${index % 2 === 0 ? 'bg-surface-container-lowest' : 'bg-surface-container-low'}`}
                     >
-                      <td className={`sticky left-0 z-10 min-w-[180px] max-w-[200px] px-4 py-3 font-mono text-sm font-semibold text-on-surface group-hover:bg-[#f0eded] ${index % 2 === 0 ? 'bg-surface-container-lowest' : 'bg-surface-container-low'}`}>
+                      <td className={`sticky left-0 z-10 min-w-[180px] max-w-[200px] px-4 py-3 text-sm font-semibold text-on-surface group-hover:bg-[#f0eded] ${index % 2 === 0 ? 'bg-surface-container-lowest' : 'bg-surface-container-low'}`}>
                         <button type="button" title={mat.name} onClick={e => { e.stopPropagation(); onReports(mat) }} className="max-w-full truncate text-left hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">{mat.name}</button>
                         {mat.latestReport && <div className="text-xs font-normal text-secondary mt-1">Kỳ nguồn: {reportPeriodLabel(mat.latestReport.reportDate, mat.latestReport.payload)}</div>}
                         {mat.latestReport && <div className="text-xs font-normal text-secondary mt-1">{reconciliationRange([mat.latestReport])}</div>}
-                        {mat.group === 'MB' && <div className="text-xs font-normal text-secondary mt-1">Item Code: {payload?.itemCode ?? mat.itemCode ?? '—'} · Mã màu: {payload?.color ?? mat.color ?? '—'} · Tên màu: {payload?.colorName ?? mat.colorName ?? '—'} · Hãng: {payload?.brand ?? mat.brand ?? '—'} · Độ bền màu: {payload?.lightFastness ?? mat.lightFastness ?? '—'}</div>}
+                        {mat.group === 'MB' && <div className="text-xs font-normal text-secondary mt-1">{[['Item Code', payload?.itemCode ?? mat.itemCode], ['Mã màu', payload?.color ?? mat.color], ['Tên màu', payload?.colorName ?? mat.colorName], ['Hãng', payload?.brand ?? mat.brand], ['Độ bền màu', payload?.lightFastness ?? mat.lightFastness]].filter(([, value]) => value).map(([label, value]) => `${label}: ${value}`).join(' · ')}</div>}
                       </td>
                       {!mat.latestReport ? <td colSpan={REPORT_COLUMNS.length + 3} className="px-3 py-3 text-sm text-secondary">Chưa có báo cáo HDPE{reportDate ? ` ngày ${reportDate.split('-').reverse().join('/')}` : ''}</td> : <>
                       {REPORT_COLUMNS.map(col => (
@@ -217,23 +223,18 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
                       </td>
                       <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center gap-2">
-                          <button onClick={() => onHistory(mat)} title="Lịch sử" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-outline-variant text-secondary bg-transparent hover:bg-surface-container">
+                          <button onClick={() => onHistory(mat)} aria-label={`Xem lịch sử ${mat.name}`} title="Lịch sử" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-outline-variant text-secondary bg-transparent hover:bg-surface-container">
                             <span className="material-symbols-outlined text-[16px]">history</span>
                           </button>
-                          <button onClick={() => onEdit(mat)} title="Chỉnh sửa" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-primary text-primary bg-transparent hover:bg-surface-container">
-                            <span className="material-symbols-outlined text-[16px]">edit</span>
-                          </button>
-                          <button onClick={() => onDelete(mat)} title="Xóa" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-[#ba1a1a] text-[#ba1a1a] bg-transparent hover:bg-[#ba1a1a]/10">
-                            <span className="material-symbols-outlined text-[16px]">delete</span>
-                          </button>
+                          <MaterialActionsMenu materialName={mat.name} onEdit={() => onEdit(mat)} onDelete={() => onDelete(mat)} />
                         </div>
                       </td>
                     </tr>
                   )
                 })}
 
-                <tr className="bg-surface-container/60 font-semibold">
-                  <td className="sticky left-0 z-10 bg-surface-container px-4 py-2 text-sm text-on-surface-variant whitespace-nowrap">TOTAL</td>
+                {section.rows.length > 1 && <tr className="bg-surface-container/60 font-semibold">
+                  <td className="sticky left-0 z-10 bg-surface-container px-4 py-2 text-sm text-on-surface-variant whitespace-nowrap">Tổng</td>
                   {REPORT_COLUMNS.map(col => (
                     <td key={col.key} className="px-3 py-2 text-right font-mono text-sm tabular-nums text-on-surface whitespace-nowrap">
                       <Num value={sumBy(section.rows, col.key)} />
@@ -244,7 +245,7 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
                     return <td key={key} title={total.reason} className={`px-3 py-2 text-right font-mono text-sm tabular-nums whitespace-nowrap ${key === 'check' && total.warning ? 'text-error' : 'text-on-surface'}`}><Num value={total[key]} /></td>
                   })}
                   <td colSpan={2} />
-                </tr>
+                </tr>}
               </tbody>
             ))
           )}

@@ -231,7 +231,7 @@ export default function ImportMaterialReportModal({ onImported, onClose }: Props
                   <label className="block text-xs font-medium text-secondary mb-1">Chọn block báo cáo</label>
                   <select value={headerRow ?? ''} onChange={e => { const selected = availableBlocks.find(block => block.headerRow === Number(e.target.value)); setHeaderRow(selected?.headerRow); if (selected?.reportDate) setTxDate(selected.reportDate); setPreview(null) }} className={inputCls}>
                     <option value="">Chọn dòng header…</option>
-                    {availableBlocks.map(block => <option key={block.headerRow} value={block.headerRow}>{block.reportDate ? reportPeriodLabel(block.reportDate, block) : 'Chưa có ngày nguồn'} — {block.sheetName} — dòng {block.headerRow} đến {block.endRow}</option>)}
+                    {availableBlocks.filter(block => block.reportDate).map(block => <option key={block.headerRow} value={block.headerRow}>{reportPeriodLabel(block.reportDate!, block)} — {block.sheetName} — dòng {block.headerRow} đến {block.endRow}</option>)}
                   </select>
                 </div>
               )}

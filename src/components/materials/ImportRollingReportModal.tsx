@@ -149,7 +149,7 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
         <div className="flex items-center justify-between pb-4 border-b border-outline-variant shrink-0">
           <div className="flex items-center gap-2">
             <span aria-hidden="true" className="material-symbols-outlined text-primary text-[24px]">table_chart</span>
-            <h2 id="rolling-import-title" className="text-lg font-inter font-semibold text-on-surface">Import Báo Cáo Sản Lượng Rolling</h2>
+            <h2 id="rolling-import-title" className="text-lg font-inter font-semibold text-on-surface">Import báo cáo sản lượng Rolling</h2>
           </div>
           <button aria-label="Đóng" onClick={onClose} className="p-1 rounded-lg hover:bg-surface-container text-secondary hover:text-on-surface transition-colors">
             <span aria-hidden="true" className="material-symbols-outlined text-[20px]">close</span>
