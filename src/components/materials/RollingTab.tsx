@@ -151,7 +151,7 @@ export default function RollingTab({ onImport }: Props) {
             className="inline-flex items-center justify-center gap-2 bg-primary text-on-primary text-xs font-semibold px-4 py-2 h-9 rounded-md hover:bg-primary/90 transition-colors shadow-sm"
           >
             <span className="material-symbols-outlined text-[18px]">upload_file</span>
-            Import Báo Cáo Rolling
+            Import báo cáo Rolling
           </button>
         </div>
       </div>

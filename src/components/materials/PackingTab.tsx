@@ -47,7 +47,7 @@ export default function PackingTab() {
             <span className="text-xs font-semibold uppercase tracking-wider">
               TỔNG SỐ NGÀY CÓ DỮ LIỆU
             </span>
-            <span className="rounded-lg bg-blue-50 p-2 text-blue-600 text-lg">📅</span>
+            <span className="material-symbols-outlined rounded-lg bg-surface-container p-2 text-primary">calendar_month</span>
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-3xl font-bold text-slate-800" suppressHydrationWarning>
@@ -66,7 +66,7 @@ export default function PackingTab() {
             <span className="text-xs font-semibold uppercase tracking-wider">
               TỔNG SẢN LƯỢNG (M)
             </span>
-            <span className="rounded-lg bg-emerald-50 p-2 text-emerald-600 text-lg">📦</span>
+            <span className="material-symbols-outlined rounded-lg bg-emerald-50 p-2 text-emerald-600">inventory_2</span>
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-3xl font-bold text-emerald-600">
@@ -85,7 +85,7 @@ export default function PackingTab() {
             <span className="text-xs font-semibold uppercase tracking-wider">
               TỔNG TRỌNG LƯỢNG (KG)
             </span>
-            <span className="rounded-lg bg-purple-50 p-2 text-purple-600 text-lg">⚖️</span>
+            <span className="material-symbols-outlined rounded-lg bg-purple-50 p-2 text-purple-600">scale</span>
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-3xl font-bold text-purple-600">
@@ -134,7 +134,7 @@ export default function PackingTab() {
               onClick={handleClearFilters}
               className="rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200"
             >
-              Xóa bộ lọc ✕
+              Xóa bộ lọc <span className="material-symbols-outlined align-middle text-[14px]">close</span>
             </button>
           )}
         </div>
@@ -142,10 +142,10 @@ export default function PackingTab() {
         {/* Action Button: Import Report */}
         <button
           onClick={() => setShowImportModal(true)}
-          className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 flex items-center justify-center gap-2 transition-colors"
+          className="rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-on-primary shadow-sm hover:bg-primary/90 flex items-center justify-center gap-2 transition-colors"
         >
-          <span>📥</span>
-          Import Báo Cáo Đóng Gói
+          <span className="material-symbols-outlined text-base">upload</span>
+          Import báo cáo Đóng gói
         </button>
       </div>
 
@@ -154,12 +154,12 @@ export default function PackingTab() {
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         {isLoading && records.length === 0 ? (
           <div className="p-12 text-center text-slate-400 space-y-2">
-            <div className="text-3xl animate-spin">⏳</div>
+            <span className="material-symbols-outlined text-3xl animate-spin">progress_activity</span>
             <div className="text-sm">Đang tải dữ liệu Đóng gói...</div>
           </div>
         ) : error ? (
           <div className="p-8 text-center text-rose-600 space-y-2">
-            <div className="text-2xl">⚠️</div>
+            <span className="material-symbols-outlined text-2xl">warning</span>
             <div className="text-sm font-semibold">{error}</div>
             <button
               onClick={fetchRecords}
@@ -171,21 +171,21 @@ export default function PackingTab() {
         ) : records.length === 0 ? (
           /* Friendly Empty State Requirement */
           <div className="p-16 text-center space-y-4">
-            <div className="text-5xl">📦</div>
+            <span className="material-symbols-outlined text-5xl">inventory_2</span>
             <div className="max-w-md mx-auto space-y-1">
               <h3 className="text-base font-bold text-slate-800">
                 Chưa có dữ liệu Đóng gói
               </h3>
               <p className="text-xs text-slate-500 leading-relaxed">
-                Nhấn <strong>Import Báo Cáo Đóng Gói</strong> phía trên để tải lên file Excel từ xưởng khi có số liệu sản lượng.
+                Nhấn <strong>Import báo cáo Đóng gói</strong> phía trên để tải lên file Excel từ xưởng khi có số liệu sản lượng.
               </p>
             </div>
             <button
               onClick={() => setShowImportModal(true)}
               className="inline-flex items-center gap-2 rounded-xl bg-blue-50 px-4 py-2 text-xs font-semibold text-blue-600 hover:bg-blue-100 transition-colors"
             >
-              <span>📥</span>
-              Import Báo Cáo Ngay
+              <span className="material-symbols-outlined text-base">upload</span>
+              Import báo cáo ngay
             </button>
           </div>
         ) : (

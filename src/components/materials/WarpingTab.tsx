@@ -6,6 +6,7 @@
 import { useState, useEffect } from 'react'
 import TablePager from './TablePager'
 import { useMaterialPage } from './useMaterialPage'
+import { formatMaterialNumber } from './display'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -60,16 +61,12 @@ function ShiftBadge({ shift }: { shift: string }) {
         ? 'bg-[#fef9c3] text-[#713f12] border border-[#fde047]/50'
         : 'bg-[#1e293b] text-[#e2e8f0] border border-[#334155]'
     }`}>
-      {isDay ? '☀ Ca ngày' : '🌙 Ca đêm'}
+      {isDay ? 'Ca ngày' : 'Ca đêm'}
     </span>
   )
 }
 
-function formatNumber(value: string | null) {
-  if (value == null || value.trim() === '') return '—'
-  const numeric = Number(value)
-  return Number.isFinite(numeric) ? numeric.toLocaleString('vi-VN', { maximumFractionDigits: 20 }) : '—'
-}
+const formatNumber = formatMaterialNumber
 
 export default function WarpingTab({ onImport }: Props) {
   const [filterDate, setFilterDate]       = useState('')
