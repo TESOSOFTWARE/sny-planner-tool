@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react'
 import type { SerializedMaterial } from './EditMaterialModal'
+import MaterialActionsMenu from './MaterialActionsMenu'
 
 interface Props {
   materials: SerializedMaterial[] // pre-filtered to MB
@@ -121,15 +122,10 @@ export default function MBTab({ materials, onEdit, onDelete, onHistory, onRowCli
                     </td>
                     <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center gap-2">
-                        <button onClick={() => onHistory(mat)} title="Lịch sử" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-outline-variant text-secondary bg-transparent hover:bg-surface-container">
+                        <button onClick={() => onHistory(mat)} aria-label={`Xem lịch sử ${mat.name}`} title="Lịch sử" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-outline-variant text-secondary bg-transparent hover:bg-surface-container">
                           <span className="material-symbols-outlined text-[16px]">history</span>
                         </button>
-                        <button onClick={() => onEdit(mat)} title="Chỉnh sửa" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-primary text-primary bg-transparent hover:bg-surface-container">
-                          <span className="material-symbols-outlined text-[16px]">edit</span>
-                        </button>
-                        <button onClick={() => onDelete(mat)} title="Xóa" className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-[#ba1a1a] text-[#ba1a1a] bg-transparent hover:bg-[#ba1a1a]/10">
-                          <span className="material-symbols-outlined text-[16px]">delete</span>
-                        </button>
+                        <MaterialActionsMenu materialName={mat.name} onEdit={() => onEdit(mat)} onDelete={() => onDelete(mat)} />
                       </div>
                     </td>
                   </tr>

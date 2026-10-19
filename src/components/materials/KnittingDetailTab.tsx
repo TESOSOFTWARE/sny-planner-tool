@@ -6,6 +6,7 @@
 import { useState } from 'react'
 import TablePager from './TablePager'
 import { useMaterialPage } from './useMaterialPage'
+import { formatMaterialNumber } from './display'
 
 interface KnittingDetailRecord {
   id:             string
@@ -65,18 +66,12 @@ function ShiftBadge({ shift }: { shift: string }) {
         ? 'bg-[#fef9c3] text-[#713f12] border border-[#fde047]/50'
         : 'bg-[#1e293b] text-[#e2e8f0] border border-[#334155]'
     }`}>
-      {isDay ? '☀ Ca ngày' : '🌙 Ca đêm'}
+      {isDay ? 'Ca ngày' : 'Ca đêm'}
     </span>
   )
 }
 
-function formatNumber(value: string | null, unit?: string) {
-  if (value == null || value.trim() === '') return '—'
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) return '—'
-  const formatted = numeric.toLocaleString('vi-VN', { maximumFractionDigits: 20 })
-  return unit ? `${formatted} ${unit}` : formatted
-}
+const formatNumber = formatMaterialNumber
 
 export default function KnittingDetailTab({ onImport }: Props) {
   const [filterDate, setFilterDate]       = useState('')

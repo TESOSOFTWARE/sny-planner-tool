@@ -242,7 +242,7 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
                 <div className="flex flex-wrap gap-2">
                   {preview.dates.map(d => (
                     <span key={d} className="px-2.5 py-1 bg-primary/10 text-primary rounded-full text-xs font-mono font-medium">
-                      {d}
+                      {d.split('-').reverse().join('/')}
                     </span>
                   ))}
                 </div>

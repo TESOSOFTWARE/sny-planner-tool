@@ -190,30 +190,17 @@ export default function MaterialsPage() {
           <p className="text-sm font-noto text-secondary mt-1">Quản lý tồn kho nguyên liệu</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            id="btn-download-knitting-template"
-            onClick={() => window.location.href = '/api/knitting/template'}
-            className="inline-flex items-center justify-center gap-2 border border-outline bg-surface hover:bg-surface-container text-on-surface text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors"
-          >
-            <span className="material-symbols-outlined text-[18px]">download</span>
-            Tải mẫu Dệt
-          </button>
-          <button
-            id="btn-import-knitting-report"
-            onClick={() => setShowKnittingModal(true)}
-            className="inline-flex items-center justify-center gap-2 border border-primary bg-transparent hover:bg-surface-container text-primary text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors"
-          >
-            <span className="material-symbols-outlined text-[18px]">table_chart</span>
-            Import Knitting
-          </button>
-          <button
-            id="btn-add-material"
-            onClick={() => setShowAddModal(true)}
-            className="inline-flex items-center justify-center gap-2 bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 transition-colors shadow-sm"
-          >
-            <span className="material-symbols-outlined text-[18px]">add</span>
-            Thêm NVL
-          </button>
+          {activeTab === 'KNITTING_DETAIL' && <>
+            <button id="btn-download-knitting-template" onClick={() => window.location.href = '/api/knitting/template'} className="inline-flex items-center justify-center gap-2 border border-outline bg-surface hover:bg-surface-container text-on-surface text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors">
+              <span className="material-symbols-outlined text-[18px]">download</span>Tải mẫu Dệt
+            </button>
+            <button id="btn-import-knitting-report" onClick={() => setShowKnittingModal(true)} className="inline-flex items-center justify-center gap-2 border border-primary bg-transparent hover:bg-surface-container text-primary text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors">
+              <span className="material-symbols-outlined text-[18px]">table_chart</span>Import Knitting
+            </button>
+          </>}
+          {activeTab === 'HDPE' && <button id="btn-add-material" onClick={() => setShowAddModal(true)} className="inline-flex items-center justify-center gap-2 border border-outline bg-surface text-on-surface text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-surface-container transition-colors">
+            <span className="material-symbols-outlined text-[18px]">add</span>Thêm NVL
+          </button>}
         </div>
       </div>
 
@@ -226,7 +213,7 @@ export default function MaterialsPage() {
       )}
 
       {/* Tab Navigation */}
-      <div role="tablist" aria-label="Công đoạn và nguyên liệu" className="flex gap-2 border-b-[0.5px] border-outline-variant mb-6 overflow-x-auto">
+      <div role="tablist" aria-label="Công đoạn và nguyên liệu" className="flex gap-2 border-b-[0.5px] border-outline-variant mb-6 overflow-x-auto overflow-y-hidden">
         {(['HDPE', 'EXTRUDER', 'WARPING', 'KNITTING_DETAIL', 'ROLLING'] as const).map((tab) => (
           <button
             key={tab}
@@ -305,8 +292,9 @@ export default function MaterialsPage() {
           )}
           {activeTab === 'ROLLING' && (
             <div className="space-y-8">
-              <section aria-label="Rolling"><h2 className="text-lg font-semibold text-primary mb-4">Rolling</h2><RollingTab onImport={() => setShowRollingModal(true)} /></section>
-              <section aria-label="Đóng gói"><h2 className="text-lg font-semibold text-primary mb-4">Đóng gói</h2><PackingTab /></section>
+              <nav aria-label="Điều hướng Rolling và Đóng gói" className="flex gap-3 text-sm"><a href="#materials-rolling" className="text-primary underline">Rolling</a><a href="#materials-packing" className="text-primary underline">Đóng gói</a></nav>
+              <section id="materials-rolling" aria-label="Rolling"><h2 className="text-lg font-semibold text-primary mb-4">Rolling</h2><RollingTab onImport={() => setShowRollingModal(true)} /></section>
+              <section id="materials-packing" aria-label="Đóng gói"><h2 className="text-lg font-semibold text-primary mb-4">Đóng gói</h2><PackingTab /></section>
             </div>
           )}
           {activeTab === 'HDPE' && (
