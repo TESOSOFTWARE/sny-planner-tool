@@ -1,4 +1,5 @@
 'use client'
+import { prepareReportUpload } from '@/lib/excel/uploadTrim'
 
 // src/components/materials/ImportKnittingModal.tsx
 // 3-step modal: (1) file picker → (2) preview (dates + machine count) → (3) confirm → success/error.
@@ -56,8 +57,10 @@ export default function ImportKnittingModal({ onImported, onClose }: Props) {
     setIsLoading(true)
     setError(null)
     try {
+      const uploadFile = await prepareReportUpload(f, 'KNITTING')
+      setFile(uploadFile)
       const fd = new FormData()
-      fd.append('file', f)
+      fd.append('file', uploadFile)
       const res = await fetch('/api/knitting/import', { method: 'POST', body: fd })
       const json = await res.json() as { success: boolean; error?: string } & Partial<PreviewData>
       if (!res.ok || !json.success) throw new Error(json.error ?? 'Preview thất bại')
@@ -142,6 +145,7 @@ export default function ImportKnittingModal({ onImported, onClose }: Props) {
                     <input
                       id="knitting-import-file"
                       type="file"
+                      disabled={isLoading}
                       accept=".xlsx"
                       className="sr-only focus:not-sr-only focus:outline focus:outline-2 focus:outline-primary"
                       onChange={handleFileChange}

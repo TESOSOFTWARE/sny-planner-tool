@@ -269,7 +269,7 @@ export default function MaterialsPage() {
             border={lowStockCount > 0 ? 'border-error/30' : 'border-[#22c55e]/30'}
           />
           <SummaryCard
-            label="Tổng tồn hiện tại"
+            label="Tồn hiện tại (sổ kho)"
             value={`${totalKg.toLocaleString('vi-VN', { minimumFractionDigits: 0, maximumFractionDigits: 1 })} kg`}
             icon="scale"
             accent="text-primary"

@@ -5,12 +5,13 @@
 // R1 redesign — light theme, navy PI badge, color dots, hover View button.
 // All search/navigation logic unchanged from S1/S3.
 
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import type { OrderTableItem } from '@/types'
 import { OrderStatus, calcOrderStatus } from '@/lib/orderStatus'
 import { PiStatusBadge, MachinePlanBadge } from './DraftBadge'
+import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
 
 interface OrderTableProps {
   orders: OrderTableItem[]
@@ -57,6 +58,19 @@ export default function OrderTable({ orders }: OrderTableProps) {
     : 'ALL') as 'ALL' | OrderStatus
   const query = searchParams.get('q') || ''
   const [jumpInput, setJumpInput] = useState('')
+  // [FB 15/10 #1] Selection is by production line ID, not PI.
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [confirmation, setConfirmation] = useState<OrderTableItem[] | null>(null)
+  const [acknowledged, setAcknowledged] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [bulkMessage, setBulkMessage] = useState('')
+  const [skippedDetails, setSkippedDetails] = useState<string[]>([])
+  const [bulkError, setBulkError] = useState('')
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const headerCheckbox = useRef<HTMLInputElement>(null)
+  const closeBulk = useCallback(() => { if (!deleting) { setConfirmation(null); setBulkError('') } }, [deleting])
+  useScheduleModalFocus(confirmation !== null, closeBulk, dialogRef)
+  useEffect(() => { setSelected(new Set()); setConfirmation(null); setAcknowledged(false) }, [query, statusFilter])
 
   const updateUrl = useCallback((updates: Record<string, string | null>, isPush = false) => {
     if (typeof window === 'undefined') return
@@ -105,6 +119,50 @@ export default function OrderTable({ orders }: OrderTableProps) {
   const startIndex = (safePage - 1) * pageSize
   const endIndex = Math.min(startIndex + pageSize, totalItems)
   const paginatedOrders = useMemo(() => filtered.slice(startIndex, endIndex), [filtered, startIndex, endIndex])
+  const selectedRows = orders.filter(order => selected.has(order.id))
+  const pageSelected = paginatedOrders.filter(order => selected.has(order.id)).length
+  useEffect(() => { if (headerCheckbox.current) headerCheckbox.current.indeterminate = pageSelected > 0 && pageSelected < paginatedOrders.length }, [pageSelected, paginatedOrders.length])
+  const toggleSelection = (id: string) => {
+    if (deleting) return
+    setSelected(previous => {
+      const next = new Set(previous)
+      if (next.has(id)) next.delete(id)
+      else if (next.size < 500) next.add(id)
+      return next
+    })
+    if (!selected.has(id) && selected.size >= 500) setBulkMessage('Chỉ xoá tối đa 500 đơn mỗi lần.')
+  }
+  const choosePage = () => {
+    const next = new Set(selected)
+    if (pageSelected === paginatedOrders.length) paginatedOrders.forEach(order => next.delete(order.id))
+    else paginatedOrders.forEach(order => { if (next.size < 500) next.add(order.id) })
+    setSelected(next)
+    if (selected.size + paginatedOrders.length - pageSelected > 500) setBulkMessage('Chỉ xoá tối đa 500 đơn mỗi lần.')
+  }
+  const confirmedAssignments = confirmation?.flatMap(order => order.assignments) ?? []
+  const assignedOrders = confirmation?.filter(order => order.assignments.length > 0).length ?? 0
+  const performDelete = async () => {
+    if (!confirmation || deleting || (assignedOrders > 0 && !acknowledged)) return
+    setDeleting(true); setBulkError(''); setSkippedDetails([])
+    try {
+      const response = await fetch('/api/orders/bulk-delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        ids: confirmation.map(order => order.id), removeAssignments: assignedOrders > 0 && acknowledged,
+        expectedAssignments: confirmedAssignments.map(assignment => ({ id: assignment.id, updatedAt: assignment.updatedAt })),
+      }) })
+      const data = await response.json() as { error?: string; code?: string; deleted?: {id:string}[]; removedAssignments?: number; skipped?: {id:string;piNumber:string|null;reason:string}[] }
+      if (!response.ok) {
+        if (data.code === 'STALE_SELECTION') { setConfirmation(null); setSelected(new Set()); setBulkMessage(data.error ?? 'Lịch đã thay đổi, tải lại và chọn lại.'); router.refresh() }
+        else setBulkError(data.error ?? 'Không thể xoá đơn hàng.')
+        return
+      }
+      const reasons: Record<string,string> = { NOT_FOUND:'không còn tồn tại', HAS_OUTPUT:'đã có sản lượng hoặc phiếu kho', ASSIGNED:'đang có lịch máy', HAS_OUTPUT_ON_SCHEDULE:'máy đã có sản lượng trong lịch' }
+      const skipped = data.skipped ?? []
+      setSkippedDetails(skipped.map(row => `${row.piNumber ?? row.id}: ${reasons[row.reason] ?? row.reason}`))
+      setBulkMessage(`Đã xoá ${data.deleted?.length ?? 0} đơn · gỡ ${data.removedAssignments ?? 0} lịch · bỏ qua ${skipped.length}`)
+      setConfirmation(null); setSelected(new Set()); router.refresh()
+    } catch { setBulkError('Lỗi mạng — chưa xác nhận được kết quả. Tải lại danh sách trước khi thử lại.') }
+    finally { setDeleting(false) }
+  }
   const pageItems = useMemo(() => {
     if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1)
     const items: (number | '...')[] = [1]
@@ -131,6 +189,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
           return (
             <button
               key={tab}
+              disabled={deleting}
               onClick={() => updateUrl({ status: tab, page: '1' }, false)}
               className={`px-3.5 py-1.5 text-sm font-medium rounded-t-md transition-colors border-b-2 -mb-[9px] whitespace-nowrap ${
                 isActive 
@@ -153,6 +212,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
           </span>
           <input
             id="search-orders"
+            disabled={deleting}
             type="search"
             value={query}
             onChange={(e) => updateUrl({ q: e.target.value, page: '1' }, false)}
@@ -171,6 +231,15 @@ export default function OrderTable({ orders }: OrderTableProps) {
           {' '}orders
         </p>
       </div>
+
+      {bulkMessage && <p role="status" className="border border-outline-variant bg-surface-container p-3 rounded text-sm whitespace-pre-wrap">{bulkMessage}</p>}
+      {skippedDetails.length > 0 && <details className="border border-outline-variant rounded p-3 text-sm"><summary className="cursor-pointer focus-visible:ring-2 focus-visible:ring-primary">Xem lý do bỏ qua {skippedDetails.length} đơn</summary><ul className="mt-2 max-h-64 overflow-y-auto space-y-1">{skippedDetails.map((detail, index) => <li key={index}>{detail}</li>)}</ul></details>}
+      {selectedRows.length > 0 && <div aria-label="Thao tác đơn đã chọn" className="flex flex-wrap items-center gap-3 border border-primary/20 bg-surface-container rounded p-3 text-sm">
+        <strong>Đã chọn {selectedRows.length}</strong>
+        <button type="button" disabled={deleting} className="underline text-primary focus-visible:ring-2 focus-visible:ring-primary" onClick={() => { setSelected(new Set(filtered.slice(0,500).map(order => order.id))); if (filtered.length > 500) setBulkMessage('Chỉ xoá tối đa 500 đơn mỗi lần.') }}>{filtered.length > 500 ? `Chọn 500 đơn đầu theo bộ lọc (trên ${filtered.length.toLocaleString('vi-VN')})` : `Chọn tất cả ${filtered.length.toLocaleString('vi-VN')} đơn theo bộ lọc`}</button>
+        <button type="button" disabled={deleting} className="underline focus-visible:ring-2 focus-visible:ring-primary" onClick={() => setSelected(new Set())}>Bỏ chọn</button>
+        <button type="button" disabled={deleting || selectedRows.length > 500} className="h-9 px-4 rounded-md border border-error text-error hover:bg-error-container focus-visible:ring-2 focus-visible:ring-error" onClick={() => { setConfirmation(selectedRows); setAcknowledged(false); setBulkError('') }}>Xoá {selectedRows.length} đơn</button>
+      </div>}
 
       {/* True empty state — no orders in DB at all */}
       {orders.length === 0 ? (
@@ -194,6 +263,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
             <table className="w-full">
               <thead>
                 <tr className="bg-surface-container border-b border-[0.5px] border-outline-variant">
+                  <th className="px-3 py-sm"><input ref={headerCheckbox} type="checkbox" aria-label="Chọn tất cả đơn trên trang" checked={paginatedOrders.length > 0 && pageSelected === paginatedOrders.length} disabled={deleting || paginatedOrders.length === 0} onChange={choosePage} className="accent-primary focus-visible:ring-2 focus-visible:ring-primary" /></th>
                   {['PI Number', 'Tình trạng PI', 'Kế hoạch máy', 'Customer', 'Order Date', 'Width (m)', 'Length (m)', 'GSM', 'Color', 'Item Code', ''].map((h) => (
                     <th
                       key={h}
@@ -209,7 +279,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
               <tbody className="divide-y divide-[0.5px] divide-outline-variant">
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="px-md py-[48px] text-center">
+                    <td colSpan={12} className="px-md py-[48px] text-center">
                       <div className="flex flex-col items-center gap-sm">
                         <span className="material-symbols-outlined text-[40px] text-outline-variant">search_off</span>
                         <p className="text-body-md font-noto text-secondary">No orders found</p>
@@ -238,6 +308,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
                           router.push(`/orders/${order.id}`)
                       }}
                     >
+                      <td className="px-3 py-sm" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}><input type="checkbox" aria-label={`Chọn đơn ${order.piNumber} ${order.subLineIndex === 0 ? 'giữ chỗ' : `dòng ${order.subLineIndex}`}`} checked={selected.has(order.id)} disabled={deleting} onChange={() => toggleSelection(order.id)} className="accent-primary focus-visible:ring-2 focus-visible:ring-primary" /></td>
                       {/* PI Number — navy badge */}
                       <td className="px-md py-sm whitespace-nowrap">
                         <div className="flex items-center gap-sm">
@@ -383,6 +454,19 @@ export default function OrderTable({ orders }: OrderTableProps) {
           )}
         </div>
       )}
+      {confirmation && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={closeBulk}>
+        <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="bulk-delete-title" aria-busy={deleting} onClick={event => event.stopPropagation()} className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-outline-variant bg-surface-container-lowest p-6 shadow-xl space-y-4">
+          <h2 id="bulk-delete-title" className="text-xl font-semibold text-primary">Xác nhận xoá {confirmation.length} đơn</h2>
+          <p className="text-sm">{confirmation.slice(0,5).map(order => `${order.piNumber} (${order.subLineIndex === 0 ? 'giữ chỗ' : `dòng ${order.subLineIndex}`})`).join(', ')}{confirmation.length > 5 ? ` và ${confirmation.length - 5} đơn khác` : ''}</p>
+          <p className="text-sm text-error">Không thể hoàn tác xoá đơn bằng phần mềm.</p>
+          {assignedOrders > 0 && <div className="bg-error-container border border-error/40 rounded p-3 text-sm space-y-3"><p>{assignedOrders} đơn đang có {confirmedAssignments.length} lịch máy sẽ bị gỡ lịch cùng lúc.</p><label className="flex items-start gap-2"><input type="checkbox" checked={acknowledged} disabled={deleting} onChange={event => setAcknowledged(event.target.checked)} className="mt-1 accent-primary focus-visible:ring-2 focus-visible:ring-primary" />Tôi hiểu, gỡ lịch và xoá</label></div>}
+          {bulkError && <p role="alert" className="text-sm text-error">{bulkError}</p>}
+          <div className="flex justify-end gap-3">
+            <button type="button" aria-disabled={deleting} onClick={closeBulk} className="h-9 px-4 rounded-md border border-outline-variant focus-visible:ring-2 focus-visible:ring-primary">Huỷ</button>
+            <button type="button" disabled={deleting || (assignedOrders > 0 && !acknowledged)} onClick={performDelete} className="h-9 px-4 rounded-md bg-error text-white disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-error">{deleting ? 'Đang xoá…' : 'Xác nhận xoá'}</button>
+          </div>
+        </div>
+      </div>}
     </div>
   )
 }

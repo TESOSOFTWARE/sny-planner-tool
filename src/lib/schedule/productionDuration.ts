@@ -59,6 +59,21 @@ export function isWorkingDay(calendar: FactoryCalendar, dateLabel: string): bool
   return calendar.workingDateOverrides?.[dateLabel] ?? !weekdays.includes(date.getUTCDay())
 }
 
+/** Shift a factory day by signed working days, excluding the starting day. */
+export function shiftWorkingDays(calendar: FactoryCalendar, dateLabel: string, n: number): string | null {
+  const date = parseDateLabel(dateLabel)
+  if (!date || !calendarIsValid(calendar) || !Number.isSafeInteger(n)) return null
+  const direction = n < 0 ? -1 : 1
+  let remaining = Math.abs(n)
+  for (let elapsed = 0; elapsed < 36600; elapsed++) {
+    const label = date.toISOString().slice(0, 10)
+    if (remaining === 0 && isWorkingDay(calendar, label)) return label
+    date.setUTCDate(date.getUTCDate() + direction)
+    if (isWorkingDay(calendar, date.toISOString().slice(0, 10)) && remaining > 0) remaining--
+  }
+  return null
+}
+
 /** Inclusive saved date range. Invalid dates/calendars return null; reversed
  * ranges contain no working days. Same bounded span as the schedule engine. */
 export function countWorkingDays(calendar: FactoryCalendar, from: string, to: string): number | null {

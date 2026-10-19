@@ -2,7 +2,7 @@
 // POST /api/materials/rolling/import/confirm — Saves parsed RollingDailyMetric records to DB with Scoped Replacement.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { parseRollingReport } from '@/lib/excel/parseRollingReport'
+import { parseRollingReport, RollingDateConflictError } from '@/lib/excel/parseRollingReport'
 import { prisma } from '@/lib/db'
 import { rollingPeriodFromFileName, validateRollingPeriod } from '@/lib/materials/rollingPeriod'
 import { rollingImportSnapshot } from '@/lib/materials/rollingImportSnapshot'
@@ -122,7 +122,7 @@ export async function POST(req: NextRequest) {
       }
     })
 
-    if (result.blocked) return NextResponse.json({ success: false, error: 'Có PI sẽ bị xoá hoặc danh sách đã thay đổi. Vui lòng kiểm tra và xác nhận lại.', replacementDays: result.replacementDays }, { status: 409 })
+    if (result.blocked) return NextResponse.json({ success: false, error: 'Có mã ORDER sẽ mất dữ liệu Rolling hoặc danh sách đã thay đổi. Vui lòng kiểm tra và xác nhận lại.', replacementDays: result.replacementDays }, { status: 409 })
 
     return NextResponse.json({
       success: true,
@@ -133,6 +133,7 @@ export async function POST(req: NextRequest) {
       fileName: file.name,
     })
   } catch (error: any) {
+    if (error instanceof RollingDateConflictError) return NextResponse.json({ success: false, error: error.message }, { status: 422 })
     console.error('Error confirming rolling import:', error)
     return NextResponse.json(
       { success: false, error: error.message || 'Lỗi khi lưu dữ liệu Rolling vào cơ sở dữ liệu.' },

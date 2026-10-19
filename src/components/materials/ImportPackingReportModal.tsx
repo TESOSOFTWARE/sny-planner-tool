@@ -1,4 +1,5 @@
 'use client'
+import { prepareReportUpload } from '@/lib/excel/uploadTrim'
 
 // src/components/materials/ImportPackingReportModal.tsx
 // 3-step modal: Upload Excel Statistical Report → Preview Dry-Run → Confirm Import to DB.
@@ -66,8 +67,10 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
     setIsLoading(true)
 
     try {
+      const uploadFile = await prepareReportUpload(file, 'PACKING')
+      setFile(uploadFile)
       const formData = new FormData()
-      formData.append('file', file)
+      formData.append('file', uploadFile)
 
       const res = await fetch('/api/materials/packing/import', {
         method: 'POST',
@@ -169,6 +172,7 @@ export default function ImportPackingReportModal({ onImported, onClose }: Props)
               <div className="rounded-xl border-2 border-dashed border-slate-200 p-8 text-center hover:border-slate-400 transition-colors">
                 <input
                   type="file"
+                  disabled={isLoading}
                   accept=".xlsx, .xls"
                   onChange={(e) => {
                     const f = e.target.files?.[0]

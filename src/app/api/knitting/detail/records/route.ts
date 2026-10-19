@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
     const [records, total, sum, machines] = await Promise.all([
       prisma.knittingDailyDetail.findMany({
         where,
-        orderBy: [{ reportDate: 'desc' }, { machineId: 'asc' }, { shift: 'asc' }],
+        orderBy: [{ reportDate: 'desc' }, { machineId: 'asc' }, { shift: 'asc' }, { id: 'asc' }],
         skip,
         take: limit,
       }),
@@ -50,6 +50,7 @@ export async function GET(req: NextRequest) {
 
     const serialized = records.map(r => ({
       ...r,
+      meshType:     r.meshType,
       width:        r.width?.toString() ?? null,
       weightSpec:   r.weightSpec?.toString() ?? null,
       lengthM:      r.lengthM?.toString() ?? null,

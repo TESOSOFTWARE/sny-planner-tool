@@ -397,6 +397,7 @@ model KnittingDailyDetail {
 
   orderRef       String?  // Mã PI / đơn hàng (nếu Remark không bắt đầu bằng "*")
   machineNote    String?  // Ghi chú vận hành máy (nếu Remark bắt đầu bằng "*")
+  meshType       String?  // 1510-06: loại lưới từ REMARK đã được phân loại
 
   orderId        String?  // Link chính xác tới ProductionOrder (nếu PI duy nhất 1 sub-line)
   order          ProductionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)

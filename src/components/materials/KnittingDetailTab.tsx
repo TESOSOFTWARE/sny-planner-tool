@@ -3,7 +3,9 @@
 // src/components/materials/KnittingDetailTab.tsx
 // Tab hiển thị Knitting Daily Detail — bảng dữ liệu chi tiết ca/màu/đơn + thông số máy dệt.
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
+import TablePager from './TablePager'
+import { useMaterialPage } from './useMaterialPage'
 
 interface KnittingDetailRecord {
   id:             string
@@ -20,6 +22,7 @@ interface KnittingDetailRecord {
   quantity:       string | null
   weightKgs:      string
   orderRef:       string | null
+  meshType:       string | null
   machineNote:    string | null
   machineSizeM:   string | null
   cmPerMin:       string | null
@@ -67,53 +70,30 @@ function ShiftBadge({ shift }: { shift: string }) {
   )
 }
 
-export default function KnittingDetailTab({ onImport }: Props) {
-  const [records, setRecords]   = useState<KnittingDetailRecord[]>([])
-  const [total, setTotal]       = useState(0)
-  const [summary, setSummary]   = useState({ kg: 0, m: 0, machines: 0 })
-  const [isLoading, setIsLoading] = useState(false)
-  const [fetchError, setFetchError] = useState<string | null>(null)
+function formatNumber(value: string | null, unit?: string) {
+  if (value == null || value.trim() === '') return '—'
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return '—'
+  const formatted = numeric.toLocaleString('vi-VN', { maximumFractionDigits: 20 })
+  return unit ? `${formatted} ${unit}` : formatted
+}
 
+export default function KnittingDetailTab({ onImport }: Props) {
   const [filterDate, setFilterDate]       = useState('')
   const [filterMachine, setFilterMachine] = useState('')
-  const [availableMachines, setAvailableMachines] = useState<string[]>([])
-
-  const fetchRecords = useCallback(async () => {
-    setIsLoading(true)
-    setFetchError(null)
-    try {
-      const params = new URLSearchParams({ limit: '300' })
-      if (filterDate)    params.set('date',      filterDate)
-      if (filterMachine) params.set('machineId', filterMachine)
-
-      const res  = await fetch(`/api/knitting/detail/records?${params}`)
-      const data = await res.json() as ApiResponse
-      if (!res.ok || !data.success) { setFetchError(data.error ?? 'Không thể tải dữ liệu.'); return }
-
-      setRecords(data.records)
-      setTotal(data.total)
-      setSummary({ kg: Number(data.totalWeightKgs), m: Number(data.totalLengthM), machines: data.machineCount })
-
-      if (!filterMachine) {
-        const machines = Array.from(new Set(data.records.map(r => r.machineId))).sort()
-        setAvailableMachines(machines)
-      }
-    } catch {
-      setFetchError('Lỗi mạng — không thể kết nối máy chủ.')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [filterDate, filterMachine])
-
-  useEffect(() => { fetchRecords() }, [fetchRecords])
+  const pagination = useMaterialPage<ApiResponse>('/api/knitting/detail/records', new URLSearchParams({ ...(filterDate ? { date: filterDate } : {}), ...(filterMachine ? { machineId: filterMachine } : {}) }).toString())
+  const { data, loading: isLoading, error: fetchError, retry: fetchRecords } = pagination
+  const records = data?.records ?? [], total = data?.total ?? 0
+  const pager = <TablePager {...pagination} total={total} label="Knitting" />
 
   // Server totals over every filtered row, not only the loaded page (N12)
-  const totalKg = summary.kg
-  const totalM = summary.m
-  const machineCount = summary.machines
+  const totalKg = Number(data?.totalWeightKgs ?? 0)
+  const totalM = Number(data?.totalLengthM ?? 0)
+  const machineCount = data?.machineCount ?? 0
+  const summaryUnavailable = isLoading || !!fetchError
 
   return (
-    <div className="space-y-4">
+    <div ref={pagination.tableRef} className="space-y-4 scroll-mt-20">
       {/* Header Actions */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         {/* Filters */}
@@ -166,30 +146,32 @@ export default function KnittingDetailTab({ onImport }: Props) {
 
       {/* Error banner */}
       {fetchError && (
-        <div className="flex items-center gap-2 p-3 bg-error-container border border-error/30 rounded-lg text-error text-sm">
+        <div role="alert" className="flex flex-wrap items-center gap-2 p-3 bg-error-container border border-error/30 rounded-lg text-error text-sm">
           <span className="material-symbols-outlined text-[18px]">error</span>
           {fetchError}
+          <button type="button" onClick={() => void fetchRecords()} disabled={isLoading} className="ml-auto rounded border border-error px-3 py-1 font-medium focus-visible:ring-2 focus-visible:ring-error disabled:opacity-50">Thử lại</button>
         </div>
       )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-4 gap-4">
-        <StatCard label="Tổng dòng"     value={total}                                                                                    icon="format_list_numbered" />
-        <StatCard label="Máy dệt hoạt động" value={machineCount}                                                                         icon="grid_view" />
-        <StatCard label="Tổng sản lượng" value={`${totalKg.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} kg`}              icon="scale" />
-        <StatCard label="Tổng chiều dài" value={`${totalM.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} m`}                icon="straighten" />
+        <StatCard label="Tổng dòng"     value={summaryUnavailable ? '—' : total}                                                                                    icon="format_list_numbered" />
+        <StatCard label="Máy dệt hoạt động" value={summaryUnavailable ? '—' : machineCount}                                                                         icon="grid_view" />
+        <StatCard label="Tổng sản lượng" value={summaryUnavailable ? '—' : `${totalKg.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} kg`} icon="scale" />
+        <StatCard label="Tổng chiều dài" value={summaryUnavailable ? '—' : `${totalM.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} m`} icon="straighten" />
       </div>
 
       {/* Table */}
+      {pager}
       <div className="bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-lg overflow-hidden">
-        {isLoading ? (
+        {isLoading && records.length === 0 ? (
           <div className="flex items-center justify-center py-16">
             <svg className="w-6 h-6 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
             </svg>
           </div>
-        ) : records.length === 0 ? (
+        ) : fetchError ? null : records.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <span className="material-symbols-outlined text-[48px] text-outline mb-3">format_list_bulleted</span>
             <p className="text-sm text-secondary">
@@ -199,11 +181,11 @@ export default function KnittingDetailTab({ onImport }: Props) {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div data-material-scroll aria-busy={isLoading} className={`max-h-[60vh] overflow-auto ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
             <table className="w-full text-xs font-inter">
-              <thead>
+              <thead className="sticky top-0 z-10 bg-surface-container">
                 <tr className="bg-surface-container border-b-[0.5px] border-outline-variant">
-                  {['Ngày', 'Máy Dệt', 'Size(m)', 'Cm/Phút', 'M/Ngày', 'Ca', 'Khổ(m)', 'Màu sắc', 'Trọng lượng(kg)', 'Chiều dài(m)', 'Quantity', 'Ghi chú vận hành', 'Loại lưới'].map(h => (
+                  {['Ngày', 'Máy Dệt', 'Size(m)', 'Cm/Phút', 'M/Ngày', 'Ca', 'Khổ(m)', 'Màu sắc', 'Trọng lượng(kg)', 'Chiều dài(m)', 'Quantity', 'Ghi chú vận hành', 'Loại lưới', 'PI'].map(h => (
                     <th key={h} className="px-3 py-3 text-left font-medium text-secondary uppercase tracking-wider whitespace-nowrap">
                       {h}
                     </th>
@@ -212,7 +194,7 @@ export default function KnittingDetailTab({ onImport }: Props) {
               </thead>
               <tbody className="divide-y divide-outline-variant/50">
                 {records.map(rec => (
-                  <tr key={rec.id} className="hover:bg-[#f0eded] transition-colors duration-150">
+                  <tr key={rec.id} data-record-id={rec.id} className="hover:bg-[#f0eded] transition-colors duration-150">
                     <td className="px-3 py-2.5 font-mono text-on-surface whitespace-nowrap">
                       {new Date(rec.reportDate).toLocaleDateString('vi-VN', { timeZone: 'UTC', day: '2-digit', month: '2-digit', year: 'numeric' })}
                     </td>
@@ -220,19 +202,19 @@ export default function KnittingDetailTab({ onImport }: Props) {
                       {rec.machineId}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.machineSizeM ? `${rec.machineSizeM}m` : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.machineSizeM, 'm')}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.cmPerMin ?? <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.cmPerMin)}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.meterPerDay ?? <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.meterPerDay)}
                     </td>
                     <td className="px-3 py-2.5">
                       <ShiftBadge shift={rec.shift} />
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.width != null ? `${rec.width}m` : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.width, 'm')}
                     </td>
                     <td className="px-3 py-2.5 font-medium text-on-surface max-w-[130px] truncate" title={rec.color}>
                       {rec.color}
@@ -241,10 +223,10 @@ export default function KnittingDetailTab({ onImport }: Props) {
                       {parseFloat(rec.weightKgs).toLocaleString('vi-VN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.lengthM ? `${parseFloat(rec.lengthM).toLocaleString('vi-VN')} m` : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.lengthM, 'm')}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.quantity ?? <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.quantity)}
                     </td>
                     <td className="px-3 py-2.5 text-xs font-medium min-w-[180px]" title={rec.machineNote ?? ''}>
                       {rec.machineNote ? (
@@ -257,6 +239,9 @@ export default function KnittingDetailTab({ onImport }: Props) {
                       )}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant whitespace-nowrap">
+                      {rec.meshType ?? <span className="italic text-outline">—</span>}
+                    </td>
+                    <td className="px-3 py-2.5 font-mono text-on-surface-variant whitespace-nowrap">
                       {rec.orderRef ?? <span className="italic text-outline">—</span>}
                     </td>
                   </tr>
@@ -264,11 +249,6 @@ export default function KnittingDetailTab({ onImport }: Props) {
               </tbody>
             </table>
 
-            <div className="border-t-[0.5px] border-outline-variant px-4 py-2 bg-surface-container">
-              <p className="text-xs font-inter text-secondary">
-                {records.length} dòng{total > records.length ? ` (hiển thị) / ${total} tổng` : ''}
-              </p>
-            </div>
           </div>
         )}
       </div>

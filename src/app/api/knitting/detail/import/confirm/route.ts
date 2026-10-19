@@ -7,6 +7,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { preserveOrderLinks, OutputLinkConflict } from '@/lib/excel/preserveOrderLinks'
 import { z } from 'zod'
+import { productionPiResolver } from '@/lib/excel/productionPi'
+import { applyRemarkDecisions, knownMeshKeys, remarkKey, RemarkDecisionRequired } from '@/lib/excel/knittingRemark'
 
 export const maxDuration = 60  // Matches the 60s transaction timeout below
 
@@ -35,6 +37,11 @@ const knittingDetailRowSchema = z.object({
 
 const confirmBodySchema = z.object({
   rows: z.array(knittingDetailRowSchema).min(1, 'Cần ít nhất 1 dòng dữ liệu.'),
+  remarkDecisions: z.array(z.object({
+    value: z.string().trim().min(1).max(1000), target: z.enum(['MESH', 'NOTE']),
+  }).strict()).max(200).default([]),
+}).refine(body => new Set(body.remarkDecisions.map(row => remarkKey(row.value))).size === body.remarkDecisions.length, {
+  message: 'Mỗi giá trị REMARK chỉ được chọn một cột.',
 })
 
 export async function POST(req: NextRequest) {
@@ -51,7 +58,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: `Validation failed: ${msg}` }, { status: 422 })
   }
 
-  const { rows } = parsed.data
+  const { rows, remarkDecisions } = parsed.data
 
 
   const groupKeys = new Set<string>()
@@ -70,7 +77,12 @@ export async function POST(req: NextRequest) {
       }) }
       const existingRows = await tx.knittingDailyDetail.findMany({ where: groups })
       const orderRows = await tx.productionOrder.findMany({ select: { id: true, piNumber: true } })
-      const linkedRows = preserveOrderLinks(rows, existingRows, orderRows)
+      const saved = await tx.knittingDailyDetail.findMany({ distinct: ['meshType'], select: { meshType: true }, where: { meshType: { not: null } } })
+      const classified = applyRemarkDecisions(rows, {
+        knownMeshKeys: knownMeshKeys(saved.map(row => row.meshType)),
+        resolvePi: productionPiResolver(orderRows.map(row => row.piNumber)),
+      }, remarkDecisions)
+      const linkedRows = preserveOrderLinks(classified, existingRows, orderRows)
       // Rule B: Delete existing records in knitting_daily_detail for [machineId, reportDate] pairs in the file —
       // one statement; a delete per group (400 for a month) exceeded the transaction timeout on Neon (N13).
       await tx.knittingDailyDetail.deleteMany({ where: groups })
@@ -90,6 +102,7 @@ export async function POST(req: NextRequest) {
         quantity:       row.quantity !== null ? row.quantity : undefined,
         weightKgs:      row.weightKgs,
         orderRef:       row.orderRef,
+        meshType:       row.meshType,
         machineNote:    row.machineNote,
         machineSizeM:   row.machineSizeM !== null ? row.machineSizeM : undefined,
         cmPerMin:       row.cmPerMin !== null ? row.cmPerMin : undefined,
@@ -104,6 +117,7 @@ export async function POST(req: NextRequest) {
       insertedCount = data.length
     }, { timeout: 60_000, maxWait: 5_000 })
   } catch (err) {
+    if (err instanceof RemarkDecisionRequired) return NextResponse.json({ success: false, code: 'REMARK_DECISION_REQUIRED', values: err.values, error: err.message }, { status: 409 })
     if (err instanceof OutputLinkConflict) {
       return NextResponse.json({ success: false, code: 'OUTPUT_LINK_CONFLICT', error: err.message }, { status: 409 })
     }

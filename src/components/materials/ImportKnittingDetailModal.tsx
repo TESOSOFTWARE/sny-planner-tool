@@ -1,10 +1,12 @@
 'use client'
+import { prepareReportUpload, ReportUploadError } from '@/lib/excel/uploadTrim'
 
 // src/components/materials/ImportKnittingDetailModal.tsx
 // 3-step modal for importing Knitting Detail report (.xlsx)
 
 import { useRef, useState } from 'react'
 import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
+import { remarkKey, type RemarkValue, type RemarkDecision } from '@/lib/excel/knittingRemark'
 
 interface Props {
   onImported: () => void
@@ -25,6 +27,7 @@ interface PreviewRow {
   quantity:       number | null
   weightKgs:      number
   orderRef:       string | null
+  sourceOrderRefs?: string[]
   machineNote:    string | null
   machineSizeM:   number | null
   cmPerMin:       number | null
@@ -41,6 +44,7 @@ interface PreviewResponse {
   totalWeightKgs: number
   totalMeters:    number
   rows:           PreviewRow[]
+  remarkValues:   RemarkValue[]
   error?:         string
 }
 
@@ -49,6 +53,8 @@ interface ConfirmResponse {
   recordsInserted:  number
   recordsDeleted:   number
   error?:           string
+  code?:            string
+  values?:          string[]
 }
 
 type Step = 'upload' | 'preview' | 'success'
@@ -62,6 +68,10 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
   const [error, setError]       = useState<string | null>(null)
   const [preview, setPreview]   = useState<PreviewResponse | null>(null)
   const [successMsg, setSuccessMsg] = useState('')
+  const [remarkValues, setRemarkValues] = useState<RemarkValue[]>([])
+  const [decisions, setDecisions] = useState<Record<string, RemarkDecision['target']>>({})
+  const unknownValues = remarkValues.filter(value => value.status === 'UNKNOWN')
+  const choicesComplete = unknownValues.length <= 200 && unknownValues.every(value => decisions[remarkKey(value.value)])
 
   const handlePreview = async () => {
     if (!file) { setError('Vui lòng chọn file .xlsx'); return }
@@ -69,14 +79,19 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
     setIsLoading(true)
 
     try {
+      const uploadFile = await prepareReportUpload(file, 'KNITTING')
+      setFile(uploadFile)
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', uploadFile)
       const res  = await fetch('/api/knitting/detail/import', { method: 'POST', body: fd })
       const data = await res.json() as PreviewResponse
       if (!res.ok || !data.success) { setError(data.error ?? 'Không thể đọc file.'); return }
       setPreview(data)
+      setRemarkValues(data.remarkValues ?? [])
+      setDecisions({})
       setStep('preview')
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof ReportUploadError) { setError(error.message); return }
       setError('Lỗi mạng — không thể kết nối máy chủ.')
     } finally {
       setIsLoading(false)
@@ -84,7 +99,7 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
   }
 
   const handleConfirm = async () => {
-    if (!preview) return
+    if (!preview || !choicesComplete || isLoading) return
     setError(null)
     setIsLoading(true)
 
@@ -92,10 +107,21 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
       const res  = await fetch('/api/knitting/detail/import/confirm', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ rows: preview.rows }),
+        body:    JSON.stringify({ rows: preview.rows, remarkDecisions: unknownValues.map(({ value }) => ({ value, target: decisions[remarkKey(value)] })) }),
       })
       const data = await res.json() as ConfirmResponse
-      if (!res.ok || !data.success) { setError(data.error ?? 'Không thể lưu dữ liệu.'); return }
+      if (!res.ok || !data.success) {
+        if (res.status === 409 && data.code === 'REMARK_DECISION_REQUIRED') {
+          const missing = data.values ?? []
+          setRemarkValues(previous => {
+            const byKey = new Map(previous.map(value => [remarkKey(value.value), value]))
+            for (const value of missing) byKey.set(remarkKey(value), { value, status: 'UNKNOWN', count: preview.rows.filter(row => row.sourceOrderRefs?.some(raw => remarkKey(raw) === remarkKey(value))).length })
+            return Array.from(byKey.values())
+          })
+          setDecisions(previous => Object.fromEntries(Object.entries(previous).filter(([key]) => !missing.some(value => remarkKey(value) === key))))
+        }
+        setError(data.error ?? 'Không thể lưu dữ liệu.'); return
+      }
       setSuccessMsg(`Đã import ${data.recordsInserted} bản ghi chi tiết cho ${preview.machines.length} máy dệt.`)
       setStep('success')
       onImported()
@@ -150,6 +176,7 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
                 <input
                   id="import-knitting-detail-file"
                   type="file"
+                  disabled={isLoading}
                   accept=".xlsx"
                   onChange={e => { setFile(e.target.files?.[0] ?? null); setError(null) }}
                   className="w-full text-sm text-on-surface file:mr-3 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-on-primary hover:file:bg-primary/90 cursor-pointer"
@@ -175,6 +202,18 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
           {/* STEP 2: PREVIEW */}
           {step === 'preview' && preview && (
             <div className="space-y-4">
+              {unknownValues.length > 0 && <section aria-label="Chọn cột REMARK mới" className="rounded-lg border border-outline-variant bg-surface-container p-4 space-y-3">
+                <h4 className="text-sm font-semibold text-on-surface">Có {unknownValues.length} giá trị REMARK mới — chọn cột cho từng giá trị</h4>
+                <p className="text-xs text-secondary">Loại lưới đã lưu sẽ được tự nhận ở lần sau. Ghi chú có thể cần chọn lại khi nhập file khác.</p>
+                {unknownValues.length > 200 && <p role="alert" className="text-sm text-error">Chỉ xác nhận tối đa 200 giá trị mới mỗi lần. Hãy chia nhỏ file báo cáo.</p>}
+                {unknownValues.map(({ value, count }, index) => <fieldset key={remarkKey(value)} disabled={isLoading} className="rounded border border-outline-variant p-3 text-sm">
+                  <legend className="px-1 font-medium break-all">{value} ({count} dòng)</legend>
+                  <div className="flex flex-wrap gap-4">{(['MESH', 'NOTE'] as const).map(target => <label key={target} className="inline-flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name={`remark-${index}`} value={target} checked={decisions[remarkKey(value)] === target} onChange={() => setDecisions(previous => ({ ...previous, [remarkKey(value)]: target }))} className="accent-primary focus-visible:ring-2 focus-visible:ring-primary" />
+                    {target === 'MESH' ? 'Loại lưới' : 'Ghi chú'}
+                  </label>)}</div>
+                </fieldset>)}
+              </section>}
               <div className="grid grid-cols-4 gap-3">
                 <div className="bg-surface-container rounded-lg p-3 text-center">
                   <p className="text-2xl font-semibold text-primary tabular-nums">{preview.totalRecords}</p>
@@ -282,7 +321,7 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
                   </button>
                   <button
                     onClick={handleConfirm}
-                    disabled={isLoading}
+                    disabled={isLoading || !choicesComplete}
                     className="px-5 py-2 bg-primary text-on-primary rounded-md text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
                   >
                     {isLoading && (

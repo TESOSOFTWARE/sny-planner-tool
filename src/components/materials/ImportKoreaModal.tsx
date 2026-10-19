@@ -1,4 +1,5 @@
 'use client'
+import { prepareReportUpload, ReportUploadError } from '@/lib/excel/uploadTrim'
 
 // src/components/materials/ImportKoreaModal.tsx
 // 3-step modal: (1) file upload + date, (2) preview, (3) confirm → success.
@@ -61,8 +62,10 @@ export default function ImportKoreaModal({ onImported, onClose }: Props) {
     setIsLoading(true)
 
     try {
+      const uploadFile = await prepareReportUpload(file, 'KOREA')
+      setFile(uploadFile)
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', uploadFile)
       fd.append('group', 'KOREA')
       fd.append('txDate', txDate)
       if (headerRow != null) fd.append('headerRow', String(headerRow))
@@ -77,7 +80,8 @@ export default function ImportKoreaModal({ onImported, onClose }: Props) {
       setReplaceKeys([])
       setAvailableBlocks([])
       setStep('preview')
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof ReportUploadError) { setError(error.message); return }
       setError('Lỗi mạng — không thể kết nối máy chủ.')
     } finally {
       setIsLoading(false)
@@ -161,6 +165,7 @@ export default function ImportKoreaModal({ onImported, onClose }: Props) {
                 <input
                   id="import-report-file"
                   type="file"
+                  disabled={isLoading}
                   accept=".xlsx"
                   onChange={e => { setFile(e.target.files?.[0] ?? null); setPreview(null); setAvailableBlocks([]); setHeaderRow(undefined); setReplaceKeys([]); setError(null) }}
                   className="w-full text-sm text-on-surface file:mr-3 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-on-primary hover:file:bg-primary/90 cursor-pointer"

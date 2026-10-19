@@ -3,8 +3,10 @@
 // src/components/materials/RollingTab.tsx
 // Tab Rolling — displays RollingDailyMetric records with summary cards, filters, and data table.
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
+import TablePager from './TablePager'
+import { useMaterialPage } from './useMaterialPage'
 
 interface RollingRecord {
   id:             string
@@ -51,60 +53,17 @@ function StatCard({ label, value, icon, accent }: { label: string; value: string
 }
 
 export default function RollingTab({ onImport }: Props) {
-  const [records, setRecords]                     = useState<RollingRecord[]>([])
-  const [total, setTotal]                         = useState(0)
-  const [uniqueOrdersCount, setUniqueOrdersCount] = useState(0)
-  const [sumMeters, setSumMeters]                 = useState(0)
-  const [sumWeightKg, setSumWeightKg]             = useState(0)
-  const [availableOrders, setAvailableOrders]     = useState<string[]>([])
-  const [page, setPage]                           = useState(1)
-  const [totalPages, setTotalPages]               = useState(1)
-  const [isLoading, setIsLoading]                 = useState(false)
-  const [fetchError, setFetchError]               = useState<string | null>(null)
-
   // Filters
   const [filterDate, setFilterDate]         = useState('')
   const [filterOrderRef, setFilterOrderRef] = useState('')
 
-  const fetchRecords = useCallback(async (targetPage = 1) => {
-    setIsLoading(true)
-    setFetchError(null)
-    try {
-      const params = new URLSearchParams({
-        page: targetPage.toString(),
-        limit: '100',
-      })
-      if (filterDate)     params.set('date', filterDate)
-      if (filterOrderRef) params.set('orderRef', filterOrderRef)
-
-      const res = await fetch(`/api/materials/rolling/records?${params}`)
-      const data = (await res.json()) as ApiResponse
-
-      if (!res.ok || !data.success) {
-        setFetchError(data.error ?? 'Không thể tải dữ liệu Rolling.')
-        return
-      }
-
-      setRecords(data.records)
-      setTotal(data.total)
-      setPage(data.page)
-      setTotalPages(data.totalPages)
-      setUniqueOrdersCount(data.uniqueOrdersCount)
-      setSumMeters(data.sumMeters)
-      setSumWeightKg(data.sumWeightKg)
-      if (data.availableOrders) {
-        setAvailableOrders(data.availableOrders)
-      }
-    } catch {
-      setFetchError('Lỗi mạng — không thể kết nối máy chủ.')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [filterDate, filterOrderRef])
-
-  useEffect(() => {
-    fetchRecords(1)
-  }, [fetchRecords])
+  const pagination = useMaterialPage<ApiResponse>('/api/materials/rolling/records', new URLSearchParams({ ...(filterDate ? { date: filterDate } : {}), ...(filterOrderRef ? { orderRef: filterOrderRef } : {}) }).toString())
+  const { data, loading: isLoading, error: fetchError, retry } = pagination
+  const records = data?.records ?? [], total = data?.total ?? 0
+  const uniqueOrdersCount = data?.uniqueOrdersCount ?? 0, sumMeters = data?.sumMeters ?? 0, sumWeightKg = data?.sumWeightKg ?? 0
+  const availableOrders = data?.availableOrders ?? []
+  const summaryUnavailable = isLoading || !!fetchError
+  const pager = <TablePager {...pagination} total={total} label="Rolling" />
 
   const clearFilters = () => {
     setFilterDate('')
@@ -112,29 +71,29 @@ export default function RollingTab({ onImport }: Props) {
   }
 
   return (
-    <div className="space-y-6">
+    <div ref={pagination.tableRef} className="space-y-6 scroll-mt-20">
       {/* 4 Summary Stat Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <StatCard
           label="TỔNG BẢN GHI"
-          value={total.toLocaleString('vi-VN')}
+          value={summaryUnavailable ? '—' : total.toLocaleString('vi-VN')}
           icon="format_list_bulleted"
         />
         <StatCard
-          label="TỔNG ĐƠN HÀNG"
-          value={uniqueOrdersCount.toLocaleString('vi-VN')}
+          label="Số mã ORDER"
+          value={summaryUnavailable ? '—' : uniqueOrdersCount.toLocaleString('vi-VN')}
           icon="shopping_cart"
           accent="text-primary"
         />
         <StatCard
           label="TỔNG SẢN LƯỢNG (M)"
-          value={sumMeters > 0 ? `${sumMeters.toLocaleString('vi-VN')} m` : '0 m'}
+          value={summaryUnavailable ? '—' : sumMeters > 0 ? `${sumMeters.toLocaleString('vi-VN')} m` : '0 m'}
           icon="straighten"
           accent="text-emerald-700"
         />
         <StatCard
           label="TỔNG TRỌNG LƯỢNG (KG)"
-          value={sumWeightKg > 0 ? `${sumWeightKg.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} kg` : '0 kg'}
+          value={summaryUnavailable ? '—' : sumWeightKg > 0 ? `${sumWeightKg.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} kg` : '0 kg'}
           icon="scale"
           accent="text-amber-700"
         />
@@ -156,12 +115,12 @@ export default function RollingTab({ onImport }: Props) {
 
           {/* Order Ref Dropdown / Input */}
           <div className="flex items-center gap-2">
-            <span className="text-xs font-inter font-medium text-secondary">Mã đơn:</span>
+            <span className="text-xs font-inter font-medium text-secondary">ORDER/khách:</span>
             <div className="relative">
               <input
                 type="text"
                 list="rolling-order-list"
-                placeholder="Lọc theo PI..."
+                placeholder="Lọc theo ORDER/khách..."
                 value={filterOrderRef}
                 onChange={(e) => setFilterOrderRef(e.target.value)}
                 className="bg-surface border border-outline-variant rounded-md px-3 py-1.5 text-xs text-on-surface focus:outline-none focus:border-primary w-40"
@@ -202,17 +161,19 @@ export default function RollingTab({ onImport }: Props) {
         <div className="p-3 bg-error-container/40 border border-error/30 rounded-lg flex items-center gap-2 text-error text-sm">
           <span className="material-symbols-outlined text-[18px]">error</span>
           <span>{fetchError}</span>
+          <button type="button" onClick={retry} disabled={isLoading} className="ml-auto rounded border border-error px-3 py-1 disabled:opacity-50">Thử lại</button>
         </div>
       )}
 
       {/* Data Table */}
+      {pager}
       <div className="bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-xl overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
+        <div data-material-scroll aria-busy={isLoading} className={`max-h-[60vh] overflow-auto ${isLoading ? 'opacity-50 pointer-events-none' : ''}`}>
           <table className="w-full text-xs text-left">
-            <thead className="bg-surface-container text-secondary font-medium uppercase border-b border-outline-variant">
+            <thead className="sticky top-0 z-10 bg-surface-container text-secondary font-medium uppercase border-b border-outline-variant">
               <tr>
                 <th className="px-4 py-3 font-semibold">Ngày</th>
-                <th className="px-4 py-3 font-semibold">Khách / đơn</th>
+                <th className="px-4 py-3 font-semibold">ORDER/khách</th>
                 <th className="px-4 py-3 font-semibold">Màu</th>
                 <th className="px-4 py-3 font-semibold text-right">Khổ (m)</th>
                 <th className="px-4 py-3 font-semibold text-right">Dài (m)</th>
@@ -222,14 +183,14 @@ export default function RollingTab({ onImport }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant">
-              {isLoading ? (
+              {isLoading && records.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-4 py-12 text-center text-secondary">
                     <span className="material-symbols-outlined text-[24px] animate-spin mb-1 block mx-auto">progress_activity</span>
                     Đang tải dữ liệu Rolling...
                   </td>
                 </tr>
-              ) : records.length === 0 ? (
+              ) : fetchError ? null : records.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-4 py-12 text-center text-secondary">
                     Không tìm thấy bản ghi sản lượng Rolling nào phù hợp.
@@ -239,8 +200,8 @@ export default function RollingTab({ onImport }: Props) {
                 records.map((r) => {
                   const numValue = r.metricValue ? parseFloat(r.metricValue) : 0
                   return (
-                    <tr key={r.id} className="hover:bg-surface-container-high/40 transition-colors">
-                      <td className="px-4 py-2.5 font-mono text-on-surface">{r.date}</td>
+                    <tr key={r.id} data-record-id={r.id} className="hover:bg-surface-container-high/40 transition-colors">
+                      <td className="px-4 py-2.5 font-mono tabular-nums text-on-surface">{r.date.split('-').reverse().join('/')}</td>
                       <td className="px-4 py-2.5 font-semibold text-primary">
                         {r.orderId ? (
                           <Link href={`/orders/${r.orderId}`} className="hover:underline flex items-center gap-1">
@@ -252,8 +213,8 @@ export default function RollingTab({ onImport }: Props) {
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-on-surface">{r.color || '—'}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-on-surface">{r.widthM != null ? `${r.widthM}m` : '—'}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-on-surface">{r.lengthM != null ? `${r.lengthM}m` : '—'}</td>
+                      <td className="px-4 py-2.5 text-right font-mono tabular-nums text-on-surface">{r.widthM != null ? `${r.widthM.toLocaleString('vi-VN', { maximumFractionDigits: 20 })} m` : '—'}</td>
+                      <td className="px-4 py-2.5 text-right font-mono tabular-nums text-on-surface">{r.lengthM != null ? `${r.lengthM.toLocaleString('vi-VN', { maximumFractionDigits: 20 })} m` : '—'}</td>
                       <td className="px-4 py-2.5 font-mono text-on-surface">
                         <span className="px-2 py-0.5 bg-surface-container rounded border border-outline-variant/60">
                           {r.metricLabel}
@@ -273,30 +234,6 @@ export default function RollingTab({ onImport }: Props) {
           </table>
         </div>
 
-        {/* Pagination footer */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-outline-variant bg-surface-container/30 text-xs">
-            <span className="text-secondary" suppressHydrationWarning>
-              Hiển thị page <strong>{page}</strong> / <strong>{totalPages}</strong> ({total.toLocaleString('vi-VN')} bản ghi)
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => fetchRecords(page - 1)}
-                disabled={page <= 1 || isLoading}
-                className="px-3 py-1 border border-outline-variant rounded hover:bg-surface-container disabled:opacity-40"
-              >
-                Trước
-              </button>
-              <button
-                onClick={() => fetchRecords(page + 1)}
-                disabled={page >= totalPages || isLoading}
-                className="px-3 py-1 border border-outline-variant rounded hover:bg-surface-container disabled:opacity-40"
-              >
-                Sau
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   )
