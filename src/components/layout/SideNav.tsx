@@ -1,8 +1,9 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { usePathname } from 'next/navigation'
+import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
 
 type ActiveNavItem = {
   kind: 'link'
@@ -89,7 +90,9 @@ function NavigationContent({
               href={item.href}
               onClick={onNavigate}
               aria-label={item.label}
+              aria-current={active ? 'page' : undefined}
               title={compact ? item.label : undefined}
+              tabIndex={0}
               className={[
                 'flex items-center rounded-lg transition-colors',
                 compact ? 'justify-center px-sm py-sm' : 'gap-3 px-md py-sm',
@@ -118,25 +121,13 @@ export default function SideNav() {
   const pathname = usePathname()
   const [expanded, setExpanded] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
-  const overlayRef = useRef<HTMLElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
 
   function closeOverlay() {
     setExpanded(false)
-    window.requestAnimationFrame(() => triggerRef.current?.focus())
   }
 
-  useEffect(() => {
-    if (!expanded) return
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeOverlay()
-    }
-
-    document.addEventListener('keydown', onKeyDown)
-    overlayRef.current?.querySelector<HTMLElement>('a, button')?.focus()
-
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [expanded])
+  useScheduleModalFocus(expanded, closeOverlay, overlayRef)
 
   return (
     <>
@@ -169,7 +160,7 @@ export default function SideNav() {
             className="fixed left-0 right-0 top-[64px] bottom-0 z-50 bg-black/30"
             onClick={closeOverlay}
           />
-          <aside
+          <div
             ref={overlayRef}
             role="dialog"
             aria-modal="true"
@@ -188,7 +179,7 @@ export default function SideNav() {
               </button>
             </div>
             <NavigationContent pathname={pathname} onNavigate={closeOverlay} />
-          </aside>
+          </div>
         </>
       )}
     </>
