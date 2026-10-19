@@ -3,6 +3,7 @@
 // "SẢN LƯỢNG ĐÓNG GÓI". One row is the complete factory output for a day.
 
 import * as XLSX from 'xlsx'
+import { reportSheetMatches } from './reportSheetMatches'
 
 const MAX_DATES = 366
 
@@ -127,10 +128,7 @@ function hasUncachedFormula(ws: XLSX.WorkSheet, row: number, column: number): bo
 export function parsePackingReport(buffer: Buffer, fileName: string): ParsePackingResult {
   const workbook = XLSX.read(buffer, { raw: false, cellDates: false })
   const availableSheets = workbook.SheetNames
-  const matchingSheets = availableSheets.filter((sheet) => {
-    const upper = sheet.toUpperCase()
-    return upper.includes('ĐÓNG GÓI') || upper.includes('PACKING')
-  })
+  const matchingSheets = availableSheets.filter((sheet) => reportSheetMatches(sheet, 'PACKING'))
   if (matchingSheets.length === 0) {
     throw new Error(`Sheet "SẢN LƯỢNG ĐÓNG GÓI" không tìm thấy. Các sheet trong file: ${availableSheets.join(', ')}`)
   }

@@ -197,7 +197,10 @@ export default function DetailModal({ isOpen, onClose, assignment, onSuccess }: 
       const res = await fetch(`/api/assignments/${assignment.id}`, {
         method: 'DELETE'
       })
-      if (!res.ok) throw new Error('Không thể gỡ phân công')
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        throw new Error(body?.message || body?.error || 'Không thể gỡ phân công')
+      }
       onSuccess()
       onClose()
     } catch (err: any) {

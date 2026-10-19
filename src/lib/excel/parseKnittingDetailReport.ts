@@ -32,6 +32,7 @@
 //   machineNote (col 19) is in the header row starting with '*'.
 
 import * as XLSX from 'xlsx'
+import { reportSheetMatches } from './reportSheetMatches'
 import { productionPi } from './productionPi'
 
 export interface KnittingDetailRow {
@@ -169,7 +170,7 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
   })
 
   const sheetName = workbook.SheetNames.find(
-    (n) => n.trim().toUpperCase() === 'KNITTING'
+    (n) => reportSheetMatches(n, 'KNITTING')
   )
   if (!sheetName) {
     const available = workbook.SheetNames.join(', ')
@@ -342,7 +343,7 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
     const remarkText = toStr(row[colRemark])
 
     const orderRef = productionPi(remarkText)
-    const machineNote = Array.from(new Set([currentMachineNote, !orderRef ? remarkText : null].filter(Boolean))).join(' · ') || null
+    const machineNote = Array.from(new Set([currentMachineNote, remarkText?.trim().startsWith('*') ? remarkText : null].filter(Boolean))).join(' · ') || null
 
     blockWeightSum += weightKgs
 

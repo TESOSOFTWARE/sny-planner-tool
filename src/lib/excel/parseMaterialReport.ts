@@ -2,6 +2,7 @@
 // Server-only parser for the selected material-report block in an .xlsx file.
 
 import * as XLSX from 'xlsx'
+import { reportSheetMatches } from './reportSheetMatches'
 
 export type MaterialGroupInput = 'HDPE' | 'MB' | 'KOREA'
 
@@ -50,12 +51,7 @@ function normalizeCell(value: unknown): string {
   return String(value ?? '').trim().replace(/\s+/g, ' ').toUpperCase()
 }
 
-function groupSheetMatches(sheetName: string, group: MaterialGroupInput): boolean {
-  const normalized = normalizeCell(sheetName)
-  if (group === 'HDPE') return normalized === 'HDPE'
-  if (group === 'MB') return normalized === 'MB' || normalized === 'M/B'
-  return normalized === 'KOREA'
-}
+const groupSheetMatches = reportSheetMatches
 
 function workbookRows(buffer: Buffer, group: MaterialGroupInput): { workbook: XLSX.WorkBook; sheetName: string; rows: unknown[][] } {
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false, cellNF: true, raw: true })
@@ -90,6 +86,21 @@ export function inspectMaterialBlocks(buffer: Buffer, group: MaterialGroupInput)
 function findExactHeader(headers: string[], aliases: string[]): number {
   const accepted = new Set(aliases.map((alias) => normalizeCell(alias)))
   return headers.findIndex((header) => accepted.has(header))
+}
+
+// [MoM §3.1–3.2 / N2] Both import paths must use the same source identity.
+// Row numbers and M/B attributes are not part of the material name.
+function sourceMaterialName(row: unknown[], headers: string[], firstStockCol: number, ordinalCol: number, group: MaterialGroupInput): string {
+  const identityHeaders = new Set(['NAME', 'MATERIAL', 'MATERIAL NAME', 'MAIN RAW MATERIAL', 'TÊN NVL', 'COLOR', 'COLOR CODE', 'COLOR NAME', 'MÃ MÀU', 'TÊN MÀU'])
+  const metadataHeaders = new Set(['SUBGROUP', 'PHÂN LOẠI NHỰA', 'ITEM', 'ITEM CODE', 'PRODUCTION', 'MANUFACTURER', 'HÃNG', 'LIGHT FASTNESS', 'ĐỘ BỀN MÀU'])
+  const mbIdentityColumns = group === 'MB'
+    ? headers.flatMap((header, index) => index < firstStockCol && identityHeaders.has(header) ? [index] : [])
+    : []
+  return row.slice(0, firstStockCol)
+    .filter((_, index) => index !== ordinalCol && (group === 'MB' && mbIdentityColumns.length > 0
+      ? mbIdentityColumns.includes(index)
+      : !metadataHeaders.has(headers[index]) && !(index > 0 && ['LIGHT FASTNESS', 'ĐỘ BỀN MÀU'].includes(headers[index - 1]) && !headers[index])))
+    .map(cell => String(cell ?? '').trim()).filter(Boolean).join(' ')
 }
 
 // [MoM §3.2] The source M/B table has two COLOR columns: code, then name.
@@ -154,6 +165,7 @@ export function parseMaterialReport(
 
   const headerIndex = block.headerRow - 1
   const headers = rows[headerIndex].map(normalizeCell)
+  const ordinalCol = findExactHeader(headers, ['NO.', 'NO', 'STT'])
   const firstStockCol = findExactHeader(headers, ['FIRST STOCK', 'FISRT STOCK'])
   const lastStockCol = findExactHeader(headers, ['LAST STOCK'])
   if (firstStockCol < 0 || lastStockCol < 0) throw new Error('Không tìm thấy cột FIRST STOCK hoặc LAST STOCK.')
@@ -165,7 +177,6 @@ export function parseMaterialReport(
   const dataEnd = Math.min(block.endRow, rows.length)
   const result: ParsedMaterialRow[] = []
   const subGroupCol = findExactHeader(headers, ['SUBGROUP', 'PHÂN LOẠI NHỰA'])
-  const lightFastnessCol = findExactHeader(headers, ['LIGHT FASTNESS', 'ĐỘ BỀN MÀU'])
   let rowGroup = group
   let mbHeaders: string[] = []
   let sourceSubGroup: ParsedMaterialRow['subGroup'] = group === 'HDPE' && block.reportDate && headers.includes('MAIN RAW MATERIAL') ? 'NGUYEN_SINH' : undefined
@@ -182,15 +193,8 @@ export function parseMaterialReport(
     if (labels.includes('M/B')) { rowGroup = 'MB'; continue }
     if (labels.includes('COLOR') && labels.includes('LIGHT FASTNESS')) { mbHeaders = labels; continue }
     if (labels.some(label => isSectionLabel(label))) continue
-    const lightHeaderCol = rowGroup === 'MB' ? (mbHeaders.indexOf('LIGHT FASTNESS') >= 0 ? mbHeaders.indexOf('LIGHT FASTNESS') : lightFastnessCol) : -1
-    // Keep the legacy material-name identity, excluding the unlabelled numeric
-    // cell. Its meaning is unknown; it is never imported as LIGHT FASTNESS.
-    const unlabelledCol = lightHeaderCol >= 0 && lightHeaderCol + 1 < firstStockCol && !mbHeaders[lightHeaderCol + 1] && parseNumber(row[lightHeaderCol + 1]) != null ? lightHeaderCol + 1 : -1
-    const nameParts = row.slice(0, Math.max(firstStockCol, 0))
-      .filter((_, index) => index !== subGroupCol && index !== unlabelledCol && index !== lightHeaderCol)
-      .map((cell) => String(cell ?? '').trim())
-      .filter(Boolean)
-    const materialName = nameParts.join(' ').trim()
+    if (ordinalCol >= 0 && (typeof row[ordinalCol] !== 'number' || !Number.isInteger(row[ordinalCol]) || Number(row[ordinalCol]) <= 0)) continue
+    const materialName = sourceMaterialName(row, rowGroup === 'MB' && mbHeaders.length ? mbHeaders : headers, firstStockCol, ordinalCol, rowGroup)
     if (!materialName || isSectionLabel(materialName) || isHeaderRow(row)) continue
 
     const validationErrors: string[] = []
@@ -317,7 +321,7 @@ export function parseMaterialReportHistory(buffer: Buffer, group: MaterialGroupI
       continue
     }
     const header = rows[headerIndex].map(normalizeCell)
-    const ordinalCol = findExactHeader(header, ['NO.', 'NO'])
+    const ordinalCol = findExactHeader(header, ['NO.', 'NO', 'STT'])
     const firstCol = findExactHeader(header, ['FIRST STOCK', 'FISRT STOCK'])
     const lastCol = findExactHeader(header, ['LAST STOCK'])
     const inCol = findExactHeader(header, ['IN'])
@@ -336,9 +340,7 @@ export function parseMaterialReportHistory(buffer: Buffer, group: MaterialGroupI
       // Source line numbers are structural, not part of the material identity.
       const ordinal = ordinalCol
       if (ordinal < 0 || typeof row[ordinal] !== 'number' || !Number.isInteger(row[ordinal]) || Number(row[ordinal]) <= 0) continue
-      const nameParts = row.slice(ordinal + 1, section === 'MB' ? Math.min(firstCol, ordinal + 3) : firstCol)
-        .filter(cell => cell != null && String(cell).trim()).map(cell => String(cell).trim())
-      const materialName = nameParts.join(' ').trim()
+      const materialName = sourceMaterialName(row, section === 'MB' && mbHeader.length ? mbHeader : header, firstCol, ordinal, section === 'MB' ? 'MB' : group)
       if (!materialName || labels.some(label => isSectionLabel(label))) continue
       const validationErrors: string[] = []
       const value = (col: number, label: string, required = false) => col < 0 ? 0 : numericValue(row[col], { required, allowNegative: !required && label !== 'IN' }, label, validationErrors)

@@ -1,4 +1,5 @@
 'use client'
+import { prepareReportUpload, ReportUploadError } from '@/lib/excel/uploadTrim'
 
 // src/components/materials/ImportRollingReportModal.tsx
 // 3-step modal: Upload Excel Statistical Report → Preview Dry-Run → Confirm Import to DB.
@@ -68,8 +69,10 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
     setIsLoading(true)
 
     try {
+      const uploadFile = await prepareReportUpload(file, 'ROLLING')
+      setFile(uploadFile)
       const formData = new FormData()
-      formData.append('file', file)
+      formData.append('file', uploadFile)
       formData.append('month', String(selectedPeriod.month))
       formData.append('year', String(selectedPeriod.year))
 
@@ -87,7 +90,8 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
       setPreview(data)
       setAcknowledgeLoss(false)
       setStep('preview')
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof ReportUploadError) { setError(error.message); return }
       setError('Lỗi kết nối máy chủ.')
     } finally {
       setIsLoading(false)
@@ -155,7 +159,7 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
         {/* Modal Body */}
         <div className="py-4 overflow-y-auto flex-1 space-y-4">
           {error && (
-            <div className="p-3 bg-error-container/40 border border-error/30 rounded-lg flex items-center gap-2 text-error text-sm">
+            <div role="alert" className="p-3 bg-error-container/40 border border-error/30 rounded-lg flex items-center gap-2 text-error text-sm">
               <span aria-hidden="true" className="material-symbols-outlined text-[18px]">error</span>
               <span>{error}</span>
             </div>
@@ -183,6 +187,7 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
               <div className="border-2 border-dashed border-outline-variant rounded-xl p-8 text-center hover:border-primary/50 transition-colors">
                 <input
                   type="file"
+                  disabled={isLoading}
                   accept=".xlsx"
                   id="rolling-file-input"
                   onChange={(e) => {
@@ -234,9 +239,9 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
                 <p className="text-sm font-semibold">Sẽ thay {preview.replacementDays.length.toLocaleString('vi-VN')} ngày{preview.dates.length ? ` (${displayDate(preview.dates[0])} → ${displayDate(preview.dates[preview.dates.length - 1])})` : ''}: hiện có {preview.replacementDays.reduce((sum, row) => sum + row.currentCount, 0).toLocaleString('vi-VN')} dòng, sau khi nhập {preview.totalMetrics.toLocaleString('vi-VN')} dòng.</p>
                 <table className="w-full text-sm"><thead><tr><th className="text-left">Ngày</th><th className="text-right">Hiện có</th><th className="text-right">Sau khi nhập</th></tr></thead><tbody>{preview.replacementDays.map(row => <tr key={row.date}><td>{displayDate(row.date)}</td><td className="text-right">{row.currentCount}</td><td className="text-right">{row.incomingCount}</td></tr>)}</tbody></table>
                 {losses.length > 0 && <div className="p-3 border border-amber-400 bg-amber-50 rounded-lg space-y-2">
-                  <p className="font-semibold text-sm">Các PI sau sẽ bị xoá khỏi dữ liệu Rolling của ngày tương ứng:</p>
+                  <p className="font-semibold text-sm">Các mã ORDER sau sẽ mất dữ liệu Rolling của ngày tương ứng:</p>
                   <ul className="text-sm list-disc pl-5">{losses.map(loss => <li key={`${loss.date}/${loss.piNumber}`}>{displayDate(loss.date)} — {loss.piNumber}</li>)}</ul>
-                  <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={acknowledgeLoss} onChange={event => setAcknowledgeLoss(event.target.checked)} className="mt-1"/>Tôi hiểu các đơn này sẽ bị xoá</label>
+                  <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={acknowledgeLoss} onChange={event => setAcknowledgeLoss(event.target.checked)} className="mt-1"/>Tôi hiểu dữ liệu Rolling của các mã ORDER này sẽ bị thay thế</label>
                 </div>}
               </section>
 
@@ -247,7 +252,7 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
                     <thead className="bg-surface-container text-secondary font-medium uppercase border-b border-outline-variant">
                       <tr>
                         <th className="p-2">Ngày</th>
-                        <th className="p-2">Mã PI</th>
+                        <th className="p-2">Mã ORDER</th>
                         <th className="p-2">Màu / Quy cách</th>
                         <th className="p-2">Chỉ số</th>
                         <th className="p-2 text-right">Giá trị</th>

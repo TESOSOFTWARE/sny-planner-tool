@@ -2,7 +2,7 @@
 // POST /api/materials/rolling/import — Preview & dry-run parse for uploaded Rolling report file.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { parseRollingReport } from '@/lib/excel/parseRollingReport'
+import { parseRollingReport, RollingDateConflictError } from '@/lib/excel/parseRollingReport'
 import { prisma } from '@/lib/db'
 import { rollingPeriodFromFileName, validateRollingPeriod } from '@/lib/materials/rollingPeriod'
 import { rollingImportSnapshot } from '@/lib/materials/rollingImportSnapshot'
@@ -73,6 +73,7 @@ export async function POST(req: NextRequest) {
       sampleRows,
     })
   } catch (error: any) {
+    if (error instanceof RollingDateConflictError) return NextResponse.json({ success: false, error: error.message }, { status: 422 })
     console.error('Error parsing rolling report:', error)
     return NextResponse.json(
       { success: false, error: error.message || 'Không thể đọc file báo cáo Rolling.' },

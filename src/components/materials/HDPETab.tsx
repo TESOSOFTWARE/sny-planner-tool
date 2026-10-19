@@ -128,7 +128,8 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
         </div>
       </div>
 
-      <p className="text-xs text-secondary">Chỉ hiển thị số liệu cùng ngày đã chọn; dấu — là chưa có dữ liệu. TOTAL để trống nếu có dòng thiếu hoặc khác khoảng ngày nguồn. Tồn hiện tại có thể khác báo cáo lịch sử.</p>
+      <p className="text-sm font-medium text-primary">{reportDate ? `Báo cáo ngày ${reportDate.split('-').reverse().join('/')}` : 'Chưa có báo cáo HDPE'}</p>
+      <p className="text-xs text-secondary">Bảng chỉ hiển thị báo cáo của ngày đã chọn, khác với tồn hiện tại trong sổ kho. Dấu — là thiếu chỉ số trong báo cáo. TOTAL để trống nếu có dòng thiếu hoặc khác khoảng ngày nguồn.</p>
       <p className="text-xs text-secondary">Đối chiếu chuẩn hoá: AC = Tồn đầu + Nhập − Out Useing − Xuất Tape; nhựa tái chế trừ thêm Reject. Broken giữ theo nguồn, không trừ vào AC. AD lấy tồn cuối nguồn; check chỉ cảnh báo, không tự sửa tồn.</p>
       <p className="text-xs text-secondary">Thiếu số liệu nguồn để tính AC; ô trống không được coi là 0. Dấu — trong cột đối chiếu có chú thích lý do.</p>
       <div className="bg-surface-container-lowest border-[0.5px] border-outline-variant rounded-lg overflow-x-auto">
@@ -198,6 +199,7 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
                         {mat.latestReport && <div className="text-xs font-normal text-secondary mt-1">{reconciliationRange([mat.latestReport])}</div>}
                         {mat.group === 'MB' && <div className="text-xs font-normal text-secondary mt-1">Item Code: {payload?.itemCode ?? mat.itemCode ?? '—'} · Mã màu: {payload?.color ?? mat.color ?? '—'} · Tên màu: {payload?.colorName ?? mat.colorName ?? '—'} · Hãng: {payload?.brand ?? mat.brand ?? '—'} · Độ bền màu: {payload?.lightFastness ?? mat.lightFastness ?? '—'}</div>}
                       </td>
+                      {!mat.latestReport ? <td colSpan={REPORT_COLUMNS.length + 3} className="px-3 py-3 text-sm text-secondary">Chưa có báo cáo HDPE{reportDate ? ` ngày ${reportDate.split('-').reverse().join('/')}` : ''}</td> : <>
                       {REPORT_COLUMNS.map(col => (
                         <td
                           key={col.key}
@@ -209,6 +211,7 @@ export default function HDPETab({ materials, onEdit, onDelete, onHistory, onRowC
                         </td>
                       ))}
                       {(['ac', 'ad', 'check'] as const).map(key => <td key={key} title={reconciliation.reason} className={`px-3 py-3 text-right font-mono text-sm tabular-nums whitespace-nowrap ${key === 'check' && reconciliation.warning ? 'text-error font-semibold' : 'text-on-surface'}`}><Num value={reconciliation[key]} /></td>)}
+                      </>}
                       <td className="px-3 py-3 text-right font-mono text-sm text-on-surface-variant tabular-nums whitespace-nowrap">
                         {threshold != null ? threshold.toLocaleString('vi-VN') : <span className="italic text-outline">—</span>}
                       </td>

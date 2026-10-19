@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
     const [records, total, distinctDays, allMatchingForStats] = await Promise.all([
       prisma.packingDailyOutput.findMany({
         where,
-        orderBy: [{ date: 'desc' }],
+        orderBy: [{ date: 'desc' }, { id: 'asc' }],
         skip,
         take: limit,
       }),

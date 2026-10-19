@@ -5,6 +5,7 @@ import { updateAssignmentSchema } from "@/lib/validations/assignment";
 import { resolveAssignmentDates, factoryDateToISO, AssignmentDateError } from "@/lib/schedule/assignmentDates";
 import { loadFactoryCalendar } from "@/lib/schedule/factoryCalendar";
 import { scheduleDay } from "@/lib/schedule/importSafety";
+import { lockForAssignmentRemoval, removeAssignments } from '@/lib/schedule/removeAssignments'
 
 export async function DELETE(
   request: Request,
@@ -17,16 +18,16 @@ export async function DELETE(
       return NextResponse.json({ message: "ID is required" }, { status: 400 });
     }
 
-    await prisma.machineAssignment.delete({
-      where: { id },
-    });
-
-    return NextResponse.json({ success: true });
-  } catch (error: any) {
+    const result = await prisma.$transaction(async tx => {
+      await lockForAssignmentRemoval(tx)
+      return removeAssignments(tx, [id])
+    }, { timeout: 60_000, maxWait: 5_000 })
+    if (result.missing.length) return NextResponse.json({ message: 'Không tìm thấy phân công.' }, { status: 404 })
+    if (result.protected.length) return NextResponse.json({ message: `Không gỡ được: máy ${result.protected[0].machineId} đã có sản lượng trong khoảng ngày này.` }, { status: 409 })
+    return NextResponse.json({ success: true, logId: result.logId });
+  } catch (error: unknown) {
     console.error("[DELETE_ASSIGNMENT]", error);
-    if (error?.code === 'P2025') {
-      return NextResponse.json({ message: "Assignment not found" }, { status: 404 });
-    }
+    if (isLockRetryable(error)) return NextResponse.json({ message: ASSIGNMENT_RETRY_MESSAGE, retryable: true }, { status: 409 });
     return NextResponse.json({ message: "Internal server error" }, { status: 500 });
   }
 }

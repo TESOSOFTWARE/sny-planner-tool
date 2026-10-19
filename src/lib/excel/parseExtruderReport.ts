@@ -15,6 +15,7 @@
 //   Col 6: ORDER REF / PI CODE (e.g. "JPY26-274")
 
 import * as XLSX from 'xlsx'
+import { reportSheetMatches } from './reportSheetMatches'
 import { productionPi } from './productionPi'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -122,7 +123,7 @@ export function parseExtruderReport(buffer: Buffer): ExtruderRow[] {
 
   // Find sheet named "EXTRUDER" (case-insensitive, trim whitespace)
   const sheetName = workbook.SheetNames.find(
-    (n) => n.trim().toUpperCase() === 'EXTRUDER'
+    (n) => reportSheetMatches(n, 'EXTRUDER')
   )
   if (!sheetName) {
     const available = workbook.SheetNames.join(', ')
