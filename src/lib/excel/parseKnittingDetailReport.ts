@@ -188,7 +188,9 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
 
   let currentDate: Date | null = null
   let currentMachineId: string | null = null
+  let currentMachineNum: number | null = null
   let blockWeightSum = 0
+  const previousCumulativeWeight = new Map<string, number>()
 
   // Machine level stats
   let currentMachineSizeM: number | null = null
@@ -237,6 +239,7 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
 
     if (foundMachine) {
       currentMachineId = foundMachine.machineId
+      currentMachineNum = foundMachine.machineNum
       blockWeightSum = 0
       currentMachineNote = null
 
@@ -308,12 +311,17 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
       shiftCell.includes('CỘNG')
 
     if (isSkipRow) {
-      if (shiftCell === 'TOTAL' || shiftCell === 'TỔNG CỘNG') {
+      // The TOTAL line carrying this machine number is cumulative across days.
+      // Later TOTAL lines are wider summaries and have no machine marker.
+      if ((shiftCell === 'TOTAL' || shiftCell === 'TỔNG CỘNG') && toNum(row[0]) === currentMachineNum) {
         const excelTotal = toNum(row[colTotalKg] ?? row[colWeightKg]) ?? 0
-        if (excelTotal > 0 && Math.abs(excelTotal - blockWeightSum) > 0.01) {
+        const previous = previousCumulativeWeight.get(currentMachineId)
+        previousCumulativeWeight.set(currentMachineId, excelTotal)
+        const dailyTotal = previous == null ? null : excelTotal - previous
+        if (dailyTotal != null && dailyTotal >= 0 && Math.abs(dailyTotal - blockWeightSum) > 0.01) {
           console.warn(
             `[parseKnittingDetailReport] WARNING: ${currentMachineId} ngày ${currentDate.toISOString().slice(0, 10)} — ` +
-            `TOTAL file = ${excelTotal}, sum WEIGHT = ${blockWeightSum.toFixed(2)}. Chênh lệch ${Math.abs(excelTotal - blockWeightSum).toFixed(2)} kg.`
+            `TOTAL lũy kế chênh = ${dailyTotal}, sum WEIGHT = ${blockWeightSum.toFixed(2)}. Chênh lệch ${Math.abs(dailyTotal - blockWeightSum).toFixed(2)} kg.`
           )
         }
       }
