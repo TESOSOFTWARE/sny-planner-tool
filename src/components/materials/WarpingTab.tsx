@@ -65,6 +65,12 @@ function ShiftBadge({ shift }: { shift: string }) {
   )
 }
 
+function formatNumber(value: string | null) {
+  if (value == null || value.trim() === '') return '—'
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric.toLocaleString('vi-VN', { maximumFractionDigits: 20 }) : '—'
+}
+
 export default function WarpingTab({ onImport }: Props) {
   const [filterDate, setFilterDate]       = useState('')
   const [filterMachine, setFilterMachine] = useState('')
@@ -202,25 +208,25 @@ export default function WarpingTab({ onImport }: Props) {
                       {rec.color}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.denier != null ? rec.denier : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.denier)}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.strand != null ? rec.strand : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.strand)}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.beamCount1 != null ? rec.beamCount1 : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.beamCount1)}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.mPerEa != null ? rec.mPerEa : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.mPerEa)}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.weigValue != null ? rec.weigValue : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.weigValue)}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.beamCount2 != null ? rec.beamCount2 : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.beamCount2)}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.quantity != null ? rec.quantity : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.quantity)}
                     </td>
                     <td className="px-3 py-2.5 font-mono font-semibold tabular-nums text-on-surface whitespace-nowrap">
                       {parseFloat(rec.weightKgs).toLocaleString('vi-VN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}

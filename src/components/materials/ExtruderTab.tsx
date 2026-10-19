@@ -65,6 +65,12 @@ function ShiftBadge({ shift }: { shift: string }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+function formatNumber(value: string | null) {
+  if (value == null || value.trim() === '') return '—'
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric.toLocaleString('vi-VN', { maximumFractionDigits: 20 }) : '—'
+}
+
 export default function ExtruderTab({ onImport }: Props) {
   // Filter state
   const [filterDate, setFilterDate]         = useState('')
@@ -202,7 +208,7 @@ export default function ExtruderTab({ onImport }: Props) {
                       {rec.color}
                     </td>
                     <td className="px-4 py-3 font-mono text-sm text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.denier != null ? rec.denier : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.denier)}
                     </td>
                     <td className="px-4 py-3 font-mono text-sm tabular-nums font-semibold text-on-surface whitespace-nowrap">
                       {parseFloat(rec.weightKgs).toLocaleString('vi-VN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}

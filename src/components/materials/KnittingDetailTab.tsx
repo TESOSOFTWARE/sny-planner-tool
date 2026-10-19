@@ -70,6 +70,14 @@ function ShiftBadge({ shift }: { shift: string }) {
   )
 }
 
+function formatNumber(value: string | null, unit?: string) {
+  if (value == null || value.trim() === '') return '—'
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return '—'
+  const formatted = numeric.toLocaleString('vi-VN', { maximumFractionDigits: 20 })
+  return unit ? `${formatted} ${unit}` : formatted
+}
+
 export default function KnittingDetailTab({ onImport }: Props) {
   const [filterDate, setFilterDate]       = useState('')
   const [filterMachine, setFilterMachine] = useState('')
@@ -194,19 +202,19 @@ export default function KnittingDetailTab({ onImport }: Props) {
                       {rec.machineId}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.machineSizeM ? `${rec.machineSizeM}m` : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.machineSizeM, 'm')}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.cmPerMin ?? <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.cmPerMin)}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.meterPerDay ?? <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.meterPerDay)}
                     </td>
                     <td className="px-3 py-2.5">
                       <ShiftBadge shift={rec.shift} />
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.width != null ? `${rec.width}m` : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.width, 'm')}
                     </td>
                     <td className="px-3 py-2.5 font-medium text-on-surface max-w-[130px] truncate" title={rec.color}>
                       {rec.color}
@@ -215,10 +223,10 @@ export default function KnittingDetailTab({ onImport }: Props) {
                       {parseFloat(rec.weightKgs).toLocaleString('vi-VN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.lengthM ? `${parseFloat(rec.lengthM).toLocaleString('vi-VN')} m` : <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.lengthM, 'm')}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-on-surface-variant tabular-nums whitespace-nowrap">
-                      {rec.quantity ?? <span className="italic text-outline">—</span>}
+                      {formatNumber(rec.quantity)}
                     </td>
                     <td className="px-3 py-2.5 text-xs font-medium min-w-[180px]" title={rec.machineNote ?? ''}>
                       {rec.machineNote ? (
