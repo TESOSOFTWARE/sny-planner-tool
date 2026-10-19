@@ -46,7 +46,7 @@ export default function RootLayout({
         <SideNav />
 
         {/* Main content area — offset for nav bars */}
-        <main className="pl-[280px] pt-[64px] min-h-screen bg-background">
+        <main className="pl-[72px] xl:pl-[280px] pt-[64px] min-h-screen bg-background">
           {children}
         </main>
       </body>
