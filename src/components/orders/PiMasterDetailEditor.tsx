@@ -16,6 +16,7 @@ import type { ItemCodeOption } from '@/lib/orders/itemCodeCatalog'
 import { toast } from 'sonner'
 import SuggestCombobox, { orderSuggestionLoader, filterLocalOptions } from '@/components/ui/SuggestCombobox'
 import { buildColorOptions, defaultColorVersion, type ColorSuggestion } from '@/lib/orders/colorSuggestions'
+import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
 
 const loadMeshTypes = orderSuggestionLoader('meshType')
 const loadDescriptions = orderSuggestionLoader('description')
@@ -229,6 +230,18 @@ export default function PiMasterDetailEditor({
 
   // Dirty Guard State
   const [pendingTargetPi, setPendingTargetPi] = useState<string | null>(null)
+  const [approveOpen, setApproveOpen] = useState(false)
+  const [approving, setApproving] = useState(false)
+  const [approveError, setApproveError] = useState('')
+  const [approveMissing, setApproveMissing] = useState<string[]>([])
+  const approvingRef = useRef(false)
+  const approveDialogRef = useRef<HTMLDivElement>(null)
+  const closeApprove = useCallback(() => { if (!approvingRef.current) setApproveOpen(false) }, [])
+  useScheduleModalFocus(approveOpen, closeApprove, approveDialogRef)
+  useEffect(() => {
+    const key = 'pi-approved:' + initialPiNumber
+    try { if (sessionStorage.getItem(key)) { sessionStorage.removeItem(key); toast.success('Đã chốt đơn chính thức.') } } catch { /* Không chặn mở trang nếu trình duyệt từ chối bộ nhớ phiên. */ }
+  }, [initialPiNumber])
 
   // Dirty State Detection
   const isDirty = useMemo(() => {
@@ -238,7 +251,7 @@ export default function PiMasterDetailEditor({
     if (containerSize !== (initialContainerSize || '')) return true
     if (description !== (initialDescription || '')) return true
     if (remark !== (initialRemark || '')) return true
-    if (lifecycleStatus !== (initialLifecycleStatus || 'APPROVED')) return true
+    if (lifecycleStatus !== (initialLifecycleStatus === 'RESERVE' || initialLifecycleStatus === 'PLACEHOLDER' ? 'RESERVED' : initialLifecycleStatus || 'APPROVED')) return true
     if (lines.length !== initialLines.length) return true
 
     for (let i = 0; i < lines.length; i++) {
@@ -627,6 +640,30 @@ export default function PiMasterDetailEditor({
     }
   }, [lines])
 
+  const handleApprove = async () => {
+    if (approvingRef.current || isDirty) return
+    approvingRef.current = true
+    setApproving(true)
+    setApproveError('')
+    setApproveMissing([])
+    try {
+      const response = await fetch('/api/orders/pi/' + encodeURIComponent(initialPiNumber) + '/approve', { method: 'POST' })
+      const data: { success?: boolean; error?: string; missingFields?: string[] } = await response.json().catch(() => ({}))
+      if (!response.ok || !data.success) {
+        setApproveError(data.error || 'Không thể chốt đơn (mã ' + response.status + ').')
+        if (response.status === 422 && Array.isArray(data.missingFields)) setApproveMissing(data.missingFields)
+        return
+      }
+      try { sessionStorage.setItem('pi-approved:' + initialPiNumber, '1') } catch { toast.success('Đã chốt đơn chính thức.') }
+      window.location.reload()
+    } catch {
+      setApproveError('Lỗi kết nối, không thể chốt đơn. Vui lòng kiểm tra lại trạng thái trước khi thử lại.')
+    } finally {
+      approvingRef.current = false
+      setApproving(false)
+    }
+  }
+
   const handleBackToOrders = (e: React.MouseEvent) => {
     if (isDirty) {
       e.preventDefault()
@@ -872,6 +909,10 @@ export default function PiMasterDetailEditor({
               </span>
             )}
 
+            {(lifecycleStatus === 'RESERVED' || lifecycleStatus === 'DRAFT') && <div className="flex flex-col items-start gap-1">
+              <button type="button" disabled={isDirty || saving} onClick={() => { setApproveError(''); setApproveMissing([]); setApproveOpen(true) }} className="inline-flex items-center gap-2 rounded-lg border border-primary px-4 py-2 text-sm font-semibold text-primary hover:bg-surface-container disabled:cursor-not-allowed disabled:opacity-50">Chốt đơn chính thức</button>
+              {isDirty && <span className="text-xs text-secondary">Lưu thay đổi trước khi chốt</span>}
+            </div>}
             <button
               onClick={handleSaveAll}
               disabled={saving}
@@ -2116,6 +2157,26 @@ export default function PiMasterDetailEditor({
           </button>
         </div>
       </div>
+
+      {approveOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={closeApprove}>
+        <div ref={approveDialogRef} role="dialog" aria-modal="true" aria-labelledby="approve-pi-title" className="w-full max-w-lg space-y-4 rounded-2xl border border-outline-variant bg-surface p-6 shadow-2xl" onClick={event => event.stopPropagation()}>
+          <h2 id="approve-pi-title" className="text-base font-bold text-on-surface">Chốt đơn chính thức</h2>
+          <p className="text-sm text-on-surface-variant">Chuyển {lines.length} dòng của PI {initialPiNumber} sang Chính thức. Lịch giữ chỗ của PI (nếu có) thành lịch chính thức.</p>
+          {approveError && <div role="alert" className="space-y-2 rounded border border-error/30 bg-error-container p-3 text-sm text-error">
+            <p>{approveError}</p>
+            {approveMissing.length > 0 && <ul className="list-disc space-y-1 pl-5">{approveMissing.map((message, index) => {
+              const match = message.match(/\(Dòng (\d+)\)/)
+              const lineIdx = match ? Number(match[1]) - 1 : lines.length === 1 ? 0 : -1
+              const line = lines[lineIdx]
+              return <li key={index}>{line ? <button type="button" className="text-left underline" onClick={() => { setApproveOpen(false); scrollToAndExpandLine(line.subLineIndex, lineIdx) }}>{message}</button> : message}</li>
+            })}</ul>}
+          </div>}
+          <div className="flex justify-end gap-2">
+            <button type="button" disabled={approving} onClick={closeApprove} className="rounded-lg border border-outline-variant px-4 py-2 text-sm disabled:opacity-50">Hủy</button>
+            <button type="button" disabled={approving} onClick={handleApprove} className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:opacity-50">{approving ? 'Đang chốt...' : 'Xác nhận chốt đơn'}</button>
+          </div>
+        </div>
+      </div>}
 
       {/* DIRTY GUARD CONFIRMATION MODAL */}
       {pendingTargetPi && (
