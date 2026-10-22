@@ -18,6 +18,8 @@ import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { getUnassignedOrders } from '@/app/schedule/actions'
 import PiOrderPanel from './PiOrderPanel'
+import SuggestCombobox from '@/components/ui/SuggestCombobox'
+import { formatOrderLabel, searchOrderChoices } from '@/lib/schedule/orderChoiceSearch'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -32,18 +34,6 @@ interface Props {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Format one sub-line as a structured dropdown option label. */
-function formatOrderLabel(o: Order): string {
-  const widthStr = o.widthM != null ? `${Number(o.widthM).toFixed(1)}m` : '—'
-  const colorStr = o.color ?? '—'
-  const gsmStr = o.gsm != null ? `${o.gsm}gsm` : '—'
-  const isDraft = o.lifecycleStatus === 'DRAFT' || (o.isDraft && o.lifecycleStatus !== 'PLACEHOLDER' && !o.isPlaceholder)
-  const isPlaceholder = o.lifecycleStatus === 'PLACEHOLDER' || o.isPlaceholder
-  const tag = isDraft ? '📌 [Nháp] ' : isPlaceholder ? '⏳ [Giữ chỗ] ' : ''
-  const base = `${tag}${o.piNumber} · Dòng ${lineLabel(o)}${o.calculatedStatus === 'DONE' ? ' · Hoàn thành' : ''} — ${widthStr} · ${colorStr} · ${gsmStr}`
-  return o.meshType ? `${base} · ${o.meshType}` : base
-}
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -94,13 +84,13 @@ function SubLineDetailPanel({ o }: { o: Order }) {
 
       {isDraft && (
         <div className="p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-800 text-xs font-medium">
-          📌 Đơn hàng đang ở trạng thái Bản Nháp. Sẽ được xếp lịch tạm thời (isPlaceholder) trên sơ đồ máy dệt.
+          Đơn hàng đang ở trạng thái Bản Nháp. Sẽ được xếp lịch tạm thời (isPlaceholder) trên sơ đồ máy dệt.
         </div>
       )}
 
       {isPlaceholder && (
         <div className="p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-700 text-xs font-medium">
-          ⏳ Đơn hàng Giữ chỗ tạm: Sẽ được hiển thị với viền vàng nét đứt trên sơ đồ 40 máy dệt.
+          Đơn hàng Giữ chỗ tạm: Sẽ được hiển thị với viền vàng nét đứt trên sơ đồ 40 máy dệt.
         </div>
       )}
 
@@ -123,9 +113,15 @@ function SubLineDetailPanel({ o }: { o: Order }) {
 
 export default function AssignModal({ isOpen, onClose, machineId, startDate, onSuccess }: Props) {
   const modalRef = useRef<HTMLDivElement>(null)
-  useScheduleModalFocus(isOpen, onClose, modalRef)
+  const escapingSuggestions = useRef(false)
+  const closeOnEscape = useCallback(() => {
+    if (escapingSuggestions.current) return
+    onClose()
+  }, [onClose])
+  useScheduleModalFocus(isOpen, closeOnEscape, modalRef)
   const [orders,               setOrders]               = useState<Order[]>([])
   const [selectedOrderId,      setSelectedOrderId]      = useState('')
+  const [orderQuery, setOrderQuery] = useState('')
   const [endDate,              setEndDate]              = useState('')
   const [allocatedMeters,      setAllocatedMeters]      = useState('')
   const [estimatedDailyOutput, setEstimatedDailyOutput] = useState('')
@@ -154,11 +150,17 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
       }
       // Reset selection state when modal opens
       setSelectedOrderId('')
+      setOrderQuery('')
       setAllocatedMeters('')
       setEstimatedDailyOutput('')
       setError('')
     }
   }, [isOpen, startDate, loadOrders])
+
+  const loadOrderOptions = useCallback(async (q: string, _signal: AbortSignal) =>
+    searchOrderChoices(orders, orders.some(o => o.id === selectedOrderId && q === formatOrderLabel(o)) ? '' : q).map(o => ({
+      value: formatOrderLabel(o), label: formatOrderLabel(o), group: o.group, data: o,
+    })), [orders, selectedOrderId])
 
   const requestedStart = startDate ? format(startDate, 'yyyy-MM-dd') : ''
   const dates = useAssignmentDates({
@@ -230,6 +232,13 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
     >
       <div
         ref={modalRef} role="dialog" aria-modal="true" aria-label="Xếp máy"
+        onKeyDownCapture={event => {
+          if (event.key === 'Escape' && event.target instanceof HTMLElement &&
+              event.target.getAttribute('role') === 'combobox' && event.target.getAttribute('aria-expanded') === 'true') {
+            escapingSuggestions.current = true
+            setTimeout(() => { escapingSuggestions.current = false }, 0)
+          }
+        }}
         className="bg-surface rounded-xl shadow-lg w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
@@ -266,21 +275,18 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
               <label htmlFor="assign-order-select" className="block text-label-sm font-medium text-secondary mb-xs">
                 Đơn hàng — Dòng hàng
               </label>
-              <select
+              <SuggestCombobox
                 id="assign-order-select"
-                required
+                value={orderQuery}
+                onChange={value => { setOrderQuery(value); setSelectedOrderId('') }}
+                load={loadOrderOptions}
+                onSelect={option => setSelectedOrderId(option.data?.id ?? '')}
                 disabled={loadingOrders}
-                value={selectedOrderId}
-                onChange={e => setSelectedOrderId(e.target.value)}
+                placeholder="Tìm PI, khách, màu, loại lưới, khổ, GSM..."
+                listLabel="Dòng hàng"
+                emptyText={() => 'Không tìm thấy dòng hàng phù hợp'}
                 className="w-full h-10 px-sm rounded-lg border-[0.5px] border-outline bg-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none text-body-md"
-              >
-                <option value="">Chọn dòng hàng...</option>
-                {orders.map(o => (
-                  <option key={o.id} value={o.id}>
-                    {formatOrderLabel(o)}
-                  </option>
-                ))}
-              </select>
+              />
               <p className="mt-1 text-xs text-secondary">
                 {loadingOrders ? 'Đang tải dòng hàng…' : includeFinished ? 'Đang hiện cả dòng đã kết thúc lịch' : `Đang ẩn ${hiddenCount} dòng đã kết thúc lịch`}
                 {' · '}
