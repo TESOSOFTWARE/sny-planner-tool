@@ -14,11 +14,18 @@ export async function GET(request: Request) {
     const month = searchParams.get("month"); // 0-indexed month
     // Lọc theo đơn hàng cụ thể (dùng ở OrderDetail để hiển thị máy đang chạy)
     const orderId = searchParams.get("orderId");
+    const orderIdsParam = searchParams.get("orderIds");
     const piNumber = searchParams.get('piNumber');
 
     let whereClause: Prisma.MachineAssignmentWhereInput = {};
 
-    if (orderId) {
+    if (orderIdsParam !== null) {
+      const ids = orderIdsParam.split(',').map(id => id.trim());
+      if (ids.length > 500 || ids.some(id => !id)) {
+        return NextResponse.json({ message: "Chọn từ 1 đến 500 mã đơn hợp lệ." }, { status: 400 });
+      }
+      whereClause = { orderId: { in: Array.from(new Set(ids)) } };
+    } else if (orderId) {
       whereClause = { orderId };
     } else if (piNumber) {
       whereClause = { order: { piNumber } };
