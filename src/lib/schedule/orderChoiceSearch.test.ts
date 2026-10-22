@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { searchOrderChoices } from './orderChoiceSearch'
+import { formatOrderLabel, queryAfterSelection, searchOrderChoices } from './orderChoiceSearch'
 import type { OrderStatus } from '../orderStatus'
 
 const row = (id: number, widthM: number, calculatedStatus: OrderStatus, customer = 'Đặng Dung') => ({
@@ -30,4 +30,12 @@ test('tìm chữ và đơn vị hiện trên nhãn', () => {
   assert.equal(searchOrderChoices([reserved], '230gsm').length, 1)
   assert.equal(searchOrderChoices([reserved], 'giu cho').length, 1)
   assert.equal(searchOrderChoices([reserved], '4.5m 230gsm giu cho').length, 1)
+})
+
+test('R-3: queryAfterSelection — chọn thì hiện nhãn; cha reset (mở lại hộp) thì xoá nhãn cũ; đang gõ thì giữ', () => {
+  const picked = row(0, 4.5, 'PENDING')
+  assert.equal(queryAfterSelection('', picked, undefined), formatOrderLabel(picked))
+  assert.equal(queryAfterSelection(formatOrderLabel(picked), undefined, picked), '')
+  assert.equal(queryAfterSelection('hs', undefined, picked), 'hs')
+  assert.equal(queryAfterSelection('hs', undefined, undefined), 'hs')
 })
