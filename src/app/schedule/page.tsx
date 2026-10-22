@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 import BulkEditModal from '@/components/schedule/BulkEditModal'
 import AssignmentListView, { SelectionCheckbox } from '@/components/schedule/AssignmentListView'
 import { canBulkEditAssignment, selectAssignments, selectionState } from '@/lib/schedule/assignmentSelection'
+import { assignmentGroups, expandToGroups } from '@/lib/schedule/specGroup'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,33 @@ export default function SchedulePage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const hasSelection = selectedIds.size > 0
   const [removalSnapshot, setRemovalSnapshot] = useState<(AssignmentDetail & { updatedAt: string })[] | null>(null)
+  const [deleteOrders, setDeleteOrders] = useState<(AssignmentDetail & { updatedAt: string })[] | null>(null)
+  const [deleteAssignments, setDeleteAssignments] = useState<{ id: string; updatedAt: string }[] | null>(null)
+  const [deleteError, setDeleteError] = useState('')
+  const [deleteConfirmed, setDeleteConfirmed] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const deleteBusy = useRef(false)
+  const deleteModalRef = useRef<HTMLDivElement>(null)
+  const closeDelete = useCallback(() => { if (!deleteBusy.current) setDeleteOrders(null) }, [])
+  useScheduleModalFocus(!!deleteOrders, closeDelete, deleteModalRef)
+  useEffect(() => {
+    if (!deleteOrders) return
+    const controller = new AbortController()
+    setDeleteAssignments(null); setDeleteError(''); setDeleteConfirmed(false)
+    const ids = Array.from(new Set(deleteOrders.map(row => row.order.id)))
+    void (async () => {
+      try {
+        const response = await fetch('/api/assignments?orderIds=' + encodeURIComponent(ids.join(',')), { signal: controller.signal })
+        if (!response.ok) throw new Error('Không tải được đầy đủ lịch của các đơn.')
+        const rows: { id: string; updatedAt: string }[] = await response.json()
+        if (rows.length > 2000) throw new Error('Các đơn có hơn 2.000 lịch; cần dừng và hỏi lại trước khi xoá.')
+        if (!controller.signal.aborted) setDeleteAssignments(rows.map(({ id, updatedAt }) => ({ id, updatedAt })))
+      } catch (error) {
+        if (!controller.signal.aborted) setDeleteError(error instanceof Error ? error.message : 'Không tải được lịch.')
+      }
+    })()
+    return () => controller.abort()
+  }, [deleteOrders])
   const [editSnapshot, setEditSnapshot] = useState<(AssignmentDetail & { updatedAt: string })[] | null>(null)
   const [editCommand, setEditCommand] = useState<'MOVE_MACHINE' | 'SHIFT_DAYS'>('MOVE_MACHINE')
   const [listFilteredIds, setListFilteredIds] = useState<string[]>([])
@@ -122,21 +150,29 @@ export default function SchedulePage() {
   const totalDays = daysInMonth(year, month)
   const days = Array.from({ length: totalDays }, (_, i) => i + 1)
   const monthDays = useMemo(() => Array.from({length:totalDays},(_,i)=>new Date(year,month,i+1)),[year,month,totalDays])
+  // [FB 22/10 ý 3] Lịch cùng máy + quy cách + ngày bắt đầu/kết thúc gộp 1 thanh; lưới chỉ vẽ dòng đại diện (members[0]).
+  const assignmentGroupList = useMemo(() => assignmentGroups(assignments, scheduleDay), [assignments])
+  const groupOf = useMemo(() => {
+    const map = new Map<string, AssignmentDetail[]>()
+    for (const group of assignmentGroupList) for (const row of group) map.set(row.id, group)
+    return map
+  }, [assignmentGroupList])
+  const representatives = useMemo(() => assignmentGroupList.map(group => group[0]), [assignmentGroupList])
   const cellsByMachine = useMemo(() => {
     const cells = new Map<string, AssignmentDetail[]>()
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}-`
-    for (const assignment of assignments) {
+    for (const assignment of representatives) {
       const from=scheduleDay(assignment.startDate),to=scheduleDay(assignment.endDate)
       for(let day=1;day<=totalDays;day++){const label=prefix+String(day).padStart(2,'0');if(label>=from&&label<=to){const key=`${assignment.machineId}|${day}`;const rows=cells.get(key)??[];rows.push(assignment);cells.set(key,rows)}}
     }
     return cells
-  },[assignments,year,month,totalDays])
+  },[representatives,year,month,totalDays])
   const lanesByMachine = useMemo(() => {
     const result = new Map<string, { assignment: AssignmentDetail; from: number; to: number; lane: number }[]>()
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}-`
     const monthStart = prefix + '01', monthEnd = prefix + String(totalDays).padStart(2, '0')
     const grouped = new Map<string, AssignmentDetail[]>()
-    for (const assignment of assignments) {
+    for (const assignment of representatives) {
       if (scheduleDay(assignment.endDate) < monthStart || scheduleDay(assignment.startDate) > monthEnd) continue
       const rows = grouped.get(assignment.machineId) ?? []
       rows.push(assignment); grouped.set(assignment.machineId, rows)
@@ -154,7 +190,7 @@ export default function SchedulePage() {
       }))
     })
     return result
-  }, [assignments, year, month, totalDays])
+  }, [representatives, year, month, totalDays])
 
   // Lịch nghỉ thật thay cho quy tắc T7/CN cứng. Mặc định chỉ nghỉ Chủ nhật —
   // đối chiếu nhật ký sản lượng 04/2026 cho thấy nhà máy LÀM thứ 7.
@@ -167,15 +203,15 @@ export default function SchedulePage() {
   const [calendarRuleSaved, setCalendarRuleSaved] = useState(false)
   const yearMonth = `${year}-${String(month + 1).padStart(2, '0')}`
   assignmentPeriod.current = yearMonth
-  useEffect(() => { setSelectedIds(new Set()); setRemovalSnapshot(null); setEditSnapshot(null) }, [yearMonth])
+  useEffect(() => { setSelectedIds(new Set()); setRemovalSnapshot(null); setEditSnapshot(null); setDeleteOrders(null) }, [yearMonth])
   useEffect(() => {
     if (!hasSelection) return
     const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !removalSnapshot && !editSnapshot && !isDetailOpen && !selectedPi && !conflicts && !isAssignOpen && !isImportOpen) { setSelectedIds(new Set()); setTooltip(null) }
+      if (event.key === 'Escape' && !removalSnapshot && !deleteOrders && !editSnapshot && !isDetailOpen && !selectedPi && !conflicts && !isAssignOpen && !isImportOpen) { setSelectedIds(new Set()); setTooltip(null) }
     }
     document.addEventListener('keydown', escape)
     return () => document.removeEventListener('keydown', escape)
-  }, [hasSelection, removalSnapshot, editSnapshot, isDetailOpen, selectedPi, conflicts, isAssignOpen, isImportOpen])
+  }, [hasSelection, removalSnapshot, deleteOrders, editSnapshot, isDetailOpen, selectedPi, conflicts, isAssignOpen, isImportOpen])
   const monthOverride = calendar.monthlyNonWorkingWeekdaysOverride?.[yearMonth]
   const affectedAssignments = calendarRuleSaved ? assignments.filter(a => {
     const end = scheduleDay(a.endDate)
@@ -225,14 +261,18 @@ export default function SchedulePage() {
   const outsideFilter = viewMode === 'list' ? Array.from(selectedIds).filter(id => !filteredIdSet.has(id)).length : 0
   const selectGroup = (ids: string[], checked: boolean) => {
     if (isLoading || assignmentError) return
-    const result = selectAssignments(selectedIds, ids, checked)
+    // Tick/bấm 1 dòng của nhóm xếp chung = chọn cả nhóm (cả lưới lẫn danh sách), để Chuyển máy/Dời ngày/Gỡ/Xoá đơn đi cả nhóm.
+    const result = selectAssignments(selectedIds, expandToGroups(ids, assignmentGroupList), checked)
     if (result.limited) toast.error('Chỉ chọn tối đa 500 lịch mỗi lần; các lựa chọn ngoài bộ lọc vẫn được giữ.')
     setSelectedIds(result.selected); setTooltip(null)
   }
 
+  // Tick thanh = tick cả nhóm xếp chung (thanh gộp đại diện cho mọi dòng trong nhóm).
   const toggleSelection = (id: string) => {
-    if (!selectedIds.has(id) && selectedIds.size >= 500) { toast.error('Chỉ chọn tối đa 500 lịch mỗi lần'); return }
-    setSelectedIds(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
+    const ids = (groupOf.get(id) ?? [{ id }]).map(row => row.id)
+    const adding = !selectedIds.has(id)
+    if (adding && selectedIds.size + ids.filter(each => !selectedIds.has(each)).length > 500) { toast.error('Chỉ chọn tối đa 500 lịch mỗi lần'); return }
+    setSelectedIds(current => { const next = new Set(current); for (const each of ids) { if (adding) next.add(each); else next.delete(each) } return next })
   }
   const selectMonth = (includeCarryover: boolean) => {
     const monthFirst = yearMonth + '-01'
@@ -247,6 +287,35 @@ export default function SchedulePage() {
     const snapshot = assignments.filter(row => selectedIds.has(row.id)).map(row => ({ ...row }))
     if (snapshot.length !== selectedIds.size) { toast.error('Lịch đã thay đổi, tải lại và chọn lại'); setSelectedIds(new Set()); void fetchAssignments(); return }
     setTooltip(null); setRemovalSnapshot(snapshot)
+  }
+  const openDeleteOrders = () => {
+    const selected = assignments.filter(row => selectedIds.has(row.id))
+    if (selected.length !== selectedIds.size) { toast.error('Lịch đã thay đổi, tải lại và chọn lại'); setSelectedIds(new Set()); void fetchAssignments(); return }
+    const unique = Array.from(new Map(selected.map(row => [row.order.id, row])).values())
+    setTooltip(null); setDeleteOrders(unique)
+  }
+  const submitDeleteOrders = async () => {
+    if (!deleteOrders || !deleteAssignments || !deleteConfirmed || deleteBusy.current) return
+    deleteBusy.current = true; setIsDeleting(true)
+    try {
+      const response = await fetch('/api/orders/bulk-delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: deleteOrders.map(row => row.order.id), removeAssignments: true, expectedAssignments: deleteAssignments }),
+      })
+      const body = await response.json()
+      if (!response.ok) {
+        if (body.code === 'STALE_SELECTION') {
+          toast.error('Lịch của các đơn đã thay đổi, đã tải lại — chọn lại rồi xoá')
+          setDeleteOrders(null); setSelectedIds(new Set()); await fetchAssignments()
+          return
+        }
+        throw new Error(body.error || 'Không thể xoá đơn hàng.')
+      }
+      toast.success(`Đã xoá ${body.deleted.length} đơn · gỡ ${body.removedAssignments} lịch · bỏ qua ${body.skipped.length} đơn`)
+      if (body.skipped.length) toast.info('Một số đơn được giữ lại vì có sản lượng hoặc không còn tồn tại.')
+      setDeleteOrders(null); setSelectedIds(new Set()); await fetchAssignments()
+    } catch (error) { setDeleteError(error instanceof Error ? error.message : 'Không thể xoá đơn hàng.') }
+    finally { deleteBusy.current = false; setIsDeleting(false) }
   }
   const openBulkEdit = (command: 'MOVE_MACHINE' | 'SHIFT_DAYS' = 'MOVE_MACHINE') => {
     const snapshot = assignments.filter(row => selectedIds.has(row.id)).map(row => ({ ...row }))
@@ -264,7 +333,7 @@ export default function SchedulePage() {
         throw new Error(body.error || body.message || 'Không thể gỡ phân công')
       }
       toast.success(`Đã gỡ ${body.removed.length} · Giữ lại ${body.protected.length} (máy đã có sản lượng)`)
-      if (removalSnapshot.some(row => row.isPlaceholder && body.removed.includes(row.id))) toast.info('Đơn giữ chỗ vẫn còn trong danh sách đơn — xoá ở màn Production Orders nếu không cần')
+      if (removalSnapshot.some(row => row.isPlaceholder && body.removed.includes(row.id))) toast.info('Đơn giữ chỗ vẫn còn trong danh sách đơn — xoá ở màn Đơn hàng nếu không cần')
       setRemovalSnapshot(null); setSelectedIds(new Set())
       await fetchAssignments()
     } catch (error) { toast.error(error instanceof Error ? error.message : 'Không thể gỡ phân công') }
@@ -294,7 +363,10 @@ export default function SchedulePage() {
     <button type="button" onClick={() => setSelectedIds(new Set())} className="rounded border border-outline-variant px-3 py-2">Bỏ chọn</button>
     <button type="button" title={!editableCount ? 'Chỉ sửa được lịch chưa bắt đầu' : undefined} disabled={!editableCount || selectedIds.size > 500 || isLoading || !!assignmentError} onClick={() => openBulkEdit('MOVE_MACHINE')} className="h-9 rounded-md border border-outline-variant px-4 text-sm disabled:opacity-50">Chuyển máy ({editableCount}/{selectedIds.size} đủ điều kiện)</button>
     <button type="button" title={!editableCount ? 'Chỉ sửa được lịch chưa bắt đầu' : undefined} disabled={!editableCount || selectedIds.size > 500 || isLoading || !!assignmentError} onClick={() => openBulkEdit('SHIFT_DAYS')} className="h-9 rounded-md border border-outline-variant px-4 text-sm disabled:opacity-50">Dời ngày ({editableCount}/{selectedIds.size})</button>
-    <button type="button" disabled={!selectedIds.size || selectedIds.size > 500 || isLoading || !!assignmentError} onClick={openRemoval} className="rounded bg-error px-3 py-2 text-white disabled:opacity-50">Gỡ ({selectedIds.size})</button>
+    <button type="button" disabled={!selectedIds.size || selectedIds.size > 500 || isLoading || !!assignmentError} onClick={openRemoval} className="rounded border border-error px-3 py-2 text-error disabled:opacity-50">Gỡ lịch ({selectedIds.size})</button>
+    <button type="button" disabled={!selectedIds.size || selectedIds.size > 500 || isLoading || !!assignmentError} onClick={openDeleteOrders} className="rounded bg-error px-3 py-2 text-white disabled:opacity-50">Xoá đơn ({new Set(assignments.filter(row => selectedIds.has(row.id)).map(row => row.order.id)).size})</button>
+    <span className="text-xs text-secondary">Gỡ lịch: giữ đơn · Xoá đơn: xoá đơn và gỡ mọi lịch của đơn</span>
+    {editableCount < selectedIds.size && <span className="text-xs text-secondary">{selectedIds.size - editableCount} lịch đã bắt đầu: chỉ gỡ được, không chuyển máy/dời ngày.</span>}
     <span className="text-xs text-secondary">Số đủ điều kiện là lịch chưa bắt đầu; sản lượng được kiểm khi xem trước/xác nhận.</span>
   </div>
 
@@ -340,8 +412,7 @@ export default function SchedulePage() {
           {viewMode !== 'list' && <details className="selection-menu relative" onKeyDown={event => { if (event.key === 'Escape' && event.currentTarget.open) { event.nativeEvent.stopImmediatePropagation(); event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus() } }}>
             <summary aria-label="Chọn lịch" className="flex cursor-pointer items-center gap-2 rounded-md border border-primary px-3 py-2 text-sm text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Chọn lịch<span aria-hidden="true" className="h-1.5 w-1.5 rotate-45 border-b border-r border-current" /></summary>
             <div className="absolute right-0 z-50 mt-1 w-72 rounded border border-outline-variant bg-white p-1 shadow-lg">
-              <p className="px-3 py-2 text-xs text-secondary">Rê chuột lên lịch và tick để chọn từng lịch.</p>
-              {[false, true].map(carryover => <button key={String(carryover)} type="button" disabled={isLoading || !!assignmentError} onClick={event => { selectMonth(carryover); event.currentTarget.closest('details')?.removeAttribute('open'); event.currentTarget.closest('details')?.querySelector('summary')?.focus() }} className="block w-full rounded px-3 py-2 text-left text-sm hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50">{carryover ? 'Chọn cả tháng (gồm đơn từ tháng trước)' : 'Chọn cả tháng'}</button>)}
+              <button type="button" disabled={isLoading || !!assignmentError} onClick={event => { selectMonth(true); event.currentTarget.closest('details')?.removeAttribute('open'); event.currentTarget.closest('details')?.querySelector('summary')?.focus() }} className="block w-full rounded px-3 py-2 text-left text-sm hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50">Chọn tất cả lịch trong tháng</button>
             </div>
           </details>}
           <button
@@ -363,6 +434,7 @@ export default function SchedulePage() {
         <span className="inline-flex items-center gap-1"><span className="h-3 w-3 border border-amber-300 bg-amber-100" />Ngày nghỉ</span>
         <span className="inline-flex items-center gap-1"><span className="h-3 w-3 border border-amber-400 bg-amber-200" />Ngày lễ</span>
         <span className="inline-flex items-center gap-1"><span className="h-3 w-3 border border-outline-variant bg-white" />Làm bù</span>
+        <span>Tick ô ở góc thanh lịch để chọn nhiều lịch</span>
       </div>}
       {calendarError && <p role="alert" className="mb-sm text-sm text-error">{calendarError}</p>}
       {assignmentError && <div role="alert" className="mb-sm rounded bg-error-container p-3 text-sm text-error">{assignmentError}<button type="button" onClick={fetchAssignments} className="ml-3 underline">Thử lại</button></div>}
@@ -451,12 +523,15 @@ export default function SchedulePage() {
                         const draft = !!assignment.order.isDraft
                         const placeholder = draft || !!assignment.isPlaceholder
                         const span = to - from + 1
-                        const allocation = assignment.allocatedMeters == null || !Number.isFinite(Number(assignment.allocatedMeters)) ? '—' : `${Number(assignment.allocatedMeters).toLocaleString('vi-VN')} m`
+                        const members = groupOf.get(assignment.id) ?? [assignment]
+                        const isGroupBar = members.length > 1
+                        const memberMeters = members.reduce((sum, row) => sum + (row.allocatedMeters == null || !Number.isFinite(Number(row.allocatedMeters)) ? NaN : Number(row.allocatedMeters)), 0)
+                        const allocation = (isGroupBar ? !Number.isFinite(memberMeters) : assignment.allocatedMeters == null || !Number.isFinite(Number(assignment.allocatedMeters))) ? '—' : `${(isGroupBar ? Math.round(memberMeters * 100) / 100 : Number(assignment.allocatedMeters)).toLocaleString('vi-VN')} m`
                         const spec = formatLineSpec(assignment.order, { includeTotal: false })
                         const pi = assignment.order.piNumber || 'PI chưa có dữ liệu'
                         const product = scheduleProductLabel(assignment.order)
-                        const fullLabel = `${pi}${product ? ` · ${product}` : ''}`
-                        const chosen = selectedIds.has(assignment.id)
+                        const fullLabel = isGroupBar ? `${pi} · ${members.length} dòng · ${allocation}` : `${pi}${product ? ` · ${product}` : ''}`
+                        const chosen = members.every(row => selectedIds.has(row.id))
                         const showTooltip = (element: HTMLElement) => {
                           keepTooltip()
                           const rect = element.getBoundingClientRect()
@@ -475,7 +550,7 @@ export default function SchedulePage() {
                             {Array.from({ length: span }, (_, offset) => <span key={offset} data-overlay-day={from + offset} className="h-full shrink-0" style={{ width: dayWidth, backgroundColor: chosen ? undefined : exceptionFor(from + offset)?.kind === 'HOLIDAY' ? '#fde68a' : isRestDay(from + offset) ? '#fef3c7' : undefined }} />)}
                           </span>
                           <div data-sticky-label className="bar-label sticky py-2" style={{ left: MACHINE_COL_WIDTH, width: 'min(100%, 32px)' }}>
-                            <label title={`Chọn lịch ${pi}`} onClick={event => event.stopPropagation()} className="selection-control bar-checkbox absolute left-1 top-2 z-10 inline-flex h-6 w-6 cursor-pointer items-center justify-center"><input type="checkbox" aria-label={`Chọn lịch ${pi} máy ${machine}`} checked={chosen} onChange={() => { setTooltip(null); toggleSelection(assignment.id) }} className="h-4 w-4 cursor-pointer accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" /></label>
+                            <label title={`Chọn lịch ${pi}`} onClick={event => event.stopPropagation()} className="selection-control bar-checkbox absolute left-1 top-2 z-10 inline-flex h-6 w-6 cursor-pointer items-center justify-center"><input type="checkbox" aria-label={isGroupBar ? `Chọn nhóm ${members.length} dòng ${pi} máy ${machine}` : `Chọn lịch ${pi} máy ${machine}`} checked={chosen} onChange={() => { setTooltip(null); toggleSelection(assignment.id) }} className="h-4 w-4 cursor-pointer accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" /></label>
                             <button data-assignment={assignment.id} type="button" role="gridcell" aria-label={`${machine} — ${pi} — ${scheduleDay(assignment.startDate).split('-').reverse().join('/')} đến ${scheduleDay(assignment.endDate).split('-').reverse().join('/')}`} aria-describedby={tooltip?.assignment.id === assignment.id ? 'assignment-tooltip' : undefined}
                               style={{ width: `min(${span * dayWidth - (placeholder ? 8 : 6)}px, 320px, calc(100cqw - ${MACHINE_COL_WIDTH}px))` }} className="bar-body block min-h-10 px-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary">
                             <span aria-hidden="true" className="checkbox-space float-left mr-1 h-6 w-6" />
@@ -523,12 +598,27 @@ export default function SchedulePage() {
         <div ref={removalModalRef} role="dialog" aria-modal="true" aria-labelledby="remove-assignments-title" onClick={event => event.stopPropagation()} className="max-h-[90vh] w-full max-w-xl overflow-auto rounded-xl border border-outline-variant bg-white p-5 shadow-lg">
           <h2 id="remove-assignments-title" className="text-lg font-semibold text-primary">Xác nhận gỡ {removalSnapshot.length} phân công</h2>
           <p className="mt-3 text-sm">{new Set(removalSnapshot.map(row => row.machineId)).size} máy · {removalSnapshot.map(row => scheduleDay(row.startDate)).sort()[0]?.split('-').reverse().join('/')} → {removalSnapshot.map(row => scheduleDay(row.endDate)).sort().slice(-1)[0]?.split('-').reverse().join('/')}</p>
-          <p className="my-3 text-sm">Phân công đã có sản lượng sẽ được giữ lại. Đơn hàng vẫn còn trong danh sách đơn.</p>
+          <p className="my-3 text-sm">Phân công đã có sản lượng sẽ được giữ lại. Gỡ lịch không xoá đơn — muốn xoá đơn dùng nút Xoá đơn.</p>
           <ul aria-label="Phân công sẽ kiểm tra gỡ" className="max-h-48 overflow-auto rounded border border-outline-variant p-3 text-xs">{removalSnapshot.map(row => <li key={row.id} className="py-1">{row.machineId} · {row.order.piNumber} · {scheduleDay(row.startDate).split('-').reverse().join('/')} → {scheduleDay(row.endDate).split('-').reverse().join('/')}</li>)}</ul>
           {isRemoving && <p role="status" tabIndex={0} className="mt-3 text-sm">Đang kiểm tra và gỡ phân công…</p>}
           <div className="mt-4 flex justify-end gap-3">
             <button type="button" aria-disabled={isRemoving} onClick={closeRemoval} className={`h-9 rounded-md border border-outline-variant px-4 text-sm ${isRemoving ? 'opacity-50' : ''}`}>Huỷ</button>
             <button type="button" aria-disabled={isRemoving} onClick={submitRemoval} className={`h-9 rounded-md bg-error px-4 text-sm text-white ${isRemoving ? 'opacity-50' : ''}`}>Xác nhận gỡ</button>
+          </div>
+        </div>
+      </div>}
+      {deleteOrders && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeDelete}>
+        <div ref={deleteModalRef} role="dialog" aria-modal="true" aria-labelledby="delete-orders-title" onClick={event => event.stopPropagation()} className="max-h-[90vh] w-full max-w-xl overflow-auto rounded-xl border border-outline-variant bg-white p-5 shadow-lg">
+          <h2 id="delete-orders-title" className="text-lg font-semibold text-primary">Xác nhận xoá {deleteOrders.length} đơn</h2>
+          <p className="mt-3 text-sm">{deleteOrders.length} đơn ({deleteOrders.filter(row => !(row.isPlaceholder || row.order.isPlaceholder)).length} đơn thật · {deleteOrders.filter(row => row.isPlaceholder || row.order.isPlaceholder).length} đơn giữ chỗ){deleteAssignments ? ` · gỡ ${deleteAssignments.length} lịch (gồm cả lịch ở tháng khác)` : ''}</p>
+          <ul aria-label="Đơn sẽ bị xoá" className="my-3 max-h-48 overflow-auto rounded border border-outline-variant p-3 text-xs">{deleteOrders.map(row => <li key={row.order.id} className="py-1">{row.order.piNumber} · Dòng {lineLabel(row.order)}{row.isPlaceholder || row.order.isPlaceholder ? ' · giữ chỗ' : ''}</li>)}</ul>
+          <p role="alert" className="text-sm font-semibold text-error">Xoá đơn không khôi phục được trên app. Đơn đã có sản lượng sẽ được bỏ qua.</p>
+          {!deleteAssignments && !deleteError && <p role="status" className="mt-3 text-sm">Đang tải đầy đủ lịch của các đơn…</p>}
+          {deleteError && <p role="alert" className="mt-3 text-sm text-error">{deleteError}</p>}
+          <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={deleteConfirmed} disabled={!deleteAssignments || isDeleting} onChange={event => setDeleteConfirmed(event.target.checked)} />Tôi hiểu, xoá {deleteOrders.length} đơn</label>
+          <div className="mt-4 flex justify-end gap-3">
+            <button type="button" disabled={isDeleting} onClick={closeDelete} className="h-9 rounded-md border border-outline-variant px-4 text-sm disabled:opacity-50">Huỷ</button>
+            <button type="button" disabled={!deleteAssignments || !deleteConfirmed || isDeleting} onClick={submitDeleteOrders} className="h-9 rounded-md bg-error px-4 text-sm text-white disabled:opacity-50">{isDeleting ? 'Đang xoá…' : 'Xác nhận xoá'}</button>
           </div>
         </div>
       </div>}
@@ -549,6 +639,8 @@ export default function SchedulePage() {
         onClose={() => setIsDetailOpen(false)}
         assignment={selectedAssignment}
         onSuccess={fetchAssignments}
+        groupMembers={selectedAssignment ? groupOf.get(selectedAssignment.id) : undefined}
+        onSelectMember={setSelectedAssignment}
       />
 
       <ImportScheduleModal

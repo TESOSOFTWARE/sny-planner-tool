@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { scheduleDay, scheduleOutputBounds, outputFallsWithinSchedule } from '@/lib/schedule/importSafety'
+import { dayShare } from '@/lib/schedule/outputShare'
 
 interface Params { params: { orderId: string } }
 
@@ -57,6 +58,15 @@ export async function GET(_req: NextRequest, { params }: Params) {
 
   const today = new Date(`${scheduleDay(new Date())}T00:00:00Z`)
 
+  // [FB 22/10 ý 3] Nhiều dòng có thể chung máy/ngày (xếp chung cùng quy cách): lấy mọi lịch trùm các máy/ngày này
+  // để chia sản lượng theo tỷ lệ mét thay vì cộng toàn bộ cho từng dòng.
+  const minStart = assignments.map(a => a.startDate).reduce((m, d) => (d < m ? d : m))
+  const maxEnd = assignments.map(a => a.endDate).reduce((m, d) => (d > m ? d : m))
+  const sharing = await prisma.machineAssignment.findMany({
+    where: { machineId: { in: Array.from(new Set(assignments.map(a => a.machineId))) }, startDate: { lte: maxEnd }, endDate: { gte: minStart } },
+    select: { orderId: true, machineId: true, startDate: true, endDate: true, allocatedMeters: true, order: { select: { lengthM: true } } },
+  })
+
   // ── 3. Compute producedMeters per assignment ───────────────────────────────
   let totalProduced = 0
   const countedOutputKeys = new Set<string>()
@@ -86,7 +96,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
       const key = `${assignment.machineId}:${r.reportDate.toISOString()}`
       if (countedOutputKeys.has(key)) continue
       countedOutputKeys.add(key)
-      totalProduced += Number(r.dailyMeters)
+      totalProduced += Number(r.dailyMeters) * dayShare(orderId, assignment.machineId, r.reportDate, sharing)
     }
   }
 
@@ -122,7 +132,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
 
   let avgDailyOutput: number | null = null
   if (assignedRecentRows.length > 0) {
-    const sum = assignedRecentRows.reduce((acc, r) => acc + Number(r.dailyMeters), 0)
+    const sum = assignedRecentRows.reduce((acc, r) => acc + Number(r.dailyMeters) * dayShare(orderId, r.machineId, r.reportDate, sharing), 0)
     avgDailyOutput = sum / assignedRecentRows.length
   }
 

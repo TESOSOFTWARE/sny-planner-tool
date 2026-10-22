@@ -5,6 +5,7 @@ import { updateAssignmentSchema } from "@/lib/validations/assignment";
 import { resolveAssignmentDates, factoryDateToISO, AssignmentDateError } from "@/lib/schedule/assignmentDates";
 import { loadFactoryCalendar } from "@/lib/schedule/factoryCalendar";
 import { scheduleDay } from "@/lib/schedule/importSafety";
+import type { SpecOrder } from '@/lib/schedule/specGroup'
 import { lockForAssignmentRemoval, removeAssignments } from '@/lib/schedule/removeAssignments'
 
 export async function DELETE(
@@ -58,6 +59,7 @@ export async function PATCH(
     return await withAssignmentLock(async tx => {
       const existing = await tx.machineAssignment.findUnique({
         where: { id },
+        include: { order: { select: { piNumber: true, widthM: true, gsm: true, color: true, meshType: true } } },
       });
 
       if (!existing) {
@@ -81,14 +83,16 @@ export async function PATCH(
 
       // Check target order if orderId changed
       let isPlaceholder = existing.isPlaceholder;
+      let group: SpecOrder | null | undefined = existing.order;
       if (orderId && orderId !== existing.orderId) {
         const targetOrder = await tx.productionOrder.findUnique({
           where: { id: orderId },
-          select: { isDraft: true, lifecycleStatus: true, isPlaceholder: true },
+          select: { isDraft: true, lifecycleStatus: true, isPlaceholder: true, piNumber: true, widthM: true, gsm: true, color: true, meshType: true },
         });
         if (!targetOrder) {
           return NextResponse.json({ message: "Order not found" }, { status: 404 });
         }
+        group = targetOrder;
         isPlaceholder = Boolean(
           targetOrder.isDraft ||
           targetOrder.lifecycleStatus === 'DRAFT' ||
@@ -115,7 +119,7 @@ export async function PATCH(
 
       // Overlap check on target machine and date range, excluding current assignment
       const overlap = await tx.machineAssignment.findFirst({
-        where: overlapWhere(targetMachineId, scheduleDay(start), scheduleDay(end), [id]),
+        where: overlapWhere(targetMachineId, scheduleDay(start), scheduleDay(end), [id], group, [targetOrderId]),
         include: { order: { select: { piNumber: true } } },
       });
 

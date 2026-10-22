@@ -1,4 +1,4 @@
-import { withAssignmentLock, overlapWhere, isLockRetryable, ASSIGNMENT_RETRY_MESSAGE } from '@/lib/schedule/assignmentLock'
+import { withAssignmentLock, overlapWhere, isLockRetryable, ASSIGNMENT_RETRY_MESSAGE, groupMateCount, GROUPED_ASSIGNMENT_MESSAGE } from '@/lib/schedule/assignmentLock'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { scheduleDay } from '@/lib/schedule/importSafety'
@@ -17,17 +17,21 @@ export async function POST(request: Request) {
   const { aId, bId } = parsed.data
   try {
     return await withAssignmentLock(async tx => {
-      const a = await tx.machineAssignment.findUnique({ where: { id: aId } })
-      const b = await tx.machineAssignment.findUnique({ where: { id: bId } })
+      const a = await tx.machineAssignment.findUnique({ where: { id: aId }, include: { order: { select: { piNumber: true, widthM: true, gsm: true, color: true, meshType: true } } } })
+      const b = await tx.machineAssignment.findUnique({ where: { id: bId }, include: { order: { select: { piNumber: true, widthM: true, gsm: true, color: true, meshType: true } } } })
       if (!a || !b) return NextResponse.json({ message: 'Không tìm thấy phân công.' }, { status: 404 })
       if (a.machineId === b.machineId) return NextResponse.json({ message: 'Hai phân công phải ở hai máy khác nhau.' }, { status: 400 })
       const today = scheduleDay(new Date())
       if (scheduleDay(a.startDate) <= today || scheduleDay(b.startDate) <= today) {
         return NextResponse.json({ message: 'Chỉ được đảo các phân công chưa bắt đầu.' }, { status: 400 })
       }
+      for (const source of [a, b]) {
+        const mates = await groupMateCount(tx, source)
+        if (mates > 0) return NextResponse.json({ message: GROUPED_ASSIGNMENT_MESSAGE(mates) }, { status: 400 })
+      }
       for (const [source, targetMachineId] of [[a, b.machineId], [b, a.machineId]] as const) {
         const overlap = await tx.machineAssignment.findFirst({
-          where: overlapWhere(targetMachineId, scheduleDay(source.startDate), scheduleDay(source.endDate), [aId, bId]),
+          where: overlapWhere(targetMachineId, scheduleDay(source.startDate), scheduleDay(source.endDate), [aId, bId], source.order, [source.orderId]),
           include: { order: { select: { piNumber: true } } },
         })
         if (overlap) return NextResponse.json({
