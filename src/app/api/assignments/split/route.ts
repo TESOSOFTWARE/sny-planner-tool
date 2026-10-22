@@ -1,4 +1,4 @@
-import { withAssignmentLock, overlapWhere, isLockRetryable, ASSIGNMENT_RETRY_MESSAGE } from '@/lib/schedule/assignmentLock'
+import { withAssignmentLock, overlapWhere, isLockRetryable, ASSIGNMENT_RETRY_MESSAGE, groupMateCount, GROUPED_ASSIGNMENT_MESSAGE } from '@/lib/schedule/assignmentLock'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { loadFactoryCalendar } from '@/lib/schedule/factoryCalendar'
@@ -25,9 +25,11 @@ async function splitAssignment(request: Request, now: Date) {
   if (input.targetStartDate < input.stopDate) return NextResponse.json({ message: 'Ngày bắt đầu máy đích không được trước ngày dừng.' }, { status: 400 })
   try {
     return await withAssignmentLock(async tx => {
-      const existing = await tx.machineAssignment.findUnique({ where: { id: input.id } })
+      const existing = await tx.machineAssignment.findUnique({ where: { id: input.id }, include: { order: { select: { piNumber: true, widthM: true, gsm: true, color: true, meshType: true } } } })
       if (!existing) return NextResponse.json({ message: 'Không tìm thấy phân công.' }, { status: 404 })
       if (scheduleDay(existing.startDate) > scheduleDay(now)) return NextResponse.json({ message: 'Phân công chưa bắt đầu; dùng chế độ Chuyển máy.' }, { status: 400 })
+      const mates = await groupMateCount(tx, existing)
+      if (mates > 0) return NextResponse.json({ message: GROUPED_ASSIGNMENT_MESSAGE(mates) }, { status: 400 })
       const start = scheduleDay(existing.startDate), end = scheduleDay(existing.endDate)
       if (input.stopDate < start || input.stopDate > end) return NextResponse.json({ message: 'Ngày dừng phải nằm trong lịch phân công.' }, { status: 400 })
       if (input.targetMachineId === existing.machineId) return NextResponse.json({ message: 'Hãy chọn máy đích khác máy hiện tại.' }, { status: 400 })
@@ -48,7 +50,7 @@ async function splitAssignment(request: Request, now: Date) {
         estimatedDailyOutput: targetDailyOutputUsed, computeEnd: true, adjustStart: true },
       (from, to) => loadFactoryCalendar(tx, from, to))
       const overlap = await tx.machineAssignment.findFirst({
-        where: overlapWhere(input.targetMachineId, plan.startDate, plan.endDate, [input.id]),
+        where: overlapWhere(input.targetMachineId, plan.startDate, plan.endDate, [input.id], existing.order, [existing.orderId]),
         include: { order: { select: { piNumber: true } } },
       })
       if (overlap) return NextResponse.json({

@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 import BulkEditModal from '@/components/schedule/BulkEditModal'
 import AssignmentListView, { SelectionCheckbox } from '@/components/schedule/AssignmentListView'
 import { canBulkEditAssignment, selectAssignments, selectionState } from '@/lib/schedule/assignmentSelection'
+import { assignmentGroups, expandToGroups } from '@/lib/schedule/specGroup'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -149,21 +150,29 @@ export default function SchedulePage() {
   const totalDays = daysInMonth(year, month)
   const days = Array.from({ length: totalDays }, (_, i) => i + 1)
   const monthDays = useMemo(() => Array.from({length:totalDays},(_,i)=>new Date(year,month,i+1)),[year,month,totalDays])
+  // [FB 22/10 ý 3] Lịch cùng máy + quy cách + ngày bắt đầu/kết thúc gộp 1 thanh; lưới chỉ vẽ dòng đại diện (members[0]).
+  const assignmentGroupList = useMemo(() => assignmentGroups(assignments, scheduleDay), [assignments])
+  const groupOf = useMemo(() => {
+    const map = new Map<string, AssignmentDetail[]>()
+    for (const group of assignmentGroupList) for (const row of group) map.set(row.id, group)
+    return map
+  }, [assignmentGroupList])
+  const representatives = useMemo(() => assignmentGroupList.map(group => group[0]), [assignmentGroupList])
   const cellsByMachine = useMemo(() => {
     const cells = new Map<string, AssignmentDetail[]>()
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}-`
-    for (const assignment of assignments) {
+    for (const assignment of representatives) {
       const from=scheduleDay(assignment.startDate),to=scheduleDay(assignment.endDate)
       for(let day=1;day<=totalDays;day++){const label=prefix+String(day).padStart(2,'0');if(label>=from&&label<=to){const key=`${assignment.machineId}|${day}`;const rows=cells.get(key)??[];rows.push(assignment);cells.set(key,rows)}}
     }
     return cells
-  },[assignments,year,month,totalDays])
+  },[representatives,year,month,totalDays])
   const lanesByMachine = useMemo(() => {
     const result = new Map<string, { assignment: AssignmentDetail; from: number; to: number; lane: number }[]>()
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}-`
     const monthStart = prefix + '01', monthEnd = prefix + String(totalDays).padStart(2, '0')
     const grouped = new Map<string, AssignmentDetail[]>()
-    for (const assignment of assignments) {
+    for (const assignment of representatives) {
       if (scheduleDay(assignment.endDate) < monthStart || scheduleDay(assignment.startDate) > monthEnd) continue
       const rows = grouped.get(assignment.machineId) ?? []
       rows.push(assignment); grouped.set(assignment.machineId, rows)
@@ -181,7 +190,7 @@ export default function SchedulePage() {
       }))
     })
     return result
-  }, [assignments, year, month, totalDays])
+  }, [representatives, year, month, totalDays])
 
   // Lịch nghỉ thật thay cho quy tắc T7/CN cứng. Mặc định chỉ nghỉ Chủ nhật —
   // đối chiếu nhật ký sản lượng 04/2026 cho thấy nhà máy LÀM thứ 7.
@@ -252,14 +261,18 @@ export default function SchedulePage() {
   const outsideFilter = viewMode === 'list' ? Array.from(selectedIds).filter(id => !filteredIdSet.has(id)).length : 0
   const selectGroup = (ids: string[], checked: boolean) => {
     if (isLoading || assignmentError) return
-    const result = selectAssignments(selectedIds, ids, checked)
+    // Tick/bấm 1 dòng của nhóm xếp chung = chọn cả nhóm (cả lưới lẫn danh sách), để Chuyển máy/Dời ngày/Gỡ/Xoá đơn đi cả nhóm.
+    const result = selectAssignments(selectedIds, expandToGroups(ids, assignmentGroupList), checked)
     if (result.limited) toast.error('Chỉ chọn tối đa 500 lịch mỗi lần; các lựa chọn ngoài bộ lọc vẫn được giữ.')
     setSelectedIds(result.selected); setTooltip(null)
   }
 
+  // Tick thanh = tick cả nhóm xếp chung (thanh gộp đại diện cho mọi dòng trong nhóm).
   const toggleSelection = (id: string) => {
-    if (!selectedIds.has(id) && selectedIds.size >= 500) { toast.error('Chỉ chọn tối đa 500 lịch mỗi lần'); return }
-    setSelectedIds(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
+    const ids = (groupOf.get(id) ?? [{ id }]).map(row => row.id)
+    const adding = !selectedIds.has(id)
+    if (adding && selectedIds.size + ids.filter(each => !selectedIds.has(each)).length > 500) { toast.error('Chỉ chọn tối đa 500 lịch mỗi lần'); return }
+    setSelectedIds(current => { const next = new Set(current); for (const each of ids) { if (adding) next.add(each); else next.delete(each) } return next })
   }
   const selectMonth = (includeCarryover: boolean) => {
     const monthFirst = yearMonth + '-01'
@@ -510,12 +523,15 @@ export default function SchedulePage() {
                         const draft = !!assignment.order.isDraft
                         const placeholder = draft || !!assignment.isPlaceholder
                         const span = to - from + 1
-                        const allocation = assignment.allocatedMeters == null || !Number.isFinite(Number(assignment.allocatedMeters)) ? '—' : `${Number(assignment.allocatedMeters).toLocaleString('vi-VN')} m`
+                        const members = groupOf.get(assignment.id) ?? [assignment]
+                        const isGroupBar = members.length > 1
+                        const memberMeters = members.reduce((sum, row) => sum + (row.allocatedMeters == null || !Number.isFinite(Number(row.allocatedMeters)) ? NaN : Number(row.allocatedMeters)), 0)
+                        const allocation = (isGroupBar ? !Number.isFinite(memberMeters) : assignment.allocatedMeters == null || !Number.isFinite(Number(assignment.allocatedMeters))) ? '—' : `${(isGroupBar ? Math.round(memberMeters * 100) / 100 : Number(assignment.allocatedMeters)).toLocaleString('vi-VN')} m`
                         const spec = formatLineSpec(assignment.order, { includeTotal: false })
                         const pi = assignment.order.piNumber || 'PI chưa có dữ liệu'
                         const product = scheduleProductLabel(assignment.order)
-                        const fullLabel = `${pi}${product ? ` · ${product}` : ''}`
-                        const chosen = selectedIds.has(assignment.id)
+                        const fullLabel = isGroupBar ? `${pi} · ${members.length} dòng · ${allocation}` : `${pi}${product ? ` · ${product}` : ''}`
+                        const chosen = members.every(row => selectedIds.has(row.id))
                         const showTooltip = (element: HTMLElement) => {
                           keepTooltip()
                           const rect = element.getBoundingClientRect()
@@ -534,7 +550,7 @@ export default function SchedulePage() {
                             {Array.from({ length: span }, (_, offset) => <span key={offset} data-overlay-day={from + offset} className="h-full shrink-0" style={{ width: dayWidth, backgroundColor: chosen ? undefined : exceptionFor(from + offset)?.kind === 'HOLIDAY' ? '#fde68a' : isRestDay(from + offset) ? '#fef3c7' : undefined }} />)}
                           </span>
                           <div data-sticky-label className="bar-label sticky py-2" style={{ left: MACHINE_COL_WIDTH, width: 'min(100%, 32px)' }}>
-                            <label title={`Chọn lịch ${pi}`} onClick={event => event.stopPropagation()} className="selection-control bar-checkbox absolute left-1 top-2 z-10 inline-flex h-6 w-6 cursor-pointer items-center justify-center"><input type="checkbox" aria-label={`Chọn lịch ${pi} máy ${machine}`} checked={chosen} onChange={() => { setTooltip(null); toggleSelection(assignment.id) }} className="h-4 w-4 cursor-pointer accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" /></label>
+                            <label title={`Chọn lịch ${pi}`} onClick={event => event.stopPropagation()} className="selection-control bar-checkbox absolute left-1 top-2 z-10 inline-flex h-6 w-6 cursor-pointer items-center justify-center"><input type="checkbox" aria-label={isGroupBar ? `Chọn nhóm ${members.length} dòng ${pi} máy ${machine}` : `Chọn lịch ${pi} máy ${machine}`} checked={chosen} onChange={() => { setTooltip(null); toggleSelection(assignment.id) }} className="h-4 w-4 cursor-pointer accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" /></label>
                             <button data-assignment={assignment.id} type="button" role="gridcell" aria-label={`${machine} — ${pi} — ${scheduleDay(assignment.startDate).split('-').reverse().join('/')} đến ${scheduleDay(assignment.endDate).split('-').reverse().join('/')}`} aria-describedby={tooltip?.assignment.id === assignment.id ? 'assignment-tooltip' : undefined}
                               style={{ width: `min(${span * dayWidth - (placeholder ? 8 : 6)}px, 320px, calc(100cqw - ${MACHINE_COL_WIDTH}px))` }} className="bar-body block min-h-10 px-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary">
                             <span aria-hidden="true" className="checkbox-space float-left mr-1 h-6 w-6" />
@@ -623,6 +639,8 @@ export default function SchedulePage() {
         onClose={() => setIsDetailOpen(false)}
         assignment={selectedAssignment}
         onSuccess={fetchAssignments}
+        groupMembers={selectedAssignment ? groupOf.get(selectedAssignment.id) : undefined}
+        onSelectMember={setSelectedAssignment}
       />
 
       <ImportScheduleModal

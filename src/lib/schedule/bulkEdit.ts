@@ -15,7 +15,7 @@ function offsetDay(day: string, amount: number) {
 
 // Same server planner used by preview and by commit AFTER acquiring the table locks.
 export async function prepareBulkEdit(db: Prisma.TransactionClient, body: BulkEditBody, today: string) {
-  const selected = await db.machineAssignment.findMany({ where: { id: { in: body.assignments.map(row => row.id) } }, include: { order: { select: { piNumber: true } } } })
+  const selected = await db.machineAssignment.findMany({ where: { id: { in: body.assignments.map(row => row.id) } }, include: { order: { select: { piNumber: true, widthM: true, gsm: true, color: true, meshType: true } } } })
   const byId = new Map(selected.map(row => [row.id, row]))
   const missing = body.assignments.filter(row => !byId.has(row.id)).map(row => row.id)
   const changed = body.assignments.filter(row => byId.has(row.id) && byId.get(row.id)!.updatedAt.getTime() !== new Date(row.updatedAt).getTime()).map(row => row.id)
@@ -24,7 +24,7 @@ export async function prepareBulkEdit(db: Prisma.TransactionClient, body: BulkEd
   const to = offsetDay(selected.map(row => scheduleDay(row.endDate)).sort().at(-1)!, 366)
   const machines = Array.from(new Set([...selected.map(row => row.machineId), ...(body.command === 'MOVE_MACHINE' ? [body.targetMachineId] : [])]))
   const [others, calendar, outputs] = await Promise.all([
-    db.machineAssignment.findMany({ where: { id: { notIn: selected.map(row => row.id) }, OR: machines.map(machine => overlapWhere(machine, from, to)) }, include: { order: { select: { piNumber: true } } } }),
+    db.machineAssignment.findMany({ where: { id: { notIn: selected.map(row => row.id) }, OR: machines.map(machine => overlapWhere(machine, from, to)) }, include: { order: { select: { piNumber: true, widthM: true, gsm: true, color: true, meshType: true } } } }),
     loadFactoryCalendar(db, from, to),
     db.knittingDailyOutput.findMany({ where: { machineId: { in: machines }, dailyMeters: { gt: 0 }, reportDate: { gte: new Date(from+'T00:00:00Z'), lte: new Date(to+'T00:00:00Z') } }, select: { machineId: true, reportDate: true } }),
   ])

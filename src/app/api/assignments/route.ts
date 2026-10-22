@@ -6,6 +6,7 @@ import { resolveAssignmentDates, factoryDateToISO, AssignmentDateError } from "@
 import { loadFactoryCalendar } from "@/lib/schedule/factoryCalendar";
 import { scheduleDay } from "@/lib/schedule/importSafety";
 import type { Prisma } from '@prisma/client';
+import { sameSpecGroup } from '@/lib/schedule/specGroup';
 
 export async function GET(request: Request) {
   try {
@@ -105,7 +106,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const { machineId, orderId, startDate, endDate, allocatedMeters, estimatedDailyOutput, endDateSource } = result.data;
+    const { machineId, startDate, endDate, allocatedMeters, estimatedDailyOutput, endDateSource } = result.data;
+    const orderIds = Array.from(new Set(result.data.orderIds ?? [result.data.orderId!]));
+    const grouped = result.data.orderIds !== undefined;
+    if (grouped && orderIds.length !== result.data.orderIds!.length) {
+      return NextResponse.json({ message: "Danh sách dòng hàng bị trùng." }, { status: 400 });
+    }
     let start = new Date(startDate);
     let end = new Date(endDate);
 
@@ -116,19 +122,43 @@ export async function POST(request: Request) {
       );
     }
 
-    // Fetch order to check lifecycle and placeholder
-    const targetOrder = await prisma.productionOrder.findUnique({
-      where: { id: orderId },
-      select: { isDraft: true, isPlaceholder: true, lifecycleStatus: true, piNumber: true },
+    // Fetch order(s) to check lifecycle and placeholder (+ quy cách để xếp chung)
+    const targetOrders = await prisma.productionOrder.findMany({
+      where: { id: { in: orderIds } },
+      select: {
+        id: true, isDraft: true, isPlaceholder: true, lifecycleStatus: true, piNumber: true,
+        widthM: true, gsm: true, color: true, meshType: true, lengthM: true,
+        _count: { select: { assignments: true } },
+      },
     });
 
-    if (!targetOrder) {
+    if (targetOrders.length !== orderIds.length) {
       return NextResponse.json({ message: "Order not found" }, { status: 404 });
     }
-
+    // Giữ đúng thứ tự client gửi
+    const ordered = orderIds.map(id => targetOrders.find(o => o.id === id)!);
+    const first = ordered[0];
+    if (grouped && orderIds.length > 1) {
+      if (!ordered.every(o => sameSpecGroup(o, first))) {
+        return NextResponse.json({ message: "Các dòng xếp chung phải cùng PI, khổ, GSM, màu và loại lưới." }, { status: 400 });
+      }
+      if (ordered.some(o => o._count.assignments > 0)) {
+        return NextResponse.json({ message: "Có dòng đã có lịch; chỉ xếp chung các dòng chưa có lịch." }, { status: 400 });
+      }
+      if (allocatedMeters != null) {
+        return NextResponse.json({ message: "Xếp chung: số mét mỗi lịch lấy theo từng dòng, không nhập số mét chung." }, { status: 400 });
+      }
+    }
+    // Tổng mét để tính ngày = tổng lengthM các dòng xếp chung
+    const groupMeters = grouped && orderIds.length > 1
+      ? ordered.reduce((sum, o) => sum + Number(o.lengthM ?? 0), 0)
+      : undefined;
+    if (groupMeters !== undefined && !(groupMeters > 0)) {
+      return NextResponse.json({ message: "Các dòng xếp chung chưa có số mét." }, { status: 400 });
+    }
     const datePlan = await resolveAssignmentDates({
       startDate: scheduleDay(start), endDate: scheduleDay(end),
-      allocatedMeters, estimatedDailyOutput,
+      allocatedMeters: groupMeters ?? allocatedMeters, estimatedDailyOutput,
       computeEnd: endDateSource === 'COMPUTED', adjustStart: true,
       // Xếp mới: ngày kết thúc do người dùng chọn nên không cho rơi vào ngày nghỉ.
       rejectNonWorkingEnd: endDateSource !== 'COMPUTED',
@@ -137,9 +167,10 @@ export async function POST(request: Request) {
     if (endDateSource === 'COMPUTED') end = new Date(factoryDateToISO(datePlan.endDate));
 
     return await withAssignmentLock(async tx => {
-      // Overlap check (applies equally to draft placeholders and official assignments)
+      // Overlap check (applies equally to draft placeholders and official assignments).
+      // Chỉ miễn chồng khi cùng máy + cùng nhóm quy cách; mọi trường hợp khác giữ 409.
       const existing = await tx.machineAssignment.findFirst({
-        where: overlapWhere(machineId, scheduleDay(start), scheduleDay(end)),
+        where: overlapWhere(machineId, scheduleDay(start), scheduleDay(end), [], first, orderIds),
       });
 
       if (existing) {
@@ -149,35 +180,42 @@ export async function POST(request: Request) {
         );
       }
 
-      // Đơn nháp hoặc đơn giữ chỗ lên máy dệt với cờ isPlaceholder = true như nhánh cũ
-      const isPlaceholder = Boolean(
-        targetOrder.isDraft ||
-        targetOrder.lifecycleStatus === 'DRAFT' ||
-        targetOrder.lifecycleStatus === 'RESERVED' ||
-        targetOrder.lifecycleStatus === 'RESERVE' ||
-        targetOrder.lifecycleStatus === 'PLACEHOLDER' ||
-        targetOrder.isPlaceholder
-      );
+      const created = [];
+      for (const targetOrder of ordered) {
+        // Đơn nháp hoặc đơn giữ chỗ lên máy dệt với cờ isPlaceholder = true như nhánh cũ
+        const isPlaceholder = Boolean(
+          targetOrder.isDraft ||
+          targetOrder.lifecycleStatus === 'DRAFT' ||
+          targetOrder.lifecycleStatus === 'RESERVED' ||
+          targetOrder.lifecycleStatus === 'RESERVE' ||
+          targetOrder.lifecycleStatus === 'PLACEHOLDER' ||
+          targetOrder.isPlaceholder
+        );
+        // Xếp chung: mét từng lịch = lengthM của dòng đó; còn lại giữ như cũ.
+        const meters = groupMeters !== undefined ? Number(targetOrder.lengthM ?? 0) : allocatedMeters;
 
-      const assignment = await tx.machineAssignment.create({
-        data: {
-          machineId,
-          orderId,
-          startDate: start,
-          endDate: end,
-          isPlaceholder,
-          endDateSource: endDateSource ?? "MANUAL",
-          ...(allocatedMeters != null && { allocatedMeters }),
-          ...(estimatedDailyOutput != null && { estimatedDailyOutput }),
-        },
-        include: {
-          order: true,
-        },
-      });
+        created.push(await tx.machineAssignment.create({
+          data: {
+            machineId,
+            orderId: targetOrder.id,
+            startDate: start,
+            endDate: end,
+            isPlaceholder,
+            endDateSource: endDateSource ?? "MANUAL",
+            ...(meters != null && meters > 0 && { allocatedMeters: meters }),
+            ...(estimatedDailyOutput != null && { estimatedDailyOutput }),
+          },
+          include: {
+            order: true,
+          },
+        }));
+      }
 
-      return NextResponse.json({ ...assignment, warnings: datePlan.warnings }, { status: 201 });
-    });
-  } catch (error: unknown) {
+      // orderId cũ: giữ nguyên dạng phản hồi (1 object). orderIds: mảng + warnings.
+      return grouped
+        ? NextResponse.json({ assignments: created, warnings: datePlan.warnings }, { status: 201 })
+        : NextResponse.json({ ...created[0], warnings: datePlan.warnings }, { status: 201 });
+    });  } catch (error: unknown) {
     if (error instanceof AssignmentDateError) return NextResponse.json({ message: error.message }, { status: 400 });
     if (isLockRetryable(error)) return NextResponse.json({ message: ASSIGNMENT_RETRY_MESSAGE, retryable: true }, { status: 409 });
     console.error("[POST_ASSIGNMENTS]", error);

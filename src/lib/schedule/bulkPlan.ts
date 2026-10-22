@@ -1,14 +1,15 @@
 import { createHash } from 'node:crypto'
 import type { BulkEditCommand } from '../validations/bulkEdit'
 import { scheduleDay, outputFallsWithinSchedule } from './importSafety'
+import { sameSpecGroup, type SpecOrder } from './specGroup'
 import { calculateProductionSchedule, countWorkingDays, shiftWorkingDays, type FactoryCalendar } from './productionDuration'
 
 export interface AssignmentLite {
-  id: string; machineId: string; startDate: Date; endDate: Date; order: { piNumber: string }
+  id: string; machineId: string; startDate: Date; endDate: Date; orderId?: string; order: { piNumber: string } & SpecOrder
 }
 type Interval = { machineId: string; startDate: string; endDate: string }
 export interface BulkEditPlan {
-  changes: { id: string; machineId: string; piNumber: string; before: Interval; after: Interval; workingDays: number }[]
+  changes: { id: string; machineId: string; piNumber: string; orderId?: string; spec?: SpecOrder; before: Interval; after: Interval; workingDays: number }[]
   excluded: { id: string; piNumber: string; reason: 'STARTED' | 'HAS_OUTPUT' | 'ALREADY_ON_TARGET' }[]
   warnings: { yearMonth: string; message: string }[]
   conflicts: { id: string; piNumber: string; withId: string; withPiNumber: string; machineId: string; from: string; to: string; reason: 'OVERLAP' | 'PAST' | 'HAS_OUTPUT' }[]
@@ -45,17 +46,18 @@ export function planBulkEdit(input: {
       after.startDate = estimate.effectiveStartDate; after.endDate = estimate.computedEndDate
       if (after.startDate <= today) plan.conflicts.push({ id: row.id, piNumber, withId: row.id, withPiNumber: piNumber, machineId: row.machineId, from: after.startDate, to: after.endDate, reason: 'PAST' })
     }
-    plan.changes.push({ id: row.id, machineId: row.machineId, piNumber, before, after, workingDays })
+    plan.changes.push({ id: row.id, machineId: row.machineId, piNumber, orderId: row.orderId, spec: row.order, before, after, workingDays })
   }
   const changedIds = new Set(plan.changes.map(row => row.id))
   // Excluded selected rows remain real obstacles; selected rows moving away do not.
   const stationary = [...input.others, ...selected.filter(row => !changedIds.has(row.id))]
   for (const change of plan.changes) {
     const obstacles = [
-      ...stationary.map(row => ({ id: row.id, piNumber: row.order.piNumber, range: interval(row) })),
-      ...plan.changes.filter(row => row.id !== change.id).map(row => ({ id: row.id, piNumber: row.piNumber, range: row.after })),
+      ...stationary.map(row => ({ id: row.id, piNumber: row.order.piNumber, orderId: row.orderId, spec: row.order as SpecOrder, range: interval(row) })),
+      ...plan.changes.filter(row => row.id !== change.id).map(row => ({ id: row.id, piNumber: row.piNumber, orderId: row.orderId, spec: row.spec, range: row.after })),
     ]
-    for (const obstacle of obstacles) if (obstacle.id !== change.id && overlapping(change.after, obstacle.range)) {
+    for (const obstacle of obstacles) // [FB 22/10 ý 3] Cùng máy + cùng nhóm quy cách được chồng ngày (xếp chung); khác nhóm vẫn là xung đột.
+    if (obstacle.id !== change.id && overlapping(change.after, obstacle.range) && !(sameSpecGroup(change.spec, obstacle.spec) && change.orderId !== obstacle.orderId)) {
       plan.conflicts.push({ id: change.id, piNumber: change.piNumber, withId: obstacle.id, withPiNumber: obstacle.piNumber, machineId: change.after.machineId,
         from: change.after.startDate > obstacle.range.startDate ? change.after.startDate : obstacle.range.startDate,
         to: change.after.endDate < obstacle.range.endDate ? change.after.endDate : obstacle.range.endDate, reason: 'OVERLAP' })

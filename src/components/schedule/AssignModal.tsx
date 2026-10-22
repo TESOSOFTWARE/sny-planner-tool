@@ -18,8 +18,9 @@ import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { getUnassignedOrders } from '@/app/schedule/actions'
 import PiOrderPanel from './PiOrderPanel'
-import SuggestCombobox from '@/components/ui/SuggestCombobox'
-import { formatOrderLabel, searchOrderChoices } from '@/lib/schedule/orderChoiceSearch'
+import OrderChoicePicker, { useComboboxEscapeGuard } from './OrderChoicePicker'
+import { groupCandidates, roundMeters } from '@/lib/schedule/specGroup'
+import { formatOrderLabel } from '@/lib/schedule/orderChoiceSearch'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -113,15 +114,10 @@ function SubLineDetailPanel({ o }: { o: Order }) {
 
 export default function AssignModal({ isOpen, onClose, machineId, startDate, onSuccess }: Props) {
   const modalRef = useRef<HTMLDivElement>(null)
-  const escapingSuggestions = useRef(false)
-  const closeOnEscape = useCallback(() => {
-    if (escapingSuggestions.current) return
-    onClose()
-  }, [onClose])
-  useScheduleModalFocus(isOpen, closeOnEscape, modalRef)
+  const escapeGuard = useComboboxEscapeGuard(onClose)
+  useScheduleModalFocus(isOpen, escapeGuard.close, modalRef)
   const [orders,               setOrders]               = useState<Order[]>([])
   const [selectedOrderId,      setSelectedOrderId]      = useState('')
-  const [orderQuery, setOrderQuery] = useState('')
   const [endDate,              setEndDate]              = useState('')
   const [allocatedMeters,      setAllocatedMeters]      = useState('')
   const [estimatedDailyOutput, setEstimatedDailyOutput] = useState('')
@@ -130,6 +126,8 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
   const [includeFinished, setIncludeFinished] = useState(false)
   const [hiddenCount, setHiddenCount] = useState(0)
   const [loadingOrders, setLoadingOrders] = useState(false)
+  // [FB 22/10 ý 3] Xếp chung các dòng cùng quy cách: mặc định tick hết; bỏ tick dòng nào thì dòng đó không vào nhóm.
+  const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set())
 
   const loadOrders = useCallback(async (include: boolean) => {
     setLoadingOrders(true)
@@ -150,28 +148,29 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
       }
       // Reset selection state when modal opens
       setSelectedOrderId('')
-      setOrderQuery('')
+      setExcludedIds(new Set())
       setAllocatedMeters('')
       setEstimatedDailyOutput('')
       setError('')
     }
   }, [isOpen, startDate, loadOrders])
 
-  const loadOrderOptions = useCallback(async (q: string, _signal: AbortSignal) =>
-    searchOrderChoices(orders, orders.some(o => o.id === selectedOrderId && q === formatOrderLabel(o)) ? '' : q).map(o => ({
-      value: formatOrderLabel(o), label: formatOrderLabel(o), group: o.group, data: o,
-    })), [orders, selectedOrderId])
+  const selectedOrder = orders.find(o => o.id === selectedOrderId) ?? null
+  const candidates = groupCandidates(orders, selectedOrder)
+  const grouped = [...(selectedOrder ? [selectedOrder] : []), ...candidates.filter(o => !excludedIds.has(o.id))]
+  const isGroup = grouped.length > 1
+  const groupTotal = roundMeters(grouped.reduce((sum, o) => sum + Number(o.lengthM ?? 0), 0))
+  // Chọn dòng khác thì đặt lại các dòng bị bỏ tick; khi xếp chung, số mét = tổng mét các dòng (khoá ô).
+  useEffect(() => { setExcludedIds(new Set()) }, [selectedOrderId])
+  const effectiveMeters = isGroup ? String(groupTotal) : allocatedMeters
 
   const requestedStart = startDate ? format(startDate, 'yyyy-MM-dd') : ''
   const dates = useAssignmentDates({
     enabled: isOpen && !!startDate, startDate: requestedStart, endDate,
-    allocatedMeters, estimatedDailyOutput, setEndDate,
+    allocatedMeters: effectiveMeters, estimatedDailyOutput, setEndDate,
   })
 
   if (!isOpen || !startDate) return null
-
-  // Derived: the full Order object for the currently-selected id
-  const selectedOrder = orders.find(o => o.id === selectedOrderId) ?? null
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -198,11 +197,11 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           machineId,
-          orderId:   selectedOrderId,
+          ...(isGroup ? { orderIds: grouped.map(o => o.id) } : { orderId: selectedOrderId }),
           startDate: startISO,
           endDate:   endISO,
           endDateSource: dates.endDateSource,
-          ...(allocatedMeters      !== '' && { allocatedMeters:      Number(allocatedMeters) }),
+          ...(!isGroup && allocatedMeters !== '' && { allocatedMeters: Number(allocatedMeters) }),
           ...(estimatedDailyOutput !== '' && { estimatedDailyOutput: Number(estimatedDailyOutput) }),
         }),
       })
@@ -232,13 +231,7 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
     >
       <div
         ref={modalRef} role="dialog" aria-modal="true" aria-label="Xếp máy"
-        onKeyDownCapture={event => {
-          if (event.key === 'Escape' && event.target instanceof HTMLElement &&
-              event.target.getAttribute('role') === 'combobox' && event.target.getAttribute('aria-expanded') === 'true') {
-            escapingSuggestions.current = true
-            setTimeout(() => { escapingSuggestions.current = false }, 0)
-          }
-        }}
+        onKeyDownCapture={escapeGuard.onKeyDownCapture}
         className="bg-surface rounded-xl shadow-lg w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
@@ -275,26 +268,18 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
               <label htmlFor="assign-order-select" className="block text-label-sm font-medium text-secondary mb-xs">
                 Đơn hàng — Dòng hàng
               </label>
-              <SuggestCombobox
-                id="assign-order-select"
-                value={orderQuery}
-                onChange={value => { setOrderQuery(value); setSelectedOrderId('') }}
-                load={loadOrderOptions}
-                onSelect={option => setSelectedOrderId(option.data?.id ?? '')}
-                disabled={loadingOrders}
-                placeholder="Tìm PI, khách, màu, loại lưới, khổ, GSM..."
-                listLabel="Dòng hàng"
-                emptyText={() => 'Không tìm thấy dòng hàng phù hợp'}
-                className="w-full h-10 px-sm rounded-lg border-[0.5px] border-outline bg-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none text-body-md"
-              />
-              <p className="mt-1 text-xs text-secondary">
-                {loadingOrders ? 'Đang tải dòng hàng…' : includeFinished ? 'Đang hiện cả dòng đã kết thúc lịch' : `Đang ẩn ${hiddenCount} dòng đã kết thúc lịch`}
-                {' · '}
-                <button type="button" disabled={loadingOrders} onClick={() => { const next = !includeFinished; setIncludeFinished(next); void loadOrders(next) }} className="text-primary underline disabled:opacity-50">{includeFinished ? 'Ẩn' : 'Hiện'}</button>
-              </p>
+              <OrderChoicePicker id="assign-order-select" orders={orders} selectedId={selectedOrderId} onSelectedChange={setSelectedOrderId} loading={loadingOrders} includeFinished={includeFinished} hiddenCount={hiddenCount} onToggleFinished={next => { setIncludeFinished(next); void loadOrders(next) }} />
 
               {/* Detail panel — renders immediately after selection */}
               {selectedOrder && <SubLineDetailPanel o={selectedOrder} />}
+              {candidates.length > 0 && <fieldset className="mt-sm rounded-lg border border-outline-variant p-sm">
+                <legend className="px-1 text-label-sm font-medium text-secondary">Xếp chung {grouped.length} dòng cùng quy cách (tổng {groupTotal.toLocaleString('vi-VN')} m)</legend>
+                <p className="mb-1 text-xs text-secondary">Cùng PI, khổ, GSM, màu, loại lưới và chưa có lịch. Bỏ tick dòng không muốn xếp chung.</p>
+                <ul className="space-y-1 text-xs">
+                  <li className="flex items-center gap-2"><input type="checkbox" checked disabled aria-label={'Dòng đã chọn: ' + formatOrderLabel(selectedOrder!)} /><span>{formatOrderLabel(selectedOrder!)} · {Number(selectedOrder!.lengthM ?? 0).toLocaleString('vi-VN')} m</span></li>
+                  {candidates.map(o => <li key={o.id}><label className="flex items-center gap-2"><input type="checkbox" checked={!excludedIds.has(o.id)} onChange={event => setExcludedIds(prev => { const next = new Set(prev); if (event.target.checked) next.delete(o.id); else next.add(o.id); return next })} /><span>{formatOrderLabel(o)} · {Number(o.lengthM ?? 0).toLocaleString('vi-VN')} m</span></label></li>)}
+                </ul>
+              </fieldset>}
               {selectedOrder && <PiOrderPanel piNumber={selectedOrder.piNumber} selectedOrderId={selectedOrder.id} />}
             </div>
 
@@ -331,11 +316,14 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
                 type="number"
                 min={1}
                 step={1}
-                value={allocatedMeters}
+                value={effectiveMeters}
+                readOnly={isGroup}
+                aria-describedby={isGroup ? 'assign-group-meters-hint' : undefined}
                 onChange={e => setAllocatedMeters(e.target.value)}
                 placeholder="e.g. 6000"
                 className="w-full h-10 px-sm rounded-lg border-[0.5px] border-outline bg-surface focus:border-primary outline-none font-mono"
               />
+              {isGroup && <p id="assign-group-meters-hint" className="mt-1 text-xs text-secondary">Đang xếp chung: số mét = tổng các dòng. Muốn số khác thì bỏ tick xếp chung.</p>}
             </div>
 
             {/* Estimated daily output */}
@@ -356,7 +344,7 @@ export default function AssignModal({ isOpen, onClose, machineId, startDate, onS
             </div>
           </div>
 
-          <ProductionDurationSummary allocatedMeters={allocatedMeters} estimatedDailyOutput={estimatedDailyOutput}
+          <ProductionDurationSummary allocatedMeters={effectiveMeters} estimatedDailyOutput={estimatedDailyOutput}
             startDate={requestedStart} plan={dates.plan} loading={dates.loading} error={dates.error}
             mode={dates.mode} onUseComputed={dates.useComputedDates} />
 

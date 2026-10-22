@@ -7,10 +7,12 @@ import { useAssignmentDates } from './useAssignmentDates'
 import { scheduleDay } from '@/lib/schedule/importSafety'
 import { toast } from 'sonner'
 import { getUnassignedOrders } from '@/app/schedule/actions'
-import { calcOrderStatus, type OrderStatus } from '@/lib/orderStatus'
+import { calcOrderStatus } from '@/lib/orderStatus'
 import PiOrderPanel from './PiOrderPanel'
 import TransferAssignmentModal from './TransferAssignmentModal'
 import { lineLabel, orderQuantityLabel, hasUnusedOrderQuantity } from '@/lib/schedule/piDisplay'
+import OrderChoicePicker, { useComboboxEscapeGuard } from './OrderChoicePicker'
+import type { OrderChoice } from '@/lib/schedule/orderChoiceSearch'
 
 export type AssignmentDetail = {
   id: string
@@ -47,19 +49,22 @@ export type AssignmentDetail = {
   }
 }
 
-type Order = { id: string; piNumber: string; customer: string; subLineIndex?: number; isPlaceholder?: boolean; widthM: number | null; color: string | null; gsm: number | null; calculatedStatus?: OrderStatus }
+type Order = OrderChoice & { id: string }
 
 interface Props {
   isOpen: boolean
   onClose: () => void
   assignment: AssignmentDetail | null
   onSuccess: () => void
+  /** Các lịch cùng nhóm xếp chung (gồm cả lịch đang xem). Chỉ để liệt kê; "Chỉnh sửa" vẫn chỉ đổi 1 dòng. */
+  groupMembers?: AssignmentDetail[]
+  onSelectMember?: (assignment: AssignmentDetail) => void
 }
 
 // Hằng số ở module scope: hook đưa setEndDate vào deps của effect, không được tạo hàm mới mỗi lần render.
 const noopSetEndDate = () => {}
 
-export default function DetailModal({ isOpen, onClose, assignment, onSuccess }: Props) {
+export default function DetailModal({ isOpen, onClose, assignment, onSuccess, groupMembers, onSelectMember }: Props) {
   const [piLineCount, setPiLineCount] = useState<{ piNumber: string; count: number | null } | null>(null)
   const handlePiLineCount = useCallback((piNumber: string, count: number | null) => setPiLineCount({ piNumber, count }), [])
   const [isLoading, setIsLoading] = useState(false)
@@ -72,7 +77,8 @@ export default function DetailModal({ isOpen, onClose, assignment, onSuccess }: 
   const handleDetailClose = useCallback(()=>{if(!transferOpenRef.current)onClose()},[onClose])
   const closeTransfer = useCallback(()=>setTransferOpen(false),[])
   const modalRef = useRef<HTMLDivElement>(null)
-  useScheduleModalFocus(isOpen, handleDetailClose, modalRef)
+  const escapeGuard = useComboboxEscapeGuard(handleDetailClose)
+  useScheduleModalFocus(isOpen, escapeGuard.close, modalRef)
 
   // Edit state
   const [orders, setOrders] = useState<Order[]>([])
@@ -122,7 +128,8 @@ export default function DetailModal({ isOpen, onClose, assignment, onSuccess }: 
     setLoadingOrders(true)
     try {
       const data = await getUnassignedOrders(include)
-      const currentOrder = { ...assignment.order, calculatedStatus: data.orders.find(o => o.id === assignment.order.id)?.calculatedStatus ?? calcOrderStatus([assignment]) }
+      // Dòng hiện tại luôn có trong danh sách, kể cả khi đã Hoàn thành và bị ẩn; ưu tiên bản đầy đủ từ getUnassignedOrders.
+      const currentOrder: Order = data.orders.find(o => o.id === assignment.order.id) ?? { ...assignment.order, subLineIndex: assignment.order.subLineIndex ?? 0, calculatedStatus: calcOrderStatus([assignment]) }
       const allOptions = [
         currentOrder,
         ...data.orders.filter(o => o.id !== currentOrder.id)
@@ -222,6 +229,7 @@ export default function DetailModal({ isOpen, onClose, assignment, onSuccess }: 
     >
       <div
         ref={modalRef} role="dialog" aria-modal="true" aria-label="Chi tiết phân công"
+        onKeyDownCapture={escapeGuard.onKeyDownCapture}
         className="bg-surface rounded-xl shadow-lg w-full max-w-md lg:max-w-3xl max-h-[90vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
@@ -270,23 +278,7 @@ export default function DetailModal({ isOpen, onClose, assignment, onSuccess }: 
 
               <div>
                 <label htmlFor="detail-order" className="block text-label-sm font-medium text-secondary mb-xs">Đơn hàng</label>
-                <select id="detail-order"
-                  required
-                  disabled={loadingOrders}
-                  value={selectedOrderId}
-                  onChange={e => setSelectedOrderId(e.target.value)}
-                  className="w-full h-10 px-sm rounded-lg border-[0.5px] border-outline bg-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none text-body-md"
-                >
-                  <option value="">Chọn đơn hàng...</option>
-                  {orders.map(o => (
-                    <option key={o.id} value={o.id}>{o.piNumber} · Dòng {lineLabel(o)} — {o.widthM ?? '—'} m · {o.color || '—'} · {o.gsm ?? '—'} GSM{o.calculatedStatus === 'DONE' ? ' · Hoàn thành' : ''}</option>
-                  ))}
-                </select>
-                <p className="mt-1 text-xs text-secondary">
-                  {loadingOrders ? 'Đang tải dòng hàng…' : includeFinished ? 'Đang hiện cả dòng đã kết thúc lịch' : `Đang ẩn ${hiddenCount} dòng đã kết thúc lịch`}
-                  {' · '}
-                  <button type="button" disabled={loadingOrders} onClick={() => { const next = !includeFinished; setIncludeFinished(next); void loadOrderOptions(next) }} className="text-primary underline disabled:opacity-50">{includeFinished ? 'Ẩn' : 'Hiện'}</button>
-                </p>
+                <OrderChoicePicker id="detail-order" orders={orders} selectedId={selectedOrderId} onSelectedChange={setSelectedOrderId} loading={loadingOrders} includeFinished={includeFinished} hiddenCount={hiddenCount} onToggleFinished={next => { setIncludeFinished(next); void loadOrderOptions(next) }} />
               </div>
 
               <div className="flex gap-sm">
@@ -336,7 +328,7 @@ export default function DetailModal({ isOpen, onClose, assignment, onSuccess }: 
               <button type="button" onClick={() => setIsEditing(false)} className="inline-flex items-center justify-center gap-sm border border-primary bg-transparent hover:bg-surface-container text-primary text-sm font-medium px-4 py-2 h-9 rounded-md transition-colors">
                 Hủy
               </button>
-              <button type="submit" disabled={isLoading || dates.loading || !!dates.error} className="inline-flex items-center justify-center gap-sm bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors">
+              <button type="submit" disabled={isLoading || loadingOrders || !selectedOrderId || dates.loading || !!dates.error} className="inline-flex items-center justify-center gap-sm bg-primary text-on-primary text-sm font-medium px-4 py-2 h-9 rounded-md hover:bg-primary/90 disabled:opacity-60 transition-colors">
                 {isLoading ? 'Đang lưu...' : 'Lưu'}
               </button>
             </div>
@@ -362,6 +354,17 @@ export default function DetailModal({ isOpen, onClose, assignment, onSuccess }: 
               </div>
               <p className="text-body-sm text-on-surface-variant mt-0.5">{assignment.order.customer}</p>
             </div>
+
+            {groupMembers && groupMembers.length > 1 && <div>
+              <p className="text-label-sm font-medium text-secondary mb-1">Xếp chung {groupMembers.length} dòng cùng quy cách</p>
+              <ul aria-label="Các dòng xếp chung" className="space-y-1 rounded border border-outline-variant p-2 text-xs">
+                {groupMembers.map(member => <li key={member.id} className="flex items-center justify-between gap-2">
+                  <span>{member.order.piNumber} · Dòng {lineLabel(member.order)} · {member.allocatedMeters == null ? '—' : `${Number(member.allocatedMeters).toLocaleString('vi-VN')} m`}</span>
+                  {member.id === assignment.id ? <span className="text-secondary">đang xem</span> : <button type="button" onClick={() => onSelectMember?.(member)} className="text-primary underline">Xem dòng này</button>}
+                </li>)}
+              </ul>
+              <p className="mt-1 text-xs text-secondary">Chỉnh sửa chỉ đổi dòng đang xem; dòng đó sẽ tách khỏi thanh nhóm.</p>
+            </div>}
 
             <div>
               <p className="text-label-sm font-medium text-secondary mb-1">Phân công này</p>
