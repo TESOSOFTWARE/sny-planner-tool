@@ -6,7 +6,7 @@ import { resolveAssignmentDates, factoryDateToISO, AssignmentDateError } from "@
 import { loadFactoryCalendar } from "@/lib/schedule/factoryCalendar";
 import { scheduleDay } from "@/lib/schedule/importSafety";
 import type { Prisma } from '@prisma/client';
-import { sameSpecGroup } from '@/lib/schedule/specGroup';
+import { roundMeters, sameSpecGroup } from '@/lib/schedule/specGroup';
 
 export async function GET(request: Request) {
   try {
@@ -126,7 +126,7 @@ export async function POST(request: Request) {
     const targetOrders = await prisma.productionOrder.findMany({
       where: { id: { in: orderIds } },
       select: {
-        id: true, isDraft: true, isPlaceholder: true, lifecycleStatus: true, piNumber: true,
+        id: true, isDraft: true, isPlaceholder: true, lifecycleStatus: true, piNumber: true, subLineIndex: true,
         widthM: true, gsm: true, color: true, meshType: true, lengthM: true,
         _count: { select: { assignments: true } },
       },
@@ -149,9 +149,17 @@ export async function POST(request: Request) {
         return NextResponse.json({ message: "Xếp chung: số mét mỗi lịch lấy theo từng dòng, không nhập số mét chung." }, { status: 400 });
       }
     }
-    // Tổng mét để tính ngày = tổng lengthM các dòng xếp chung
+    if (grouped && orderIds.length > 1) {
+      const missingMeters = ordered.find(o => !(Number(o.lengthM) > 0));
+      if (missingMeters) {
+        return NextResponse.json({
+          message: `Dòng ${missingMeters.subLineIndex} của PI ${missingMeters.piNumber} chưa có số mét; bỏ tick dòng này hoặc bổ sung mét.`,
+        }, { status: 400 });
+      }
+    }
+    // Tổng mét để tính ngày = tổng lengthM các dòng xếp chung, cùng độ chính xác với UI.
     const groupMeters = grouped && orderIds.length > 1
-      ? ordered.reduce((sum, o) => sum + Number(o.lengthM ?? 0), 0)
+      ? roundMeters(ordered.reduce((sum, o) => sum + Number(o.lengthM ?? 0), 0))
       : undefined;
     if (groupMeters !== undefined && !(groupMeters > 0)) {
       return NextResponse.json({ message: "Các dòng xếp chung chưa có số mét." }, { status: 400 });

@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { specWhere, type SpecOrder } from './specGroup'
+import { scheduleDay } from './importSafety'
 
 export const ASSIGNMENT_RETRY_MESSAGE = 'Đang có thao tác khác trên lịch máy. Vui lòng thử lại.'
 
@@ -21,19 +22,44 @@ export function isLockRetryable(error: unknown): boolean {
   return 'code' in error.meta && error.meta.code === '55P03'
 }
 
-// R-4: lịch đang nằm trong thanh xếp chung = có lịch KHÁC dòng, cùng nhóm quy cách, cùng máy, chồng ngày.
-// swap/split chỉ đổi 1 dòng nên sẽ tách nhóm khó hiểu -> chặn, hướng người dùng sang Chuyển máy/Dời ngày (đi cả nhóm).
-export async function groupMateCount(tx: Prisma.TransactionClient, row: { id: string; machineId: string; orderId: string; startDate: Date; endDate: Date; order?: SpecOrder | null }): Promise<number> {
+// R-5: cùng máy/quy cách và cùng ngày bắt đầu/kết thúc ở múi giờ VN.
+type GroupRow = { id: string; machineId: string; orderId: string; startDate: Date; endDate: Date; order?: SpecOrder | null }
+
+function groupWhere(row: GroupRow) {
   const same = specWhere(row.order)
-  if (!same) return 0
-  return tx.machineAssignment.count({
-    where: {
-      id: { not: row.id }, orderId: { not: row.orderId }, machineId: row.machineId, order: same,
-      startDate: { lte: row.endDate }, endDate: { gte: row.startDate },
+  if (!same) return null
+  return {
+    machineId: row.machineId, order: same,
+    startDate: {
+      gte: new Date(`${scheduleDay(row.startDate)}T00:00:00+07:00`),
+      lte: new Date(`${scheduleDay(row.startDate)}T23:59:59.999+07:00`),
     },
+    endDate: {
+      gte: new Date(`${scheduleDay(row.endDate)}T00:00:00+07:00`),
+      lte: new Date(`${scheduleDay(row.endDate)}T23:59:59.999+07:00`),
+    },
+  }
+}
+
+// Đếm bạn KHÁC dòng cho các thao tác chỉ đổi một dòng (swap).
+export async function groupMateCount(tx: Prisma.TransactionClient, row: GroupRow): Promise<number> {
+  const where = groupWhere(row)
+  if (!where) return 0
+  return tx.machineAssignment.count({
+    where: { ...where, id: { not: row.id }, orderId: { not: row.orderId } },
   })
 }
-export const GROUPED_ASSIGNMENT_MESSAGE = (n: number) => `Lịch đang xếp chung ${n + 1} dòng. Dùng Chuyển máy hoặc Dời ngày (đi cả nhóm), hoặc Gỡ lịch rồi xếp lại.`
+
+// Nạp cả nguồn và các lịch trùng dòng để split phát hiện dữ liệu cũ không hợp lệ.
+export async function groupMembers(tx: Prisma.TransactionClient, row: GroupRow) {
+  const where = groupWhere(row)
+  if (!where) return null
+  return tx.machineAssignment.findMany({ where, include: { order: true }, orderBy: { id: 'asc' } })
+}
+
+export const GROUPED_ASSIGNMENT_MESSAGE = (n: number, notStarted = false) => notStarted
+  ? `Lịch đang xếp chung ${n + 1} dòng và chưa bắt đầu: tick thanh nhóm rồi dùng Chuyển máy/Dời ngày (đi cả nhóm).`
+  : `Lịch đang xếp chung ${n + 1} dòng. Dùng Chuyển máy hoặc Dời ngày (đi cả nhóm), hoặc Gỡ lịch rồi xếp lại.`
 
 // group: lịch của cùng nhóm quy cách (cùng máy) không bị coi là chồng; khác nhóm hoặc thiếu dữ liệu quy cách vẫn chặn.
 // R-2: chỉ miễn lịch của dòng KHÁC. ownOrderIds = các dòng đang được lưu; lịch cũ của chính các dòng này vẫn bị chặn (không tạo lịch trùng cùng dòng).

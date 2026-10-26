@@ -456,7 +456,7 @@ export default function DetailModal({ isOpen, onClose, assignment, onSuccess, gr
         )}
       </div>
     </div>
-    {transferOpen&&<TransferAssignmentModal assignment={assignment} onClose={closeTransfer} onSuccess={()=>{onSuccess();onClose()}}/>}
+    {transferOpen&&<TransferAssignmentModal assignment={assignment} groupMembers={groupMembers} onClose={closeTransfer} onSuccess={()=>{onSuccess();onClose()}}/>}
     </>
   )
 }

@@ -63,7 +63,11 @@ export async function GET(_req: NextRequest, { params }: Params) {
   const minStart = assignments.map(a => a.startDate).reduce((m, d) => (d < m ? d : m))
   const maxEnd = assignments.map(a => a.endDate).reduce((m, d) => (d > m ? d : m))
   const sharing = await prisma.machineAssignment.findMany({
-    where: { machineId: { in: Array.from(new Set(assignments.map(a => a.machineId))) }, startDate: { lte: maxEnd }, endDate: { gte: minStart } },
+    where: {
+      machineId: { in: Array.from(new Set(assignments.map(a => a.machineId))) },
+      startDate: { lte: new Date(`${scheduleDay(maxEnd)}T23:59:59.999+07:00`) },
+      endDate: { gte: new Date(`${scheduleDay(minStart)}T00:00:00+07:00`) },
+    },
     select: { orderId: true, machineId: true, startDate: true, endDate: true, allocatedMeters: true, order: { select: { lengthM: true } } },
   })
 
