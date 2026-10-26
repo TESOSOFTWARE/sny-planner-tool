@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { sameSpecGroup, specKey, specWhere, groupCandidates, roundMeters, assignmentGroups, expandToGroups } from './specGroup'
-import { overlapWhere } from './assignmentLock'
+import { groupMateCount, overlapWhere } from './assignmentLock'
+import type { Prisma } from '@prisma/client'
 
 const a = { piNumber: '26HSIA1001', widthM: 4.5, gsm: 230, color: 'BLACK', meshType: 'Shade net M+M' }
 
@@ -86,4 +87,35 @@ test('expandToGroups: tick 1 dòng nhóm = chọn cả nhóm; lịch lẻ giữ 
   assert.deepEqual(expandToGroups(['l1'], groups).sort(), ['l0', 'l1'])
   assert.deepEqual(expandToGroups(['solo', 'l0', 'l1'], groups).sort(), ['l0', 'l1', 'solo'])
   assert.deepEqual(expandToGroups(['unknown'], groups), ['unknown'])
+})
+
+test('2610-01 R-5: groupMateCount matches both VN days, including mixed legacy timestamps', async () => {
+  const row = { id: 'source', orderId: 'source-order', machineId: 'M-014', order: a,
+    startDate: new Date('2026-10-19T17:00:00Z'), endDate: new Date('2026-10-29T17:00:00Z') }
+  type Candidate = { startDate: Date; endDate: Date }
+  let candidates: Candidate[] = []
+  const tx = { machineAssignment: { count: async ({ where }: { where: {
+    id: { not: string }; orderId: { not: string }; machineId: string; order: unknown
+    startDate: { gte: Date; lte: Date }; endDate: { gte: Date; lte: Date }
+  } }) => {
+    assert.equal(where.id.not, row.id)
+    assert.equal(where.orderId.not, row.orderId)
+    assert.equal(where.machineId, row.machineId)
+    assert.deepEqual(where.order, specWhere(a))
+    assert.deepEqual(where.startDate, { gte: new Date('2026-10-19T17:00:00Z'), lte: new Date('2026-10-20T16:59:59.999Z') })
+    assert.deepEqual(where.endDate, { gte: new Date('2026-10-29T17:00:00Z'), lte: new Date('2026-10-30T16:59:59.999Z') })
+    return candidates.filter(candidate => candidate.startDate >= where.startDate.gte && candidate.startDate <= where.startDate.lte
+      && candidate.endDate >= where.endDate.gte && candidate.endDate <= where.endDate.lte).length
+  } } } as unknown as Prisma.TransactionClient
+
+  for (const [start, end, expected] of [
+    ['2026-10-20T00:00:00Z', '2026-10-29T00:00:00Z', 0], // overlap only: 20-29 vs 20-30
+    ['2026-10-19T17:00:00Z', '2026-10-29T17:00:00Z', 1], // identical timestamps
+    ['2026-10-20T00:00:00Z', '2026-10-30T00:00:00Z', 1], // same VN days, legacy UTC midnight
+    ['2026-10-20T17:00:00Z', '2026-10-30T00:00:00Z', 0], // different start day
+    ['2026-10-20T00:00:00Z', '2026-10-30T17:00:00Z', 0], // different end day
+  ] as const) {
+    candidates = [{ startDate: new Date(start), endDate: new Date(end) }]
+    assert.equal(await groupMateCount(tx, row), expected, `${start} - ${end}`)
+  }
 })

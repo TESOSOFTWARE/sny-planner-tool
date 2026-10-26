@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { specWhere, type SpecOrder } from './specGroup'
+import { scheduleDay } from './importSafety'
 
 export const ASSIGNMENT_RETRY_MESSAGE = 'Đang có thao tác khác trên lịch máy. Vui lòng thử lại.'
 
@@ -21,7 +22,7 @@ export function isLockRetryable(error: unknown): boolean {
   return 'code' in error.meta && error.meta.code === '55P03'
 }
 
-// R-4: lịch đang nằm trong thanh xếp chung = có lịch KHÁC dòng, cùng nhóm quy cách, cùng máy, chồng ngày.
+// R-5: bạn nhóm = lịch KHÁC dòng, cùng máy/quy cách và cùng ngày bắt đầu/kết thúc ở múi giờ VN.
 // swap/split chỉ đổi 1 dòng nên sẽ tách nhóm khó hiểu -> chặn, hướng người dùng sang Chuyển máy/Dời ngày (đi cả nhóm).
 export async function groupMateCount(tx: Prisma.TransactionClient, row: { id: string; machineId: string; orderId: string; startDate: Date; endDate: Date; order?: SpecOrder | null }): Promise<number> {
   const same = specWhere(row.order)
@@ -29,7 +30,14 @@ export async function groupMateCount(tx: Prisma.TransactionClient, row: { id: st
   return tx.machineAssignment.count({
     where: {
       id: { not: row.id }, orderId: { not: row.orderId }, machineId: row.machineId, order: same,
-      startDate: { lte: row.endDate }, endDate: { gte: row.startDate },
+      startDate: {
+        gte: new Date(`${scheduleDay(row.startDate)}T00:00:00+07:00`),
+        lte: new Date(`${scheduleDay(row.startDate)}T23:59:59.999+07:00`),
+      },
+      endDate: {
+        gte: new Date(`${scheduleDay(row.endDate)}T00:00:00+07:00`),
+        lte: new Date(`${scheduleDay(row.endDate)}T23:59:59.999+07:00`),
+      },
     },
   })
 }
