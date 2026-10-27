@@ -13,6 +13,7 @@ type RouteContext = { params: { id: string } }
 
 const updateMaterialSchema = z.object({
   ...materialTaxonomyShape,
+  name: z.string().trim().min(1).max(120).optional(),
   currentStock: z
     .number({ message: 'Tồn kho phải là số' })
     .finite()
@@ -68,6 +69,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
   const data = parsed.data
   const updateData: any = {}
 
+  if (data.name !== undefined) updateData.name = data.name
   if (data.currentStock !== undefined) updateData.currentStock = data.currentStock
   if (data.minThreshold !== undefined) updateData.minThreshold = data.minThreshold
   if (data.note !== undefined) updateData.note = data.note
@@ -86,6 +88,11 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
       const current = await tx.material.findUnique({ where: { id }, include: { reportSnapshots: { take: 1 } } })
       if (!current) throw Object.assign(new Error('NOT_FOUND'), { code: 'P2025' })
       const nextGroup = data.group ?? current.group
+      if (data.name !== undefined || data.group !== undefined) {
+        const peers = await tx.material.findMany({ where: { group: nextGroup }, select: { id: true, name: true, group: true } })
+        const target = (data.name ?? current.name).trim().replace(/\s+/g, ' ').toUpperCase()
+        if (peers.some(peer => peer.id !== id && peer.name.trim().replace(/\s+/g, ' ').toUpperCase() === target)) throw Object.assign(new Error('DUPLICATE_NAME'), { code: 'DUPLICATE_NAME' })
+      }
       if (!taxonomyMatchesGroup(nextGroup, data)) throw Object.assign(new Error('INVALID_TAXONOMY'), { code: 'INVALID_TAXONOMY' })
       if (data.group !== undefined && data.group !== current.group) {
         if (nextGroup !== 'HDPE') updateData.subGroup = null
@@ -108,6 +115,7 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
 
     return NextResponse.json({ success: true, material: serialized })
   } catch (err: unknown) {
+    if (err && typeof err === 'object' && 'code' in err && err.code === 'DUPLICATE_NAME') return NextResponse.json({ success: false, error: 'Đã có vật tư cùng tên trong nhóm.' }, { status: 409 })
     if (err && typeof err === 'object' && 'code' in err && err.code === 'INVALID_TAXONOMY') return NextResponse.json({ success: false, error: 'Phân loại nhựa chỉ dùng cho HDPE; độ bền màu chỉ dùng cho MB.' }, { status: 422 })
 
     if (
