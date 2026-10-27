@@ -11,7 +11,7 @@ test('TC-01-01 seven outcomes follow priority and normalization',()=>{
  const materials=[material,...['AMB','AMB','FUTURE','SAME','DIFF'].map((name,i)=>({...material,id:String(i),name,stockReportDate:name==='FUTURE'?new Date('2026-04-01Z'):material.stockReportDate}))]
  const snapshots=[{materialId:'3',reportDate:new Date('2026-04-04Z'),payload:historyPayload({...row,materialName:'SAME'})},{materialId:'4',reportDate:new Date('2026-04-04Z'),payload:historyPayload({...row,materialName:'DIFF',lastStock:99})}]
  const plan=planHistoryImport(rows,materials,snapshots,file)
- assert.deepEqual(Object.values(plan.preview.counts),[1,1,1,1,1,1,1]);assert.equal(plan.writes.length,1)
+ assert.deepEqual(Object.values(plan.preview.counts),[1,1,1,1,1,2]);assert.equal(plan.writes.length,2)
 })
 test('TC-01-02 combined period and missing source cells remain intact',()=>{
  const merged={...row,sourceDateLabel:'04+05/04/2026',reportPeriodEnd:'2026-04-05',missingFields:['inQty']}
