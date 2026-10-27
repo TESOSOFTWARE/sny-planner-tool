@@ -58,6 +58,7 @@ interface Props {
 export default function EditMaterialModal({ material, onUpdated, onClose }: Props) {
   const modalRef = useRef<HTMLDivElement>(null)
   useScheduleModalFocus(true, onClose, modalRef)
+  const [name, setName] = useState(material.name)
   const [group, setGroup]               = useState<'HDPE' | 'MB' | 'KOREA'>(material.group)
   const [subGroup, setSubGroup] = useState<'NGUYEN_SINH' | 'TAI_CHE' | ''>(material.subGroup ?? '')
   const [lightFastness, setLightFastness] = useState(material.lightFastness ?? '')
@@ -90,6 +91,7 @@ export default function EditMaterialModal({ material, onUpdated, onClose }: Prop
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          name: name.trim(),
           group,
           subGroup: group === 'HDPE' ? subGroup || null : null,
           lightFastness: group === 'MB' ? lightFastness.trim() || null : null,
@@ -146,9 +148,11 @@ export default function EditMaterialModal({ material, onUpdated, onClose }: Prop
             <label className="block text-xs font-medium text-secondary mb-1">Tên nguyên liệu</label>
             <input
               type="text"
-              readOnly
-              value={material.name}
-              className={inputCls() + ' bg-surface-container opacity-60 cursor-not-allowed'}
+              required
+              maxLength={120}
+              value={name}
+              onChange={e => setName(e.target.value)}
+              className={inputCls()}
             />
           </div>
 

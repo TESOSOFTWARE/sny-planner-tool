@@ -21,3 +21,10 @@ test('mapping two aliases to one material on same date is rejected', () => { con
 test('same resolved aliases on separate dates are accepted', () => { const key=materialReportKey('HDPE','alias'); assert.equal(plan([base,{...base,materialName:'alias',reportDate:'2026-10-24'}],[m],[],{[key]:{action:'map',materialId:'m1'}}).writes.length,2) })
 test('same existing snapshot is identical', () => { const s={materialId:'m1',reportDate:new Date('2026-10-23Z'),payload:historyPayload(base)}; assert.equal(plan([base],[m],[s]).preview.counts.identical,1) })
 test('resolution and concurrent manual transaction affect preview hash', () => { const key=materialReportKey('HDPE','unknown'), rows=[{...base,materialName:'unknown'}]; assert.notEqual(plan(rows,[]).preview.expectedSnapshot,plan(rows,[],[],{[key]:{action:'create'}}).preview.expectedSnapshot); assert.notEqual(plan().preview.expectedSnapshot,plan([base],[m],[],{},[{id:'t1',materialId:'m1',txDate:new Date('2026-06-01Z')}]).preview.expectedSnapshot) })
+
+test('suggests existing shorter name as prefix of source name', () => {
+  const source = { ...base, materialName: 'HD GHI BLACK' }
+  const existing = { ...m, name: 'HD GHI' }
+  const result = plan([source], [existing])
+  assert.equal(result.preview.unknownMaterials[0].candidates[0]?.id, existing.id)
+})

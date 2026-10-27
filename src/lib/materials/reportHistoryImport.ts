@@ -33,7 +33,7 @@ export async function readHistoryFile(req: Request) {
   return { rows, file: { name, size: file.size }, expectedSnapshot: String(form.get('expectedSnapshot') ?? ''), resolutions: parseResolutions(form.get('resolutions')) }
 }
 
-export type HistoryRowStatus = 'invalid' | 'unknown_material' | 'ambiguous' | 'newer_than_stock' | 'identical' | 'conflict_existing' | 'new'
+export type HistoryRowStatus = 'invalid' | 'unknown_material' | 'ambiguous' | 'identical' | 'conflict_existing' | 'new'
 export type HistoryCounts = Record<HistoryRowStatus, number>
 export interface HistoryMaterial { id: string; name: string; group: string; stockReportDate: Date | null }
 export interface HistorySnapshot { materialId: string; reportDate: Date; payload: unknown }
@@ -47,8 +47,12 @@ export interface HistoryImportPreview {
   success: true; expectedSnapshot: string; totalRows: number; counts: HistoryCounts
   periods: Array<{ reportDate: string; reportPeriodEnd?: string; sourceDateLabel?: string; totalRows: number; counts: HistoryCounts }>
   skippedRows: HistorySkippedRow[]
+  unknownMaterials: Array<{ materialKey: string; name: string; group: string; periods: number; firstStock: number; lastStock: number; candidates: Array<{ id: string; name: string; currentStock: string }> }>
+  stockUpdates: StockChange[]
+  stockKept: StockKept[]
+  materials: Array<{ id: string; name: string; group: string }>
 }
-export function historyCounts(): HistoryCounts { return { invalid: 0, unknown_material: 0, ambiguous: 0, newer_than_stock: 0, identical: 0, conflict_existing: 0, new: 0 } }
+export function historyCounts(): HistoryCounts { return { invalid: 0, unknown_material: 0, ambiguous: 0, identical: 0, conflict_existing: 0, new: 0 } }
 export function historyPayload(row: ParsedMaterialReportDay) {
   return { ...materialReportPayload(row), ...(row.missingFields?.length ? { missingFields: row.missingFields } : {}), ...(row.sourceDateLabel ? { sourceDateLabel: row.sourceDateLabel } : {}), ...(row.reportPeriodEnd ? { reportPeriodEnd: row.reportPeriodEnd } : {}) }
 }
@@ -73,6 +77,7 @@ function similar(a: string, b: string): boolean {
   const x = a.trim().toUpperCase(), y = b.trim().toUpperCase()
   const first = x.match(/^[A-Z0-9-]+/)?.[0]
   if (first && first.length >= 3 && y.startsWith(first)) return true
+  if (y.length >= 4 && x.startsWith(y)) return true
   if (Math.abs(x.length - y.length) > 3) return false
   let prev = Array.from({ length: y.length + 1 }, (_, i) => i)
   for (let i = 1; i <= x.length; i++) {
@@ -204,6 +209,6 @@ export function planHistoryImport(rows: ParsedMaterialReportDay[], materials: Mo
   const snapshotState = [...snapshots].map(s => ({ materialId: s.materialId, date: iso(s.reportDate), payload: s.payload })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
   const materialState = [...materials].map(m => ({ id: m.id, name: m.name, group: m.group, stock: String(m.currentStock ?? ''), date: m.stockReportDate ? iso(m.stockReportDate) : null, dirty: m.stockReportDirty ?? false })).sort((a, b) => a.id.localeCompare(b.id))
   const txState = [...manualTransactions].map(t => ({ id: t.id, materialId: t.materialId, date: iso(t.txDate) })).sort((a, b) => a.id.localeCompare(b.id))
-  const preview = { success: true as const, expectedSnapshot: historyHash({ file, rows, resolutions: Object.fromEntries(Object.entries(resolutions).sort(([a], [b]) => a.localeCompare(b))), snapshotState, materialState, txState }), totalRows: rows.length, counts, periods: Array.from(periods.values()).sort((a, b) => a.reportDate.localeCompare(b.reportDate)), skippedRows, unknownMaterials: Array.from(unknownMaterials.values()), stockUpdates, stockKept }
+  const preview = { success: true as const, expectedSnapshot: historyHash({ file, rows, resolutions: Object.fromEntries(Object.entries(resolutions).sort(([a], [b]) => a.localeCompare(b))), snapshotState, materialState, txState }), totalRows: rows.length, counts, periods: Array.from(periods.values()).sort((a, b) => a.reportDate.localeCompare(b.reportDate)), skippedRows, unknownMaterials: Array.from(unknownMaterials.values()), stockUpdates, stockKept, materials: materials.map(m => ({ id: m.id, name: m.name, group: m.group })) }
   return { preview, writes, creations, stockUpdates, stockKept }
 }
