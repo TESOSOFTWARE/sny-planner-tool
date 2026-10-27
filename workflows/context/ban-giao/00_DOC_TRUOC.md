@@ -1,6 +1,6 @@
-# 00 — Đọc trước: bàn giao dự án SNY Planner (cập nhật 26/10/2026)
+# 00 — Đọc trước: bàn giao dự án SNY Planner (cập nhật 27/10/2026)
 
-> **Bản trong repo (public) đã lược bỏ thông tin hạ tầng / bảo mật.** Bản đầy đủ ở thư mục chung của nhóm `SNY/REPORT/BAN_GIAO_26102026/`. Mọi đường dẫn `REPORT/...` trong bộ này là thư mục chung đó, không nằm trong repo.
+> **Bản trong repo (public) đã lược bỏ thông tin hạ tầng / bảo mật.** Bản đầy đủ ở thư mục chung của nhóm `SNY/REPORT/BAN_GIAO_26102026/` (hỏi anh Trí). Mọi đường dẫn `REPORT/...` trong bộ này là thư mục chung đó, không nằm trong repo.
 
 Bộ tài liệu này dành cho **dev hoặc AI** nhận tiếp dự án. Đọc theo thứ tự 00 → 05; mỗi file ngắn, chi tiết dẫn link sang báo cáo gốc.
 
@@ -22,9 +22,9 @@ Mức bằng chứng ghi trong các file:
 | Thứ | Giá trị |
 |---|---|
 | Repo GitHub | `TESOSOFTWARE/sny-planner-tool` (public) |
-| Nhánh production | `main` @ `0f8ff9c` (26/10) — Vercel deploy từ đây |
-| Nhánh tích hợp | `develop` @ `c311637` |
-| Nhánh làm việc mới nhất | `feature/fb-1910` @ `9380d0f` (nội dung = `main`) |
+| Nhánh production | `main` @ `882665c` (27/10) — Vercel deploy từ đây khi **merge bằng nút web** |
+| Nhánh tích hợp | `develop` @ `00c834f` |
+| Nhánh làm việc mới nhất | `feature/fb-1910` @ `1c0e196` (nội dung = `main`) |
 | Nhánh cũ (đã merge hết) | `feature/implement-feedback-0710`, `feature/tribd-implement-sny-features`, `chore/vercel-probe` (xoá được) |
 | Thư mục trên máy anh Trí | `D:\TESO\BACKEND\DEV\SNY\sny-planner-tool` (đang ở nhánh cũ `0710`) và worktree `D:\TESO\BACKEND\DEV\SNY\sny-planner-tool-fb-1910` (nhánh mới nhất) |
 | Stack | Next.js 14.2 (App Router) · TypeScript · Tailwind 3.4 · Prisma 5.22 · PostgreSQL 18.6 (Neon) · xlsx · zod · react-hook-form · sonner |
@@ -45,7 +45,7 @@ Mức bằng chứng ghi trong các file:
 
 Thuật ngữ nghiệp vụ (PI, GSM, MB, FR, UV, denier, beam, giữ chỗ…): `REPORT/24092026/TU_DIEN_THUAT_NGU_VA_DATA_DICTIONARY_SNY.md`.
 
-**83 file test chỉ có trên máy anh Trí** (untracked trong worktree `fb-1910`, quyết định giữ local 19/10, card 1910-04 huỷ). Repo chỉ có 20 file test. Bàn giao sang máy khác thì phải chép riêng 83 file này, nếu không sẽ mất phần lớn bộ test.
+**83 file test chỉ có trên máy anh Trí** (untracked trong worktree `fb-1910`, quyết định giữ local 19/10, card 1910-04 huỷ). Repo có 26 file test (tính tới 27/10; test mới của card đặt tên `*.regression.test.ts` để commit được). Bàn giao sang máy khác thì phải chép riêng 83 file này, nếu không sẽ mất phần lớn bộ test.
 
 ## 3. Môi trường — đọc kỹ
 | Môi trường | Địa chỉ | Ghi chú |
