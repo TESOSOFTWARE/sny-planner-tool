@@ -281,14 +281,17 @@ function readDailyBlockDate(sheet: XLSX.WorkSheet, rows: unknown[][], headerInde
       const cell = sheet[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined
       if (!cell) continue
       if (typeof cell.v === 'string') {
-        const match = /^(\d{1,2})(?:\+(\d{1,2}))?\/(\d{1,2})\/(\d{4})$/.exec(cell.v.trim())
+        const match = /^(\d{1,2}(?:\+\d{1,2})*)\/(\d{1,2})\/(\d{4})$/.exec(cell.v.trim())
         if (!match) continue
-        const [first, last, month, year] = [Number(match[1]), Number(match[2] ?? match[1]), Number(match[3]), Number(match[4])]
-        const date = new Date(Date.UTC(year, month - 1, first))
-        const end = new Date(Date.UTC(year, month - 1, last))
-        if (date.getUTCMonth() !== month - 1 || end.getUTCMonth() !== month - 1 || last < first || year < 1900 || year > 2100) continue
-        const reportDate = date.toISOString().slice(0, 10)
-        dates.set(reportDate, { reportDate, sourceDateLabel: cell.v.trim(), ...(match[2] ? { reportPeriodEnd: end.toISOString().slice(0, 10) } : {}) })
+        const days = match[1].split('+').map(Number)
+        const month = Number(match[2])
+        const year = Number(match[3])
+        if (year < 1900 || year > 2100 || month < 1 || month > 12 ||
+            days.some((day, index) => day < 1 || (index > 0 && day <= days[index - 1]) ||
+              new Date(Date.UTC(year, month - 1, day)).getUTCMonth() !== month - 1)) continue
+        const reportDate = new Date(Date.UTC(year, month - 1, days[0])).toISOString().slice(0, 10)
+        const end = new Date(Date.UTC(year, month - 1, days[days.length - 1]))
+        dates.set(reportDate, { reportDate, sourceDateLabel: cell.v.trim(), ...(days.length > 1 ? { reportPeriodEnd: end.toISOString().slice(0, 10) } : {}) })
       } else if (typeof cell.v === 'number' && cell.z && XLSX.SSF.is_date(cell.z)) {
         const reportDate = serialToDate(cell.v, date1904)
         if (reportDate) dates.set(reportDate, { reportDate })

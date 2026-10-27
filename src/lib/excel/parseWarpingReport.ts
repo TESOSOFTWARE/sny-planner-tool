@@ -2,7 +2,7 @@
 // Server-only utility — parses SNY's daily Warping report (.xlsx), sheet "WARPING".
 //
 // Supports multi-day files:
-//   Each day block starts with a row containing "SNY VINA CO.,LTD."
+//   Each day block starts with a standalone "WARPING" title
 //   followed by a date cell (Excel serial number or text date e.g. "2026-07-20").
 //
 // Column mapping (0-indexed):
@@ -138,6 +138,10 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
   let currentDate: Date | null = null
   let currentMachineId: string | null = null
   let blockWeightSum = 0
+  let blockStart: number | null = null
+  let blockHasData = false
+  const populatedDates = new Map<string, number>()
+  const firstSheetRow = XLSX.utils.decode_range(ws['!ref'] ?? 'A1').s.r + 1
 
   // Default column positions for WARPING sheet
   let colShift    = 0  // STT / NO ("D" / "N")
@@ -158,25 +162,17 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
     const row = rows[r]
     if (!row || row.every(c => c === null || c === '')) continue
 
-    const rowStr = row.map(c => toStr(c)).join(' ').toUpperCase()
-
-    // ── 1. Day block header detection ("SNY VINA CO.,LTD.") ─────────────────
-    if (rowStr.includes('SNY VINA CO.,LTD') || rowStr.includes('SNY VINA CO., LTD')) {
-      const newDate = findDateInBlock(rows, r, 5)
-      if (newDate) {
-        currentDate = newDate
-      }
-      currentMachineId = null // reset machine when starting new day block
+    // Company name and WARPING title belong to the same block.
+    const nonEmptyCells = row.map(toStr).filter(Boolean)
+    if (nonEmptyCells.length === 1 && nonEmptyCells[0].toUpperCase() === 'WARPING') {
+      blockStart = firstSheetRow + r
+      blockHasData = false
+      currentDate = findDateInBlock(rows, r + 1, 1)
+      currentMachineId = null
+      blockWeightSum = 0
       continue
     }
 
-    // Fallback date detection if currentDate not set
-    if (!currentDate) {
-      const firstDate = findDateInBlock(rows, 0, 5)
-      if (firstDate) currentDate = firstDate
-    }
-
-    // ── 2. Machine block header detection ("MACHINE 1"..."MACHINE 6") ────────
     let foundMachineId: string | null = null
     for (const cell of row) {
       if (typeof cell === 'string') {
@@ -216,8 +212,6 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
       continue
     }
 
-    if (!currentMachineId || !currentDate) continue
-
     // ── 4. Skip TOTAL / SUMMARY rows ──────────────────────────────────────────
     const shiftCell = toStr(row[colShift]).toUpperCase().trim()
 
@@ -230,7 +224,7 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
       shiftCell.includes('CỘNG')
 
     if (isSkipRow) {
-      if (shiftCell === 'TOTAL' || shiftCell === 'TỔNG CỘNG') {
+      if (currentDate && currentMachineId && (shiftCell === 'TOTAL' || shiftCell === 'TỔNG CỘNG')) {
         const excelTotal = toNum(row[colTotal] ?? row[colWeight]) ?? 0
         if (excelTotal > 0 && Math.abs(excelTotal - blockWeightSum) > 0.01) {
           console.warn(
@@ -247,6 +241,16 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
     if (shift !== 'D' && shift !== 'N') continue
 
     const color = toStr(row[colColor])
+    const rawWeight = toNum(row[colWeight])
+    if (blockStart !== null && (color || (rawWeight != null && rawWeight > 0)) && !blockHasData) {
+      if (!currentDate) throw new Error(`Khối Warping bắt đầu dòng ${blockStart} không có ngày báo cáo; hệ thống chưa nhập dữ liệu.`)
+      const dateKey = currentDate.toISOString().slice(0, 10)
+      const previous = populatedDates.get(dateKey)
+      if (previous !== undefined) throw new Error(`Ngày Warping ${dateKey} trùng ở khối dòng ${previous} và ${blockStart}.`)
+      populatedDates.set(dateKey, blockStart)
+      blockHasData = true
+    }
+    if (!currentMachineId || !currentDate) continue
     if (!color) continue // require color name
 
     const weavingMachineRef = toStr(row[colWeaving]) || null
@@ -257,7 +261,6 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
     const weigValue         = toNum(row[colWeig])
     const beamCount2        = toNum(row[colBeam2])
     const quantity          = toNum(row[colQuantity])
-    const rawWeight         = toNum(row[colWeight])
     const weightKgs         = rawWeight != null ? Math.max(0, rawWeight) : 0
     const orderRef          = productionPi(row[colRemark])
 
