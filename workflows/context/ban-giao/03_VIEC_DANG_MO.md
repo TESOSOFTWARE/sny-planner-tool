@@ -1,4 +1,4 @@
-# 03 — Việc đang mở (26/10/2026), theo thứ tự ưu tiên
+# 03 — Việc đang mở (27/10/2026), theo thứ tự ưu tiên
 
 Người quyết: **anh Trí** (TESO). "Khách" = chị Dung / chị Nguyên / SNY. Không tự làm mục cần duyệt.
 
@@ -6,17 +6,18 @@ Người quyết: **anh Trí** (TESO). "Khách" = chị Dung / chị Nguyên / S
 | # | Việc | Ai | Chặn / ghi chú |
 |---|---|---|---|
 | 1 | **Đơn hàng trên prod gần như trống.** 19/10: 3.047 dòng đơn, 78 lịch. 26/10: **17 dòng / 6 PI**, 7 lịch. Khách xoá trong khoảng 19–22/10. Hỏi khách có chủ ý không; nếu lỡ tay thì khôi phục từ bản sao 19/10 | Anh Trí hỏi khách | Câu A1 trong `REPORT/22102026/CLAUDE/CAU_HOI_KHACH_22102026.md`. Đã có trong tin gửi khách 26/10 (bản dài); chưa có trả lời |
-| 2 | Việc bảo mật hạ tầng | Anh Trí | Xem bản đầy đủ trong `REPORT/BAN_GIAO_26102026/03_VIEC_DANG_MO.md` P0 #2 |
+| 2 | Việc bảo mật hạ tầng | Anh Trí | Xem bản đầy đủ `REPORT/BAN_GIAO_26102026/03_VIEC_DANG_MO.md` P0 #2 |
 | 3 | Gửi khách tin trả lời góp ý 22/10 (tìm đơn, xếp chung, chốt đơn) | Anh Trí | Đã soạn 26/10 trong phiên chat |
-| 4 | Buổi ~30 phút hướng dẫn tổ thống kê **nhập STATISTICAL REPORT tháng 10** (5 tab) và xem "Tiến độ sản xuất" | Anh Trí + khách | Khách phản hồi 26/10 "chưa lên được sản lượng": chức năng có, chưa có dữ liệu tháng 10 (`REPORT/26102026/CLAUDE/DIEU_TRA_PHAN_HOI_KHACH_SAN_LUONG_SOI_26102026.md`) |
-| 5 | Xoá 2 dòng sản lượng demo M-004 ngày 05–06/10 (`knitting_daily_output`, tạo 07/10) | Cần anh duyệt ghi DB | Sót từ đợt dọn demo 15/10 |
+| 4 | ✅ **Sản lượng T10 đã nhập prod 27/10** (TESO nhập qua route của app, backup trước): Knitting tổng 760, Extruder 757, Warping 146, Rolling 1.074. Tiến độ 26HF1001 ra 1.980 m. Còn: hướng dẫn khách tự nhập **từ tháng 11** | Anh Trí + khách | `REPORT/27102026/CLAUDE/NHAP_KNITTING_T10_PRODUCTION_27102026.md`, `NHAP_EXT_ROLL_WARP_T10_PRODUCTION_27102026.md` |
+| 4b | **HDPE T10 chưa nhập.** Khách cần xác nhận câu **A2**: 4 cặp nghi đổi tên (`9043 BRROWN→9043 BROWN`, `HD GHI→HD GHI BLACK`, `MED1307 D GREY MRD→…MED`, `8046-2 LIGHT GREEN→…LIME GREEN`), `6034-1 BLUE` (150 kg 14/05, biến mất ở T10), và sửa `9043 BRROWN` trong file các tháng sau. Sau đó: đổi tên 4 vật tư (Sửa vật tư) → nhập lịch sử T10 → 125 vật tư đổi tồn. Đề xuất gửi khách bảng 125 vật tư "tồn trước → sau" duyệt trước; khách bấm Ghi, TESO kèm | Anh Trí gửi A2 | `REPORT/27102026/CLAUDE/DOI_CHIEU_TEN_VAT_TU_HDPE_T10_27102026.md`, `BO_CAU_HOI_PHAN_TICH_27102026.md`, card 2710-03 mục C |
+| 5 | ✅ 2 dòng sản lượng demo M-004 05–06/10 đã bị ghi đè bằng số thật khi nhập Knitting T10 (27/10) | — | — |
 | 6 | Chị Dung gỡ 3 ô HSIA cũ (M-014, 26–28/10) rồi xếp lại thành 1 thanh | Khách | Lịch cũ không tự gộp (chốt 22/10) |
 
 ## P1 — cần chốt scope với khách
 | # | Việc | Tình trạng | Cần |
 |---|---|---|---|
 | 7 | **Công thức sợi theo beam** (`User Raw Documents/Formular.xlsx`): số mét/beam = kg × 9.000.000 ÷ số sợi ÷ denier; số sợi/beam = khổ(cm) × loss kim × số kim × số khổ ÷ 2,54 ÷ số beam | Chưa có trong code, **không có trong MoM 07/10** | Khách xác nhận "công thức tính sợi" là cái này. Nếu có: card mới (hàm thuần + 4 ô nhập denier/số kim/số khổ/số beam, hiện ở Chi tiết đơn và tab Warping). Cột `needleCount`, `beamCount` đã có |
-| 8 | **Tổng hợp sản lượng theo PI** (MoM §3.4, H1) | Hoãn 09/10 | Khách cho biết cách gắn PI: ghi PI ở cột RE MARK (parser đã hỗ trợ từ 14/10) hay chọn PI khi nhập |
+| 8 | **Tổng hợp sản lượng theo PI** (MoM §3.4, H1) | **Anh Trí chốt mở 27/10 (B3)**: card 2710-04 tổng hợp theo mã PI ghi trong file (chưa cần gắn đơn). T10 có 799/2.367 dòng Knitting Detail ghi mã PI (18 mã, 3 mã viết lệch) | Viết card 2710-04 (chưa viết) |
 | 9 | Sửa nhiều lịch GĐ2–3 | Chờ khách câu 2, 3, 4, 6 | `REPORT/16102026/CLAUDE/PLAN_GIAI_PHAP_SUA_NHIEU_LICH_16102026.md:86-92` |
 | 10 | Lịch nghỉ tháng 11–12/2026 | Đã có tới 02/11 | Khách gửi (câu A4) |
 | 11 | Câu 12: số máy / khổ máy lệch 10/40 máy giữa báo cáo KNITTING và Production Schedule | Chưa hỏi | Có thể làm tiến độ theo đơn gán nhầm máy |
@@ -35,6 +36,10 @@ Người quyết: **anh Trí** (TESO). "Khách" = chị Dung / chị Nguyên / S
 | U-3 | 409 trùng lịch nói rõ trùng PI / ngày nào | Test 22/10 |
 | — | Chuyển máy nhóm trên prod mất ~10 s (serverless + LOCK TABLE); thêm thông báo "đang xử lý" nếu khách than | Kiểm prod 26/10 |
 | 1910-09 | Nhật ký xoá đơn (cần schema) | Hoãn tới trước go-live |
+| — | Confirm Knitting tổng `upsert` tuần tự (760 dòng ~45 s) — có thể timeout trên Vercel với file lớn | Nhập T10 27/10 |
+| — | `recordsDeleted` ở confirm Extruder/Warping trả số nhóm máy×ngày, không phải số dòng xoá → đổi nhãn | Nhập T10 27/10 |
+| — | `loadMonthlyHistoryState` nạp toàn bộ ảnh chụp (~3 s, +2.500/tháng); danh sách Ánh xạ chưa có ô tìm (117 vật tư MB) | Review 2710-03 |
+| — | Cảnh báo "TOTAL lệch" ở Extruder EXT-08 và Warping là báo nhầm (cột TOTAL là lũy kế tháng) — chỉ ồn log | Dry-run T10 |
 | — | `MaterialTransaction.orderId` thiếu relation + index | BACKLOG C |
 
 ## P3 — card đã viết 19/10, **chưa làm** (đang xếp hàng)
@@ -52,6 +57,7 @@ Kiểm 26/10: không có commit, không có stash, không có file chưa commit,
 
 ## P4 — dọn dẹp
 - Xoá nhánh remote `chore/vercel-probe` (cần `XAC_NHAN_GITHUB`).
+- Gắn tag mốc `sny-prod-20261027-pre-2710` → `530a10c` (production trước đợt 27/10) nếu cần quay lại.
 - Thư mục chính `sny-planner-tool` đang ở nhánh cũ `0710`: `git checkout develop && git pull`, rồi bỏ worktree `sny-planner-tool-fb-1910` **sau khi chép 83 file test local**.
 - `REPORT/BACKLOG.md` dài, nhiều dòng lỗi thời (danh sách đề xuất dọn: `REPORT/19102026/CLAUDE/TONG_HOP_PENDING_19102026.md` mục 5).
 - Push/PR dùng tài khoản GitHub có quyền write vào `TESOSOFTWARE/sny-planner-tool` (hỏi anh Trí).

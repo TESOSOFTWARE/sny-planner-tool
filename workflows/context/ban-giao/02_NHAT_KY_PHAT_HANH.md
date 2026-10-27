@@ -14,7 +14,8 @@ Nguồn: `gh pr list` (22 PR), `git log origin/main`, tag, `REPORT/<ngày>/`. Ng
 | 08–14/10 | Làm MoM + FB 12/10 | Lịch nghỉ, công thức ngày, chuyển/đảo/máy hư, 5 tab Materials, import lịch thật, ORDER LIST 3.004 dòng lên prod; PR #7–#12 | `REPORT/12102026/CLAUDE/DOI_CHIEU_MOM_07102026_12102026.md`, `REPORT/14102026/CLAUDE/BRIEF_BAN_GIAO_AI_14102026.md` |
 | 15–19/10 | FB 15/10 + nợ kỹ thuật Materials | Chọn nhiều/sửa nhiều lịch, xoá hàng loạt đơn, UI Materials, Knitting TOTAL; PR #13–#16, release 19/10 | `REPORT/19102026/CLAUDE/KIEM_NGHIEM_CUOI_DOT_RELEASE_19102026.md` |
 | 20–22/10 | FB 22/10 chị Dung + chị Nguyên | Tìm đơn, xếp chung nhóm, chốt đơn, xoá đơn từ lịch; test thật TEST-2210; PR #17–#19 | `REPORT/22102026/CLAUDE/REPORT_TEST_THAT_TEST-2210_22102026.md` |
-| 26/10 | Review chéo + vá + điều tra Vercel | 2610-01 (R-1/2/4/5), 2610-02 (máy hư cho nhóm); tìm ra lỗi deploy Vercel; PR #20–#22 | `REPORT/26102026/CLAUDE/REVIEW_CODEX_2610-02_26102026.md` |
+| 26/10 | Review chéo + vá + điều tra Vercel | 2610-01 (R-1/2/4/5), 2610-02 (máy hư cho nhóm); tìm ra lỗi deploy Vercel; PR #20–#22; bộ bàn giao (PR #23–#26) | `REPORT/26102026/CLAUDE/REVIEW_CODEX_2610-02_26102026.md` |
+| 27/10 | File STATISTICAL REPORT 10-2026 của khách | Warping theo khối (2710-01), HDPE kỳ gộp N ngày (2710-02), HDPE nhập theo tháng D1→B+ (2710-03a/b/c); PR #27–#29; nhập sản lượng T10 lên prod (Knitting, Extruder, Warping, Rolling) | `REPORT/27102026/CLAUDE/BAO_CAO_TONG_KET_27102026.md` |
 
 ## 2. Danh sách PR
 | PR | Ngày merge | Nhánh | Nội dung |
@@ -39,11 +40,20 @@ Nguồn: `gh pr list` (22 PR), `git log origin/main`, tag, `REPORT/<ngày>/`. Ng
 | #19 | 22/10 | develop → main | Commit rỗng ép deploy — **vẫn không deploy** |
 | #20 | 26/10 | chore/vercel-probe → main | Thử nghiệm: merge bằng nút web → **deploy ngay** |
 | #21 | 26/10 | fb-1910 → develop | 2610-01 + 2610-02 |
-| #22 | 26/10 | develop → main | Release 26/10 (production hiện tại `0f8ff9c`) |
+| #22 | 26/10 | develop → main | Release 26/10 (`0f8ff9c`) |
+| #23–#26 | 26/10 | fb-1910 ↔ develop ↔ main | Bộ tài liệu bàn giao (chỉ docs) |
+| #27 | 27/10 | fb-1910 → develop | 2710-01, 2710-02, 2710-03a, 2710-03b |
+| #28 | 27/10 | develop → main | Release 27/10 (production hiện tại `882665c`) |
+| #29 | 27/10 | fb-1910 → develop | 2710-03c (vào `main` qua #28) |
 
 ## 3. Commit tính năng gần nhất trên `main`
 | Commit | Ngày | Card | Nội dung |
 |---|---|---|---|
+| `1c0e196` | 27/10 | 2710-03c | So sánh ảnh chụp theo vật tư đã xác định (không theo tên nguồn); cập nhật test đã track |
+| `d3a019c` | 27/10 | 2710-03b | UI nhập lịch sử 3 lựa chọn + khối "Sau khi nhập"; sửa tên vật tư |
+| `33570d9` | 27/10 | 2710-03a | Nhập HDPE theo tháng: nhận mọi kỳ, cập nhật tồn bảo thủ, kỳ chồng nhau, ánh xạ tên |
+| `e776b1c` | 27/10 | 2710-02 | HDPE nhận kỳ gộp `dd+dd+dd/MM/yyyy` |
+| `1d80172` | 27/10 | 2710-01 | Warping nhận khối theo tiêu đề `WARPING`; chặn khối thiếu ngày / trùng ngày |
 | `9380d0f` | 26/10 | 2610-02 | Máy hư khi nhóm xếp chung đang chạy |
 | `57fedb4` | 26/10 | 2610-01 | Làm tròn tổng mét nhóm, chặn dòng thiếu mét, biên ngày VN cho chia sản lượng và bạn nhóm |
 | `f93421a` | 22/10 | 2210-05 | Test specGroup, outputShare, picker |
@@ -60,6 +70,8 @@ Nguồn: `gh pr list` (22 PR), `git log origin/main`, tag, `REPORT/<ngày>/`. Ng
 | `sny-feedback-20261013` | `9f4f482` | Mốc 13/10 |
 | `sny-prod-20261019-pre-fb1910` | `f877e1d` | Production trước đợt 19/10 |
 | `sny-prod-20261022-pre-fb1910-2210` | `304c12d` | Production trước đợt 22/10 + 26/10 |
+
+Production trước đợt 27/10 = `main` `530a10c` (chưa gắn tag). Backup DB 27/10 trong `REPORT/27102026/CLAUDE/backup-db/`.
 
 Quay lại nhanh nhất: Vercel → Deployments → **Instant Rollback** về bản trước. Không đổi schema từ 19/10 nên rollback code không cần rollback DB.
 

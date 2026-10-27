@@ -2,6 +2,8 @@
 
 Nguồn luật duy nhất của repo. Mỗi luật chỉ sống ở 1 nơi; skill/reference chỉ trỏ về đây.
 
+> Tiếp nhận dự án / phiên mới: đọc `workflows/context/ban-giao/00_DOC_TRUOC.md` (trạng thái, nhánh, môi trường, quyết định, bẫy) trước khi làm việc.
+
 ## Truy vết yêu cầu
 - Mọi đầu việc phải gắn nguồn: `[MoM §x.y]` hoặc `[NỢ KỸ THUẬT]`. Không gắn được thì dừng, hỏi lại.
 - Không mở việc `[NỢ KỸ THUẬT]` khi còn mục MoM chưa động tới, trừ khi nó đang chặn chính mục đó.
