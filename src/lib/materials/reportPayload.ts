@@ -19,7 +19,7 @@ export function sameMaterialReport(payload: unknown, row: ParsedMaterialRow) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false
   const stored = payload as Record<string, unknown>
   const proposed = materialReportPayload(row)
-  const keys = [...Object.keys(proposed), 'subGroup', 'lightFastness', 'color', 'colorName', 'brand', 'itemCode']
+  const keys = [...Object.keys(proposed).filter(key => key !== 'materialName'), 'subGroup', 'lightFastness', 'color', 'colorName', 'brand', 'itemCode']
   return keys.every(key => (stored[key] ?? null) === ((proposed as Record<string, unknown>)[key] ?? null))
 }
 

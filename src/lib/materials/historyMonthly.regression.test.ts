@@ -28,3 +28,15 @@ test('suggests existing shorter name as prefix of source name', () => {
   const result = plan([source], [existing])
   assert.equal(result.preview.unknownMaterials[0].candidates[0]?.id, existing.id)
 })
+
+test('mapped alias with matching snapshot values is identical while source name remains in payload', () => {
+  const alias = { ...base, materialName: 'SOURCE ALIAS' }
+  const snapshot = { materialId: 'm1', reportDate: new Date('2026-10-23Z'), payload: historyPayload(base) }
+  const key = materialReportKey('HDPE', alias.materialName)
+  const result = plan([alias], [m], [snapshot], { [key]: { action: 'map', materialId: 'm1' } })
+  assert.equal(result.preview.counts.identical, 1)
+  assert.equal(result.writes.length, 0)
+  assert.equal(historyPayload(alias).materialName, 'SOURCE ALIAS')
+  const changed = plan([{ ...alias, lastStock: 111 }], [m], [snapshot], { [key]: { action: 'map', materialId: 'm1' } })
+  assert.equal(changed.preview.counts.conflict_existing, 1)
+})
