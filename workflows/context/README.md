@@ -1,5 +1,7 @@
 # Context bàn giao SNY — đọc từ đây
 
+> **Trạng thái mới nhất (27/10/2026): đọc [`ban-giao/00_DOC_TRUOC.md`](ban-giao/00_DOC_TRUOC.md) trước.** Các file bên dưới là bối cảnh nghiệp vụ từ đợt tiếp nhận 22/09; vẫn đúng về nghiệp vụ nhưng không phản ánh code hiện tại.
+
 Cập nhật: 22/09/2026. Bộ tóm tắt dùng khi tiếp nhận dự án và lập kế hoạch thay đổi. Tài liệu gốc, code hiện tại và bằng chứng nghiệm thu có vai trò khác nhau; trạng thái “Done” trong bàn giao cũ không xác nhận bản đang chạy đã đúng.
 
 ## Nắm dự án trong 5 phút

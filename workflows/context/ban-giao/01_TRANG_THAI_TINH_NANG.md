@@ -1,4 +1,4 @@
-# 01 — Trạng thái tính năng (26/10/2026, theo code `main` @ `0f8ff9c`)
+# 01 — Trạng thái tính năng (27/10/2026, theo code `main` @ `882665c`)
 
 **Chưa mục nào được khách nghiệm thu (UAT).** "Đã có" dưới đây = đã ở `main` và đã deploy; mức kiểm ghi ở cột Bằng chứng (ký hiệu xem `00`).
 
@@ -50,8 +50,10 @@ Trạng thái: ✅ đã có · 🟡 một phần · ⏸ hoãn có chủ ý · �
 |---|---|---|---|---|
 | 5 tab HDPE / Extruder / Warping / Knitting / Rolling (gộp Đóng gói); ẩn tab Korea & Khác | ✅ | MoM §3.3 | `app/materials/page.tsx:126,217` | [KIỂM PROD] |
 | Bảng HDPE giống Excel (First / In / Broken / Xuất Tape / Reject / Out Useing / Last / AD / check), xem theo ngày, lịch sử nhiều kỳ | 🟡 | MoM §3.1 | `HDPETab.tsx`, `api/materials*`, `lib/excel/parseMaterialReport*.ts` | [KIỂM PROD] dữ liệu thật T4+T5 nạp 19/10. Cột THỰC TẾ không làm |
+| **Nhập HDPE theo tháng** (D1 → B+): lịch sử nhận mọi kỳ, kỳ gộp N ngày `dd+dd+dd/MM/yyyy`; tồn hiện tại = ảnh chụp mới nhất trong DB, **chỉ tự đè khi không có dấu vết chỉnh tay**; kỳ chồng nhau = xung đột; tên chưa có: Bỏ qua / Tạo mới / Ánh xạ (có gợi ý tên gần giống); khối "Sau khi nhập"; không tạo phiếu | ✅ | MoM §3.1, file T10 27/10 | `lib/materials/reportHistoryImport.ts`, `monthlyImportRules.ts`, `monthlyHistoryState.ts`, `api/materials/import-history*`, `ImportMaterialHistoryModal.tsx` | [KIỂM PROD] 27/10: xem trước T10 (19 kỳ, 125 vật tư đổi tồn) + **xác nhận thật bằng vật tư TEST** (tạo/ánh xạ/tồn/stale/idempotent). HDPE T10 thật **chưa nhập** (chờ khách xác nhận tên) |
+| Sửa tên vật tư (kiểm trùng cùng nhóm) | ✅ | 2710-03b | `api/materials/[id]` PATCH `name`, `EditMaterialModal.tsx` | [KIỂM LOCAL] UI 27/10 |
 | Phân loại nguyên sinh / tái chế / hạt màu; MB có màu, ITEM, hãng, độ bền màu | 🟡 | MoM §3.2 | `subGroup`, `lightFastness` (migration 08/10) | ITEM/tên màu còn trong JSON snapshot, chưa tách cột |
-| Import sản lượng Extruder, Warping, Knitting tổng, Knitting Detail, Rolling, Đóng gói | ✅ | MoM §3.3 | `Import*Modal.tsx`, `api/{extruder,warping,knitting}/*`, `api/materials/{rolling,packing}/*` | [KIỂM PROD] TESO nạp thử T4/T5. **Khách chưa nhập dữ liệu tháng 10** |
+| Import sản lượng Extruder, Warping, Knitting tổng, Knitting Detail, Rolling, Đóng gói | ✅ | MoM §3.3 | `Import*Modal.tsx`, `api/{extruder,warping,knitting}/*`, `api/materials/{rolling,packing}/*` | [KIỂM PROD] T4/T5 (19/10). **T10 đã nhập 27/10**: Knitting tổng 760, Extruder 757, Warping 146, Rolling 1.074. Warping nhận khối theo tiêu đề `WARPING` (2710-01) |
 | Vật tư xuất theo PI | ✅ | MoM §3.4 (O04 = ghi PI trên phiếu xuất) | 0810-16 | [ĐỌC CODE] |
 | **Tổng hợp sản lượng các công đoạn theo PI** | ⏸ | MoM §3.4 (H1) | — | File khách không có cột PI (0/1.590 dòng Knitting Detail gắn được PI). Anh Trí chốt hoãn 09/10 |
 | UI đồng bộ design system, phân trang, số kiểu VN | ✅ | Nợ kỹ thuật 1810-01/02a/05 | — | [KIỂM LOCAL] 19/10 |

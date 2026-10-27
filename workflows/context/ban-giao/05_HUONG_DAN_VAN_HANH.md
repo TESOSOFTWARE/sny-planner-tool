@@ -38,6 +38,14 @@ Bộ test route chính (local, untracked): `src/app/api/assignments/{route,split
 6. **Hậu kiểm:** đếm lại = mốc; lịch thật không đổi `updatedAt`; 0 vi phạm; 0 lỗi console.
 7. Ghi báo cáo vào `REPORT/<ngày>/CLAUDE/`. Lưu ý: route xoá/sửa hàng loạt để lại dòng `schedule_import_logs` (log hoàn tác), không ảnh hưởng dữ liệu.
 
+## 3b. Nhập báo cáo tháng của khách (STATISTICAL REPORT) — đã làm T10 ngày 27/10
+1. **Dry-run offline** trước: chạy đúng các parser của app trên file khách, không DB — `test-results/claude-review/dryrun-stat-report.ts "<file.xlsx>"`. Khách hay đổi bố cục (dòng tên công ty thành `%`, gộp ngày cuối tuần); bắt lỗi ở đây trước khi chạm DB.
+2. **Xem trước trên DB (chỉ đọc)** từng phần qua route `.../import`; so số với dry-run.
+3. **Backup** (`/pg-backup`) + **mốc chỉ đọc** (id + `updatedAt` các bảng đích).
+4. **Xác nhận** qua route `.../import/confirm` — gọi **đúng kiểu như modal**: Knitting tổng / Rolling / HDPE gửi **file multipart** (Rolling kèm `month`, `year`, `expectedSnapshot`; HDPE kèm `resolutions`, `expectedSnapshot`); Extruder / Warping gửi **JSON `{ rows: preview.rows }`**. Script phải **cắt sheet** như trình duyệt (`prepareReportUpload`), gửi file nguyên > 4,4 MB sẽ bị Vercel trả 413. Mẫu: `import-ext-warp-t10.ts`, `import-ext-roll-warp-t10.ts`.
+5. **Hậu kiểm**: dòng tháng cũ không đổi (so id), tổng tháng mới = tổng file.
+6. **HDPE**: chỉ nhập sau khi khách xác nhận tên vật tư mới/đổi tên; khách bấm Ghi trên màn hình, TESO kèm. Màn xem trước báo "N vật tư sẽ cập nhật tồn"; vật tư tạo tay hoặc có phiếu tay sẽ **giữ tồn**.
+
 ## 4. Quy trình phát hành
 1. Codex commit local trên `feature/fb-1910` (1 card / 1 commit), dừng.
 2. Claude review: đọc diff, **tự chạy lại test + tsc (+ build nếu đụng UI)**, ghi `REPORT/<ngày>/CLAUDE/REVIEW_CODEX_<card>_<ngày>.md`.
