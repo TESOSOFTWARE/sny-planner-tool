@@ -8,6 +8,8 @@ import { Inter, Noto_Sans_KR } from 'next/font/google'
 import './globals.css'
 import TopNav from '@/components/layout/TopNav'
 import SideNav from '@/components/layout/SideNav'
+import { headers } from 'next/headers'
+import { requireUser } from '@/lib/auth/session'
 
 const inter = Inter({
   subsets: ['latin'],
@@ -28,11 +30,13 @@ export const metadata: Metadata = {
     'Internal production planning tool for SNY factory, Vietnam. Manage orders, machine schedules, and materials.',
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const isLogin = headers().get('x-sny-path') === '/login'
+  const user = isLogin ? null : await requireUser()
   return (
     <html lang="en" className={`${inter.variable} ${noto.variable}`}>
       <head>
@@ -40,13 +44,13 @@ export default function RootLayout({
       </head>
       <body className="font-inter">
         {/* Fixed top navigation bar */}
-        <TopNav />
+        {!isLogin && <TopNav email={user?.email} />}
 
         {/* Fixed left side navigation bar */}
-        <SideNav />
+        {!isLogin && <SideNav />}
 
         {/* Main content area — offset for nav bars */}
-        <main className="pl-[72px] xl:pl-[280px] pt-[64px] min-h-screen bg-background">
+        <main className={isLogin ? '' : 'pl-[72px] xl:pl-[280px] pt-[64px] min-h-screen bg-background'}>
           {children}
         </main>
       </body>

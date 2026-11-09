@@ -1,9 +1,13 @@
+import { authError } from '@/lib/auth/session'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 // [MoM §3.1 / Q-17] Small PI-only suggestion payload, not the full order list.
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   const query = (req.nextUrl.searchParams.get('q') ?? '').trim()
   if (query.length > 200) return NextResponse.json({ success: false, error: 'Mã PI tìm kiếm quá dài.' }, { status: 422 })
   try {

@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/import/confirm/route.ts
 // POST /api/orders/import/confirm
 // Classifies the complete parsed list again inside a transaction and writes
@@ -59,6 +60,9 @@ function decisionErrors(decisions: OrderImportDecision[]): string[] {
 }
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let body: unknown
   try {
     body = await req.json()

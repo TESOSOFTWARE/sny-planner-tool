@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // [MoM §3.1] Atomic monthly snapshot import.
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
@@ -13,6 +14,9 @@ function lockUnavailable(error: unknown): boolean {
   return value.code === '55P03' || value.code === 'P2028' || value.code === 'P2034' || value.meta?.code === '55P03'
 }
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let input: Awaited<ReturnType<typeof readHistoryFile>>
   try {
     input = await readHistoryFile(req)

@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/materials/[id]/transactions/route.ts
 // GET  /api/materials/[id]/transactions — fetch transaction history for a material
 // POST /api/materials/[id]/transactions — create a new transaction + update currentStock
@@ -10,6 +11,9 @@ type Params = { params: { id: string } }
 // ── GET ───────────────────────────────────────────────────────────────────────
 
 export async function GET(_req: NextRequest, { params }: Params) {
+  const accessError = await authError('GET', _req)
+  if (accessError) return accessError
+
   const { id } = params
 
   try {
@@ -49,6 +53,9 @@ export async function GET(_req: NextRequest, { params }: Params) {
 // ── POST ──────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest, { params }: Params) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   const { id } = params
 
   let body: unknown

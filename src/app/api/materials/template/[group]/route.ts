@@ -1,7 +1,11 @@
+import { authError } from '@/lib/auth/session'
 import { NextRequest, NextResponse } from 'next/server'
 import * as XLSX from 'xlsx'
 
 export async function GET(req: NextRequest, { params }: { params: { group: string } }) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   try {
     const group = params.group.toUpperCase()
 

@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/bulk/route.ts
 // POST /api/orders/bulk
 // Bulk-paste uses the same server-side validation/classification policy as
@@ -55,6 +56,9 @@ function errorsFor(decisions: OrderImportDecision[]): string[] {
 }
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let body: unknown
   try {
     body = await req.json()

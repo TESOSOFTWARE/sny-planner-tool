@@ -1,9 +1,13 @@
+import { authError } from '@/lib/auth/session'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { issueTypes, summarizePiIssues } from '@/lib/materials/piIssues'
 
 export const dynamic = 'force-dynamic'
 export async function GET(_req: NextRequest, { params }: { params: { piNumber: string } }) {
+  const accessError = await authError('GET', _req)
+  if (accessError) return accessError
+
   const piNumber = params.piNumber.trim()
   if (!piNumber) return NextResponse.json({ success: false, error: 'Thiếu mã PI.' }, { status: 422 })
   try {

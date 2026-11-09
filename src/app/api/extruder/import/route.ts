@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/extruder/import/route.ts
 // POST /api/extruder/import
 // Preview-only: parse the EXTRUDER report file, return summary.
@@ -9,6 +10,9 @@ import { parseExtruderReport, type ExtruderRow } from '@/lib/excel/parseExtruder
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20 MB
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   // ── 1. Parse multipart ─────────────────────────────────────────────────────
   let formData: FormData
   try {

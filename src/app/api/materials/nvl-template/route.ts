@@ -1,8 +1,12 @@
+import { authError } from '@/lib/auth/session'
 import { NextResponse } from 'next/server'
 import * as fs from 'fs'
 import * as path from 'path'
 
-export async function GET() {
+export async function GET(authRequest: Request) {
+  const accessError = await authError('GET', authRequest)
+  if (accessError) return accessError
+
   try {
     const filePath = path.join(process.cwd(), 'public', 'templates', 'nvl-template.xlsx')
 

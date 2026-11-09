@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { withAssignmentLock, overlapWhere, isLockRetryable, ASSIGNMENT_RETRY_MESSAGE, groupMateCount, GROUPED_ASSIGNMENT_MESSAGE } from '@/lib/schedule/assignmentLock'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -6,6 +7,9 @@ import { scheduleDay } from '@/lib/schedule/importSafety'
 const swapSchema = z.object({ aId: z.string().min(1), bId: z.string().min(1) })
 
 export async function POST(request: Request) {
+  const accessError = await authError('POST', request)
+  if (accessError) return accessError
+
   let body: unknown
   try { body = await request.json() } catch {
     return NextResponse.json({ message: 'Nội dung yêu cầu không phải JSON hợp lệ.' }, { status: 400 })

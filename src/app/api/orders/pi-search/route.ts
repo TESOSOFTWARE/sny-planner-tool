@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // GET /api/orders/pi-search?q=xxx — tìm PI cũ để "Repeat of" (feedback 12/10 #1). Chỉ đọc.
 // q trống → 8 PI mới nhất (không tính placeholder); q có → khớp chứa trong số PI hoặc tên khách, không phân biệt hoa/thường.
 import { NextRequest, NextResponse } from 'next/server'
@@ -9,6 +10,9 @@ const querySchema = z.string().trim().max(50)
 const LIMIT = 8
 
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   const parsed = querySchema.safeParse(req.nextUrl.searchParams.get('q') ?? '')
   if (!parsed.success) return NextResponse.json({ error: 'Nội dung tìm PI không hợp lệ.' }, { status: 422 })
   const q = parsed.data

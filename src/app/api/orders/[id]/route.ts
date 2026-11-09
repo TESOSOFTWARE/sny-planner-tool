@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/[id]/route.ts
 // GET, PATCH, DELETE for a single ProductionOrder by cuid id.
 
@@ -96,6 +97,9 @@ function isStaleTimestamp(expected: string | undefined, actual: Date): boolean {
 }
 
 export async function GET(_req: NextRequest, context: RouteContext) {
+  const accessError = await authError('GET', _req)
+  if (accessError) return accessError
+
   const id = getId(context)
   try {
     const order = await prisma.productionOrder.findUnique({
@@ -111,6 +115,9 @@ export async function GET(_req: NextRequest, context: RouteContext) {
 }
 
 export async function PATCH(req: NextRequest, context: RouteContext) {
+  const accessError = await authError('PATCH', req)
+  if (accessError) return accessError
+
   const id = getId(context)
   let body: unknown
   try {
@@ -264,6 +271,9 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
 }
 
 export async function DELETE(_req: NextRequest, context: RouteContext) {
+  const accessError = await authError('DELETE', _req)
+  if (accessError) return accessError
+
   const id = getId(context)
   try {
     const result = await prisma.$transaction(async (tx) => {

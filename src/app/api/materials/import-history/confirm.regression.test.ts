@@ -1,3 +1,4 @@
+import { withTestSession } from '@/lib/auth/testSession'
 import test, { before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { NextRequest } from 'next/server'
@@ -36,7 +37,7 @@ const fake = { ...tx, $transaction: async (fn: (client: typeof tx) => Promise<un
 const singleton = globalThis as unknown as { prisma: unknown }, old = singleton.prisma
 let preview: typeof import('./route').POST
 let confirm: typeof import('./confirm/route').POST
-before(async () => { singleton.prisma = fake; preview = (await import('./route')).POST; confirm = (await import('./confirm/route')).POST })
+before(async () => { singleton.prisma = fake; preview = withTestSession((await import('./route')).POST, singleton.prisma); confirm = withTestSession((await import('./confirm/route')).POST, singleton.prisma) })
 after(() => { singleton.prisma = old })
 beforeEach(() => { snapshots = []; manual = []; updates = []; materials = [{ id: 'm1', name: 'MF', group: 'HDPE', currentStock: 90, stockReportDate: new Date('2026-05-14Z'), stockReportDirty: false }] })
 function request(hash?: string, resolutions?: string): NextRequest {

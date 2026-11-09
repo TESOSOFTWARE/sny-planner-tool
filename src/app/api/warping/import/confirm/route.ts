@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/warping/import/confirm/route.ts
 // POST /api/warping/import/confirm
 // Idempotent (Option B): xóa records cũ theo [machineId, reportDate] rồi insert mới.
@@ -32,6 +33,9 @@ const confirmBodySchema = z.object({
 })
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let body: unknown
   try {
     body = await req.json()

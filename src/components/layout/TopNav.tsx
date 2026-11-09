@@ -5,9 +5,19 @@
 // Navigation tabs removed — side nav is the single navigation source.
 
 import Link from 'next/link'
+import { useState } from 'react'
 import ToasterProvider from '@/components/ui/ToasterProvider'
 
-export default function TopNav() {
+export default function TopNav({ email }: { email?: string }) {
+  const [busy, setBusy] = useState(false), [error, setError] = useState('')
+  async function logout() {
+    setBusy(true); setError('')
+    try {
+      const response = await fetch('/api/auth/logout', { method: 'POST' })
+      if (!response.ok) throw new Error('logout')
+      window.location.assign('/login')
+    } catch { setError('Chưa đăng xuất được. Thử lại.'); setBusy(false) }
+  }
   return (
     <>
       <ToasterProvider />
@@ -23,6 +33,9 @@ export default function TopNav() {
 
         {/* Right: phase badge + icons */}
         <div className="flex items-center gap-3">
+          <span className="hidden md:block max-w-48 truncate text-sm" title={email}>{email}</span>
+          <button type="button" onClick={logout} disabled={busy} className="rounded border border-outline px-3 py-2 text-sm disabled:opacity-50">{busy ? 'Đang đăng xuất…' : 'Đăng xuất'}</button>
+          {error && <span role="alert" className="text-xs text-error">{error}</span>}
           <span className="text-label-sm font-inter font-medium text-on-surface-variant bg-surface-variant rounded-full px-3 py-1">
             Phase 1
           </span>
@@ -31,12 +44,6 @@ export default function TopNav() {
             className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-surface-container text-on-surface-variant transition-colors"
           >
             <span className="material-symbols-outlined text-[20px]">notifications</span>
-          </button>
-          <button
-            aria-label="Account"
-            className="w-9 h-9 flex items-center justify-center rounded-full bg-primary-container text-on-primary-container text-label-sm font-inter font-semibold hover:opacity-90 transition-opacity"
-          >
-            PA
           </button>
         </div>
       </div>

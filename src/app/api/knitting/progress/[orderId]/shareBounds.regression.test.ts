@@ -1,3 +1,4 @@
+import { withTestSession } from '@/lib/auth/testSession'
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { scheduleDay } from '@/lib/schedule/importSafety'
@@ -35,7 +36,7 @@ const prisma = {
 let GET: typeof import('./route').GET
 const singleton = globalThis as unknown as { prisma: unknown }
 const previous = singleton.prisma
-before(async () => { singleton.prisma = prisma; GET = (await import('./route')).GET })
+before(async () => { singleton.prisma = prisma; GET = withTestSession((await import('./route')).GET, singleton.prisma) })
 after(() => { singleton.prisma = previous })
 
 test('2610-01 R-1: VN-midnight and UTC-midnight schedules share 500 m equally', async () => {

@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/calendar/route.ts
 // GET    /api/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD  — nạp lịch nghỉ cho một khoảng
 // PUT    /api/calendar                                 — đánh dấu một ngày nghỉ/lễ/làm bù
@@ -16,6 +17,9 @@ import {
 } from '@/lib/validations/calendar'
 
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   const parsed = calendarRangeSchema.safeParse({
     from: req.nextUrl.searchParams.get('from') ?? '',
     to: req.nextUrl.searchParams.get('to') ?? '',
@@ -51,6 +55,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
+  const accessError = await authError('PUT', req)
+  if (accessError) return accessError
+
   let body: unknown
   try {
     body = await req.json()
@@ -84,6 +91,9 @@ export async function PUT(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const accessError = await authError('DELETE', req)
+  if (accessError) return accessError
+
   const parsed = deleteCalendarDaySchema.safeParse({ date: req.nextUrl.searchParams.get('date') ?? '' })
   if (!parsed.success) {
     return NextResponse.json(

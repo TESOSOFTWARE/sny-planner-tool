@@ -1,3 +1,4 @@
+import { withTestSession } from '@/lib/auth/testSession'
 ﻿import test, { before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -54,7 +55,7 @@ const prisma = { $transaction: async (fn: (tx: unknown) => Promise<unknown>) => 
 } }
 const singleton = globalThis as unknown as { prisma: unknown }, previous = singleton.prisma
 let POST: typeof import('./route').POST
-before(async () => { singleton.prisma = prisma; POST = (await import('./route')).POST })
+before(async () => { singleton.prisma = prisma; POST = withTestSession((await import('./route')).POST, singleton.prisma) })
 after(() => { singleton.prisma = previous })
 beforeEach(t => {
   if ('mock' in t) t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-28T05:00:00Z').getTime() })

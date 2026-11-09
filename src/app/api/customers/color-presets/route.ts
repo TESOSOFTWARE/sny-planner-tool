@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/customers/color-presets/route.ts
 // GET /api/customers/color-presets?customerId=... OR ?customerName=...
 // Returns array of ColorPreset for the specified customer.
@@ -7,6 +8,9 @@ import { prisma } from '@/lib/db'
 import { ColorPreset } from '@prisma/client'
 
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   const { searchParams } = new URL(req.url)
   const customerId = searchParams.get('customerId')?.trim()
   const customerName = searchParams.get('customerName')?.trim()

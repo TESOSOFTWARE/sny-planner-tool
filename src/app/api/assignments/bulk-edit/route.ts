@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { bulkEditCommitSchema } from '@/lib/validations/bulkEdit'
@@ -10,6 +11,9 @@ import { isLockRetryable, ASSIGNMENT_RETRY_MESSAGE } from '@/lib/schedule/assign
 
 export const maxDuration = 60
 export async function POST(request: Request) {
+  const accessError = await authError('POST', request)
+  if (accessError) return accessError
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'Dữ liệu JSON không hợp lệ.' }, { status: 422 }) }
   const parsed = bulkEditCommitSchema.safeParse(body)

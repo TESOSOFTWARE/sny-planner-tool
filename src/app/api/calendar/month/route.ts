@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { calendarMonthSchema, yearMonthSchema } from '@/lib/validations/calendar'
@@ -5,6 +6,9 @@ import { calendarMonthSchema, yearMonthSchema } from '@/lib/validations/calendar
 const monthSelect = { yearMonth: true, nonWorkingWeekdays: true, note: true } as const
 
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   const parsed = yearMonthSchema.safeParse(req.nextUrl.searchParams.get('yearMonth'))
   if (!parsed.success) return NextResponse.json({ success: false, error: parsed.error.issues[0]?.message }, { status: 400 })
   try {
@@ -16,6 +20,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
+  const accessError = await authError('PUT', req)
+  if (accessError) return accessError
+
   let body: unknown
   try { body = await req.json() } catch {
     return NextResponse.json({ success: false, error: 'Body không phải JSON hợp lệ' }, { status: 400 })
@@ -37,6 +44,9 @@ export async function PUT(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const accessError = await authError('DELETE', req)
+  if (accessError) return accessError
+
   const parsed = yearMonthSchema.safeParse(req.nextUrl.searchParams.get('yearMonth'))
   if (!parsed.success) return NextResponse.json({ success: false, error: parsed.error.issues[0]?.message }, { status: 400 })
   try {

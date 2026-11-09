@@ -1,3 +1,4 @@
+import { requireUser } from '@/lib/auth/session'
 // src/app/orders/pi/[piNumber]/page.tsx
 // Server Component — fetches all sub-lines for a given PI Number and renders PiMasterDetailEditor.
 
@@ -23,6 +24,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export const dynamic = 'force-dynamic'
 
 export default async function PiMasterDetailPage({ params }: Props) {
+  await requireUser()
+
   const piNumber = decodeURIComponent(params.piNumber)
 
   const orders = await prisma.productionOrder.findMany({

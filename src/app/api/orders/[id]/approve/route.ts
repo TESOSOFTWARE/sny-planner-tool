@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/[id]/approve/route.ts
 // POST /api/orders/[id]/approve
 // Validates every sub-line in the PI as an approved order before changing any
@@ -79,6 +80,9 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: { id: string } },
 ) {
+  const accessError = await authError('POST', _req)
+  if (accessError) return accessError
+
   try {
     const result = await prisma.$transaction(async (tx) => {
       const target = await tx.productionOrder.findUnique({ where: { id: params.id } })

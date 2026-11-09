@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { withAssignmentLock, overlapWhere, isLockRetryable, ASSIGNMENT_RETRY_MESSAGE, groupMembers, GROUPED_ASSIGNMENT_MESSAGE } from '@/lib/schedule/assignmentLock'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -119,5 +120,8 @@ async function splitAssignment(request: Request, now: Date) {
 }
 
 export async function POST(request: Request) {
+  const accessError = await authError('POST', request)
+  if (accessError) return accessError
+
   return splitAssignment(request, new Date())
 }

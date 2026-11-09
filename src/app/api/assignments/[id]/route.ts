@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { withAssignmentLock, overlapWhere, isLockRetryable, ASSIGNMENT_RETRY_MESSAGE } from '@/lib/schedule/assignmentLock'
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
@@ -12,6 +13,9 @@ export async function DELETE(
   request: Request,
   { params }: { params: { id: string } }
 ) {
+  const accessError = await authError('DELETE', request)
+  if (accessError) return accessError
+
   try {
     const id = params.id;
 
@@ -37,6 +41,9 @@ export async function PATCH(
   request: Request,
   { params }: { params: { id: string } }
 ) {
+  const accessError = await authError('PATCH', request)
+  if (accessError) return accessError
+
   try {
     const id = params.id;
     if (!id) return NextResponse.json({ message: "ID is required" }, { status: 400 });

@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/route.ts
 // POST /api/orders — validate and create a new ProductionOrder in the DB.
 
@@ -8,6 +9,9 @@ import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
 import { resolveLifecycle, cleanSubLineForValidation, clearHemmedFields } from '@/lib/validations/order'
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   // ── 1. Parse body ──────────────────────────────────────────────────────────
   let body: unknown
   try {

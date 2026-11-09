@@ -5,6 +5,28 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// [MoM 30/10 §4] Email/password access, without roles.
+model SnyUser {
+  id String @id @default(cuid())
+  email String @unique
+  passwordHash String
+  failedAttempts Int @default(0)
+  lockedUntil DateTime?
+  createdAt DateTime @default(now())
+  sessions SnySession[]
+  @@map("sny_users")
+}
+
+model SnySession {
+  tokenHash String @id
+  userId String
+  user SnyUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  @@index([expiresAt])
+  @@index([userId])
+  @@map("sny_sessions")
+}
+
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")

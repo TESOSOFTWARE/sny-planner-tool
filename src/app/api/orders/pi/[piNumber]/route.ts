@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/pi/[piNumber]/route.ts
 // GET & PUT for PI Master-Detail editing.
 // GET: Fetches all sub-lines for a given PI Number.
@@ -16,6 +17,9 @@ interface Props {
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest, { params }: Props) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   const piNumber = decodeURIComponent(params.piNumber)
 
   try {
@@ -78,6 +82,9 @@ export async function GET(req: NextRequest, { params }: Props) {
 }
 
 export async function PUT(req: NextRequest, { params }: Props) {
+  const accessError = await authError('PUT', req)
+  if (accessError) return accessError
+
   const piNumber = decodeURIComponent(params.piNumber)
 
   let body: any

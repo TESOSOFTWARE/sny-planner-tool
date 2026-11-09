@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/multi-line/route.ts
 // POST /api/orders/multi-line
 // Creates all sub-lines atomically after applying the same draft/approved
@@ -25,6 +26,9 @@ function numberOrNull(value: unknown): number | null {
 }
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let body: unknown
   try {
     body = await req.json()

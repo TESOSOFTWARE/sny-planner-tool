@@ -1,9 +1,13 @@
+import { authError } from '@/lib/auth/session'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   try {
     const { searchParams } = new URL(req.url)
     const startDate = searchParams.get('startDate')

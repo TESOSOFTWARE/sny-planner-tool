@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { createHash } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
@@ -65,6 +66,9 @@ function hashSnapshot(value: unknown): string {
 }
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let formData: FormData
   try {
     formData = await req.formData()

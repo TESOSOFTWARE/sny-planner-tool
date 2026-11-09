@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/materials/import-transactions/route.ts
 // Preview a selected material-report block. This route never writes.
 
@@ -35,6 +36,9 @@ function decisionError(code: string, error: string, extra: Record<string, unknow
 }
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let formData: FormData
   try { formData = await req.formData() } catch {
     return NextResponse.json({ success: false, code: 'INVALID_INPUT', error: 'Không đọc được form data.' }, { status: 400 })

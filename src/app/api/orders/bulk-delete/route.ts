@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // [FB 15/10 #1, D4; P1–P8] Explicit selection; no order audit schema in this tranche.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -18,6 +19,9 @@ class StaleSelection extends Error {
 type Reason = 'NOT_FOUND' | 'HAS_OUTPUT' | 'ASSIGNED' | 'HAS_OUTPUT_ON_SCHEDULE'
 
 export async function POST(request: Request) {
+  const accessError = await authError('POST', request)
+  if (accessError) return accessError
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'Dữ liệu JSON không hợp lệ.' }, { status: 422 }) }
   const parsed = schema.safeParse(body)

@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/knitting/progress/[orderId]/route.ts
 // GET /api/knitting/progress/[orderId]
 // Returns production progress for one order:
@@ -16,6 +17,9 @@ import { dayShare } from '@/lib/schedule/outputShare'
 interface Params { params: { orderId: string } }
 
 export async function GET(_req: NextRequest, { params }: Params) {
+  const accessError = await authError('GET', _req)
+  if (accessError) return accessError
+
   const { orderId } = params
 
   // ── 1. Fetch order ─────────────────────────────────────────────────────────

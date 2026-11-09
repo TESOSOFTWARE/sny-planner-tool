@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/schedule/import/confirm/route.ts
 // POST /api/schedule/import/confirm
 // Re-parses the source upload and validates preview/catalogue before the atomic transaction:
@@ -24,6 +25,9 @@ interface ConfirmDecisions {
   assignmentSnapshot: { id: string; orderId: string; updatedAt: string }[]
 }
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let form: FormData, body: ConfirmDecisions
   try {
     form = await req.formData()

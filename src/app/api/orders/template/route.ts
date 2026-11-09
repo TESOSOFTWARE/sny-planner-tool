@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/template/route.ts
 // GET /api/orders/template
 // Generates and returns a downloadable .xlsx template for bulk order import
@@ -7,7 +8,10 @@ import { NextResponse } from 'next/server'
 import * as XLSX from 'xlsx'
 import { MAX_IMPORTED_ORDER_ROWS } from '@/lib/validations/order'
 
-export async function GET() {
+export async function GET(authRequest: Request) {
+  const accessError = await authError('GET', authRequest)
+  if (accessError) return accessError
+
   const headerRow = [
     'PI NUMBER ID',
     'PI NUMBER',

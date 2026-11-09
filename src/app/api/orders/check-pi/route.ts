@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/check-pi/route.ts
 // GET /api/orders/check-pi?piNumber=XXX
 // Check if a PI Number already exists in DB and return existing customer names.
@@ -6,6 +7,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   const piNumber = req.nextUrl.searchParams.get('piNumber')?.trim()
   if (!piNumber) {
     return NextResponse.json({ exists: false, customers: [] })

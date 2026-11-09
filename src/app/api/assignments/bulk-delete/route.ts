@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { prisma } from '@/lib/db'
@@ -14,6 +15,9 @@ class StaleSelection extends Error {
 
 // [FB 15/10 #2] Only the explicitly confirmed IDs; never derive extra rows from a month.
 export async function POST(request: Request) {
+  const accessError = await authError('POST', request)
+  if (accessError) return accessError
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'Dữ liệu JSON không hợp lệ.' }, { status: 422 }) }
   const parsed = schema.safeParse(body)

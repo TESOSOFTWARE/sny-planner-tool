@@ -1,3 +1,4 @@
+import { requireUser } from '@/lib/auth/session'
 // src/app/orders/summary/page.tsx
 // Server component — PO Summary view.
 // Fetches all ProductionOrder records, passes them to the client POSummaryTable
@@ -17,6 +18,8 @@ export const metadata: Metadata = {
 export const dynamic = 'force-dynamic'
 
 export default async function POSummaryPage() {
+  await requireUser()
+
   let orders: SerializedProductionOrder[] = []
   let fetchError: string | null = null
 

@@ -1,3 +1,4 @@
+import { requireUser } from '@/lib/auth/session'
 // src/app/orders/[id]/page.tsx
 // Server Component — fetches a single order, renders OrderDetail (R1 light theme).
 
@@ -33,6 +34,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export const dynamic = 'force-dynamic'
 
 export default async function OrderDetailPage({ params }: Props) {
+  await requireUser()
+
   let order: SerializedProductionOrder | null = null
 
   try {
