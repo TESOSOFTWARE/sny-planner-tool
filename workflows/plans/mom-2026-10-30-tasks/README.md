@@ -12,7 +12,7 @@ Cập nhật 09/11/2026. Người dùng yêu cầu làm cả 10 task; phạm vi 
 | M30-06 | CHỜ MẪU IN KHÁC CỦA SNY | [M30-06 — Lập và in kế hoạch kéo sợi ngày](M30-06.md) |
 | M30-07 | CHỜ MẪU IN KHÁC CỦA SNY | [M30-07 — In lịch dệt tuần/tháng](M30-07.md) |
 | M30-08 | CÓ MENU REPORTS: workspace/API chung; chưa CHART và UAT | [M30-08 — Menu báo cáo thống kê](M30-08.md) |
-| M30-09 | Login đã chạy local; RBAC có kế hoạch, chờ duyệt matrix | [M30-09 — Đăng nhập](M30-09.md) · [Kế hoạch RBAC](M30-09-rbac-plan.md) |
+| M30-09 | Login/RBAC đã triển khai local; chờ SNY rà matrix và UAT | [M30-09 — Đăng nhập và RBAC](M30-09.md) · [Kế hoạch RBAC](M30-09-rbac-plan.md) |
 | M30-10 | KIỂM TRA LOCAL MỘT PHẦN: chưa UAT toàn nghiệp vụ | [M30-10 — Tích hợp, đối soát và UAT](M30-10.md) |
 
 Đầu ra: [kiểm kê và hợp đồng dữ liệu](../../context/mom-2026-10-30/README.md); [hướng dẫn đăng nhập local](../../context/mom-2026-10-30/local-login.md).

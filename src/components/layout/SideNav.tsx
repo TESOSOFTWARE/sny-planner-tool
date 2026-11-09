@@ -26,6 +26,7 @@ const NAV_ITEMS: NavItem[] = [
   { kind: 'link', icon: 'calendar_month', label: 'Schedule', href: '/schedule' },
   { kind: 'link', icon: 'inventory_2', label: 'Materials', href: '/materials' },
   { kind: 'link', icon: 'assessment', label: 'Report', href: '/reports' },
+  { kind: 'link', icon: 'admin_panel_settings', label: 'Account & Permissions', href: '/settings/access' },
   { kind: 'disabled', icon: 'settings', label: 'Settings' },
 ]
 

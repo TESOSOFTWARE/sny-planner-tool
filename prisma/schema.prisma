@@ -14,7 +14,50 @@ model SnyUser {
   lockedUntil DateTime?
   createdAt DateTime @default(now())
   sessions SnySession[]
+  roles SnyUserRole[]
   @@map("sny_users")
+}
+
+model SnyRole {
+  id String @id @default(cuid())
+  name String @unique
+  description String?
+  isSystem Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  users SnyUserRole[]
+  permissions SnyRolePermission[]
+  @@map("sny_roles")
+}
+
+model SnyPermission {
+  key String @id
+  label String
+  module String
+  createdAt DateTime @default(now())
+  roles SnyRolePermission[]
+  @@map("sny_permissions")
+}
+
+model SnyUserRole {
+  userId String
+  roleId String
+  assignedAt DateTime @default(now())
+  user SnyUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role SnyRole @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("sny_user_roles")
+}
+
+model SnyRolePermission {
+  roleId String
+  permissionKey String
+  role SnyRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission SnyPermission @relation(fields: [permissionKey], references: [key], onDelete: Restrict)
+  @@id([roleId, permissionKey])
+  @@index([permissionKey])
+  @@map("sny_role_permissions")
 }
 
 model SnySession {

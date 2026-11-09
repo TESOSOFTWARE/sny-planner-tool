@@ -9,10 +9,10 @@
 
 import { prisma } from '@/lib/db'
 import { scheduleOrderChoices } from '@/lib/orderStatus'
-import { requireUser } from '@/lib/auth/session'
+import { requirePermission } from '@/lib/auth/session'
 
 export async function getUnassignedOrders(includeFinished = false) {
-  await requireUser()
+  await requirePermission('schedule.read')
   const orders = await prisma.productionOrder.findMany({
     select: {
       id: true,

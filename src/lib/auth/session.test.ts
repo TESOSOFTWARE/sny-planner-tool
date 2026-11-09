@@ -5,7 +5,7 @@ const singleton = globalThis as unknown as { prisma: unknown }, previous = singl
 let expiresAt = new Date(Date.now() + 60_000), queries = 0
 let authError: typeof import('./session').authError
 before(async () => {
-  singleton.prisma = { snySession: { findUnique: async ({ where }: { where: { tokenHash: string } }) => {
+  singleton.prisma = { snyUserRole: { count: async () => 1 }, snySession: { findUnique: async ({ where }: { where: { tokenHash: string } }) => {
     queries++; assert.match(where.tokenHash, /^[a-f0-9]{64}$/); assert.notEqual(where.tokenHash, 'a'.repeat(64))
     return { expiresAt, user: { id: 'test', email: 'test@example.invalid' } }
   } } }

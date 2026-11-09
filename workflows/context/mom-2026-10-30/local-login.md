@@ -1,8 +1,8 @@
 # M30-09 — Đăng nhập local
 
-Yêu cầu đã chốt ngày 09/11/2026: email + mật khẩu; chưa phân role. User đăng nhập có cùng quyền nghiệp vụ.
+Yêu cầu ngày 09/11/2026 phát triển từ email + mật khẩu sang role động; trạng thái RBAC hiện tại nằm trong M30-09-rbac-plan.md.
 
-Đã áp **migration SQL** `prisma/sql/20261109_local_login.sql` lên `127.0.0.1:55432/sny_planner_local`, tạo `sny_users` và `sny_sessions`. Không chạy trên DB khách. File rollback nằm cùng thư mục SQL; rollback xóa tài khoản/phiên và chỉ dùng sau khi đã gỡ code auth.
+Đã áp **migration SQL** `prisma/sql/20261109_local_login.sql` và `prisma/sql/20261109_rbac.sql` lên `127.0.0.1:55432/sny_planner_local`, tạo account/session/role/permission. Không chạy trên DB khách. Mỗi migration có rollback trong cùng thư mục SQL.
 
 Mật khẩu dùng scrypt + salt; cookie HttpOnly/SameSite=Lax, Secure khi production; phiên hết hạn sau 8 giờ và bị thu hồi khi đăng xuất. Sai mật khẩu 5 lần làm khóa tạm 15 phút theo tài khoản. Cần rate limiting phân tán ở hạ tầng trước khi mở dịch vụ rộng rãi; hiện chưa có reset mật khẩu hay quản trị user trên web.
 

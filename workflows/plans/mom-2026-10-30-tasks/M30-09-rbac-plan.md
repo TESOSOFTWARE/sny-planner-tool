@@ -1,6 +1,6 @@
 # M30-09 — Kế hoạch bổ sung phân quyền
 
-Trạng thái: **ĐỀ XUẤT CHỜ SNY/TESO DUYỆT MA TRẬN**. Hiện hệ thống chỉ xác thực email/mật khẩu; user đăng nhập có cùng quyền.
+Trạng thái: **ĐÃ TRIỂN KHAI LOCAL — dynamic roles/tabs/API; chưa phát hành**. Ma trận module/action cần SNY rà lại trước production.
 
 ## Mục tiêu
 
@@ -39,6 +39,7 @@ Role do Admin tự đặt tên. Permission là danh mục hệ thống cố đ�
 | Resource | Permission |
 |---|---|
 | Production Orders | `orders.read`, `orders.create`, `orders.update`, `orders.approve`, `orders.delete`, `orders.import` |
+| Khách hàng | `customers.read`, `customers.create`, `customers.update`, `customers.delete` |
 | Schedule | `schedule.read`, `schedule.assign`, `schedule.update`, `schedule.remove`, `schedule.import`, `schedule.calendar.manage` |
 | Sản lượng | `output.read`, `output.plan.create`, `output.plan.update`, `output.actual.import`, `output.actual.enter`, `output.link.resolve`, `output.print` |
 | Materials | `materials.read`, `materials.stock.update`, `materials.transaction.manage`, `materials.import.confirm` |
@@ -60,6 +61,17 @@ Role do Admin tự đặt tên. Permission là danh mục hệ thống cố đ�
 | RBAC-7: kiểm thử/UAT | Tài khoản test của từng role | Test allow/deny trên page/API/action, IDOR, khóa user, đổi permission và import confirm | Ma trận kiểm chứng và bằng chứng UAT |
 
 Acceptance permission matrix và user lifecycle cần được chốt trước bước RBAC-2; các thao tác schema/auth thuộc high-risk, migration chỉ áp DB local/staging được xác minh.
+
+## Trạng thái triển khai 09/11/2026
+
+- Đã thêm SnyRole, SnyPermission, SnyUserRole, SnyRolePermission; migration 20261109_rbac.sql và rollback được thực hiện trên local.
+- Permission catalog hiện gồm Orders, Customers, Schedule, Output, Materials, Reports và Access.
+- Admin system role có toàn bộ permission; role thường không được tự cấp quyền quản trị user/role.
+- Đã thêm hai tab Settings: Vai trò & quyền và Tài khoản. Admin tạo role/chọn permission; tạo account, gán nhiều role, khóa/mở hoặc đặt mật khẩu mới. Role đang được gán và system role không thể xóa; system Admin không thể sửa từ UI.
+- Guard kiểm tra permission trong từng request server, page và schedule Server Action. Endpoint không được nhận diện mặc định bị từ chối.
+- Typecheck PASS; full suite 212/212 PASS; local RBAC smoke PASS; UI admin tabs đã mở bằng browser local.
+- Build biên dịch thành công nhưng log báo thiếu ESLint; Docker daemon dừng trong lúc schema diff cuối, nên chưa xác minh lại DB sau thay đổi cuối. Trước đó migration đã chạy và RBAC HTTP smoke đạt.
+- Chưa hoàn tất audit semantics toàn bộ route, recovery, rate limiting phân tán, SNY UAT hoặc production rollout. Matrix cần SNY rà trước phát hành.
 
 ## Các bước Input → Output
 
@@ -102,4 +114,4 @@ Acceptance permission matrix và user lifecycle cần được chốt trước b
 - Không thể khóa hoặc xóa account Admin cuối, cũng không xóa role còn đang được gán.
 - UAT từng role trên staging; test/build đạt và rollback được diễn tập.
 
-Ước lượng sau khi chốt ma trận và luồng: inventory 2–4 ngày; schema/session 3–4; policy và API/actions 5–8; hai tab quản trị 4–6; kiểm thử/UAT 3–5. Tổng 17–27 ngày công một full-stack dev có QA/reviewer hỗ trợ. Chưa đổi code RBAC và chưa gán role.
+Ước lượng sau khi chốt ma trận và luồng: inventory 2–4 ngày; schema/session 3–4; policy và API/actions 5–8; hai tab quản trị 4–6; kiểm thử/UAT 3–5. Tổng 17–27 ngày công. RBAC đã được code và kiểm tra local; chưa release/UAT.

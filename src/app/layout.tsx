@@ -10,6 +10,8 @@ import TopNav from '@/components/layout/TopNav'
 import SideNav from '@/components/layout/SideNav'
 import { headers } from 'next/headers'
 import { requireUser } from '@/lib/auth/session'
+import { permissionForRequest } from '@/lib/auth/permissions'
+import { redirect } from 'next/navigation'
 
 const inter = Inter({
   subsets: ['latin'],
@@ -37,6 +39,13 @@ export default async function RootLayout({
 }) {
   const isLogin = headers().get('x-sny-path') === '/login'
   const user = isLogin ? null : await requireUser()
+  if (user && headers().get('x-sny-path') !== '/forbidden') {
+    const path = headers().get('x-sny-path') ?? '/orders'
+    const permission = permissionForRequest(path, 'GET')
+    if (!permission) redirect('/forbidden')
+    const { userHasPermission } = await import('@/lib/auth/permissions')
+    if (!await userHasPermission(user.id, permission)) redirect('/forbidden')
+  }
   return (
     <html lang="en" className={`${inter.variable} ${noto.variable}`}>
       <head>
