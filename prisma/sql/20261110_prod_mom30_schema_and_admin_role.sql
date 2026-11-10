@@ -3,9 +3,10 @@
 -- production_orders. This bundle replaces 20261109_rbac.sql and
 -- 20261109_mom_production_plans_manual_entries.sql for this production rollout;
 -- do not run those two separately. It does not replace local_login.sql.
--- Never creates a user or stores a password.
--- Apply only after PostgreSQL 18 backup and preflight. Create the dedicated
--- account using scripts/bootstrap-production-admin.ts after this commits.
+-- Does not create a user or store a password. Apply
+-- 20261110_prod_admin_account.sql next if the dedicated test account is approved.
+-- Apply only after PostgreSQL 18 backup and preflight. The account migration
+-- refuses to overwrite an existing admin@gmail.com account.
 BEGIN;
 
 DO $$
