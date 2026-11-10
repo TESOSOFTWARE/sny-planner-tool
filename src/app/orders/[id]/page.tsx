@@ -8,6 +8,7 @@ import { redirect } from 'next/navigation'
 import { prisma } from '@/lib/db'
 import type { SerializedProductionOrder } from '@/types'
 import OrderDetail from '@/components/orders/OrderDetail'
+import OrderAttachments from '@/components/orders/OrderAttachments'
 
 interface Props {
   params: { id: string }
@@ -128,7 +129,8 @@ export default async function OrderDetailPage({ params }: Props) {
           </p>
         </div>
         <div className="p-lg md:p-[32px]">
-          <OrderDetail order={order} />
+      <OrderDetail order={order} />
+      <OrderAttachments orderId={order.id} />
         </div>
       </div>
     </div>

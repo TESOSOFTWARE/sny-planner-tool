@@ -1,6 +1,6 @@
-# M30-04 — Thiết kế trường và đính kèm để triển khai tiếp
+# M30-04 — Thiết kế trường và đính kèm
 
-Trạng thái: thiết kế sơ bộ có bằng chứng nguồn; chưa đổi schema cho quy cách/đính kèm.
+Trạng thái: schema hiện có bao phủ nhiều trường đơn hàng; đã thêm metadata/bytes attachment theo dòng đơn vào schema + migration local. Các trường may/pallet riêng chưa được đối soát đủ để thêm typed fields.
 
 | Nhóm nguồn | Trường app tái sử dụng | Trường cần thiết kế riêng / rà ngữ nghĩa |
 |---|---|---|
@@ -14,4 +14,4 @@ Mẫu bằng chứng theo ô và vị trí code nằm trong `field-coverage.csv`
 
 Đề xuất form chia section 3–4 trường mỗi nhóm, chỉ hiện section áp dụng cho item. Hướng dẫn chung của PI và quy cách riêng của item cần hai cấp khác nhau. Mỗi bản chỉ dẫn lưu nguồn và revision; mẫu đã phát hành giữ snapshot. Các trường tham gia tính toán cần typed value và unit rõ; ghi chú/ảnh giữ nguyên ngữ cảnh.
 
-Đính kèm cần định nghĩa vị trí gắn (PI/item/lệnh), loại và dung lượng, cơ chế lưu bền vững sau deploy và quyền tải/xóa. Lưu tạm file vào thư mục Next/Vercel không đáp ứng lưu bền vững; phần upload chưa triển khai cho đến khi có lựa chọn lưu trữ được cấu hình.
+Đính kèm hiện gắn với một item `ProductionOrder`, giới hạn 5 MB, nhận JPEG/PNG/WebP/PDF, kiểm tra chữ ký nội dung, lưu byte trong PostgreSQL và bảo vệ tải lên/xem/xóa bằng quyền order. Cách lưu DB có tính bền vững và nằm cùng backup DB; vận hành cần theo dõi tăng trưởng DB và backup. Chưa có migration chạy hoặc kiểm tra runtime local vì PostgreSQL local chưa hoạt động.

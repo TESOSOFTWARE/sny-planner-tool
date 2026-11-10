@@ -1,5 +1,7 @@
 # Đầu ra khảo sát MoM 30/10
 
+Kết quả triển khai sau khi duyệt plan 09/11: [implementation report](implementation-report-2026-11-09.md).
+
 Chạy offline ngày 09/11/2026 bằng `python3 scripts/audit-mom-3010.py`. Nguồn là 4 workbook đính kèm trong Downloads và 4 workbook quy cách tải nguyên bản từ Drive vào `/private/tmp/sny-m30-sources`. Không thực thi công thức/macro; script audit không đọc DB.
 
 | Task | Đầu ra thực tế | Giới hạn |

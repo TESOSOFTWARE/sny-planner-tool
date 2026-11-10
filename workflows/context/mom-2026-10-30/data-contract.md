@@ -9,15 +9,19 @@ Nguồn: MoM 30/10 §4; trả lời người dùng ngày 09/11: chưa có ORDER 
 - Không cộng chung kg/mét/quantity. Rolling hiển thị nhãn và giá trị metric nguồn; không tự giải nghĩa SMALL/BIG. Packing hiện là số toàn xưởng theo ngày, chưa được đưa vào bảng theo PI.
 - Mọi user đăng nhập có cùng quyền trong phạm vi hiện tại theo yêu cầu người dùng. Mọi API nghiệp vụ kiểm phiên server; không dùng cookie có hình thức hợp lệ làm bằng chứng đã đăng nhập.
 
-## Quy tắc đề xuất cho nhập tay và kế hoạch — chưa triển khai
+## Kế hoạch và nhập tay — đã thêm code local, chờ migration
 
 | Dữ liệu | Khóa / hành vi đề xuất | Lý do |
 |---|---|---|
-| Kế hoạch kéo sợi | Một dòng có mã nguồn, máy, ngày, cấu phần/màu và revision; `orderId` nullable | Có thể lập kế hoạch khi thiếu catalog đơn, nhiều cấu phần có thể phục vụ cùng PI |
-| Nội dung kế hoạch dạng chữ | Lưu raw text cùng file/sheet/ô; chỉ tách lượng khi đơn vị được xác nhận | Ô “800+800 (2 dàn...)” chưa phải trường kg đã được xác nhận |
+| Kế hoạch theo công đoạn | `ProductionOutputPlan`: ngày, công đoạn, máy/ca, PI nguồn, item tùy chọn, màu, chỉ tiêu, số lượng, đơn vị, ghi chú và revision | Có thể lập kế hoạch khi thiếu catalog đơn; không tự quy đổi giá trị hoặc đơn vị |
+| Sản lượng nhập tay | `ManualProductionEntry`: actual tách khỏi bảng import từng công đoạn; lưu nguồn PI thô và item nullable | Không nhập trùng vào số liệu import hoặc cộng các đơn vị khác nhau |
 | Nhập lại cùng nguồn | Xem trước diff, có ảnh chụp state; chỉ thay phạm vi người dùng xác nhận | Bảo vệ liên kết item và số người dùng nhập trực tiếp |
 | Nhập tay gặp bản import cùng phạm vi | Hiện xung đột để đối soát, không âm thầm cộng hoặc ghi đè | Chưa có quy tắc từ khách xác nhận hai nguồn có phải cùng sản lượng |
 | Gắn item sau này | Tìm ứng viên theo PI; người dùng chọn item tường minh khi mơ hồ; lưu người/thời điểm/nguồn quyết định | Cần truy vết mà không sửa quy cách của đơn |
 | Sửa chỉ dẫn đơn | Revision mới; snapshot đã dùng cho lệnh/bản in được giữ | Không làm đổi lệnh xưởng cũ theo sửa danh mục |
 
-Thiếu catalog mới không chặn lưu tham chiếu nguồn, nhưng chặn khẳng định tiến độ chính xác theo item. Các output hiện đã đọc độc lập ở M30-05; chưa có luồng tạo/sửa kế hoạch, nhập tay, hoặc màn gán item. M30-06/07 cần mẫu in khác của SNY, chưa được nghiệm thu bằng mẫu hiện tại.
+Kế hoạch và nhập tay có API, validation và tab riêng tại `/orders/production`; dropdown máy/PI/màu/chỉ tiêu/đơn vị lấy từ dữ liệu hiện có và có lựa chọn nhập giá trị mới. Chọn PI chỉ liệt kê item khi mã khớp chính xác. Item không được chọn thì `orderId` vẫn null và UI hiện “chưa gắn item”. Kế hoạch dùng `updatedAt` làm optimistic concurrency token, tăng revision và lưu payload revision cũ trong bảng lịch sử khi sửa. Migration SQL đã áp dụng trên PostgreSQL local.
+
+Actual Excel theo từng công đoạn tiếp tục dùng preview/confirm hiện hữu tại menu Reports; bảng Production Orders có liên kết sang khu vực import. Chưa có import workbook chung cho kế hoạch mới; các định dạng kế hoạch nguồn có cấu trúc khác nhau và chưa được gom thành một contract.
+
+Thiếu catalog mới không chặn lưu tham chiếu nguồn, nhưng chặn khẳng định tiến độ chính xác theo item. M30-06/07 vẫn cần mẫu in khác của SNY; không nghiệm thu bằng mẫu hiện tại.

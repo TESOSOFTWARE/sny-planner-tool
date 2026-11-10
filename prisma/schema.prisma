@@ -202,6 +202,9 @@ model ProductionOrder {
   warpingOutputs  WarpingDailyOutput[]
   knittingDetails KnittingDailyDetail[]
   rollingMetrics  RollingDailyMetric[]
+  productionPlans ProductionOutputPlan[]
+  manualProductionEntries ManualProductionEntry[]
+  attachments ProductionOrderAttachment[]
 
   // Timestamps
   createdAt    DateTime @default(now())
@@ -403,6 +406,83 @@ model ExtruderDailyOutput {
   @@index([reportDate])
   @@index([orderId])
   @@map("extruder_daily_output")
+}
+
+// [MoM 30/10 §4] Planned and manually entered output are kept separate from imported actual reports.
+model ProductionOutputPlan {
+  id          String   @id @default(cuid())
+  stage       String   // extruder | warping | knitting | rolling | packing
+  planDate    DateTime // UTC midnight
+  machineId   String?
+  shift       String?
+  orderRef    String?  // Preserve PI exactly as entered/source text
+  orderId     String?
+  order       ProductionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  revisions   ProductionPlanRevision[]
+  color       String?
+  metricLabel String
+  plannedValue Decimal @db.Decimal(12, 2)
+  unit        String
+  note        String?
+  revision    Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([stage, planDate])
+  @@index([orderRef])
+  @@index([orderId])
+  @@map("production_output_plans")
+}
+
+model ProductionPlanRevision {
+  id        String   @id @default(cuid())
+  planId    String
+  plan      ProductionOutputPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  revision  Int
+  payload   Json
+  createdAt DateTime @default(now())
+
+  @@unique([planId, revision])
+  @@index([createdAt])
+  @@map("production_plan_revisions")
+}
+
+model ProductionOrderAttachment {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     ProductionOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fileName  String
+  mimeType  String
+  fileSize  Int
+  content   Bytes    @db.ByteA
+  createdAt DateTime @default(now())
+
+  @@index([orderId, createdAt])
+  @@map("production_order_attachments")
+}
+
+// [MoM 30/10 §4] Manual actual entries remain distinguishable from imported stage-specific reports.
+model ManualProductionEntry {
+  id          String   @id @default(cuid())
+  stage       String   // extruder | warping | knitting | rolling | packing
+  reportDate  DateTime // UTC midnight
+  machineId   String?
+  shift       String?
+  orderRef    String?
+  orderId     String?
+  order       ProductionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  color       String?
+  metricLabel String
+  metricValue Decimal  @db.Decimal(12, 2)
+  unit        String
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([stage, reportDate])
+  @@index([orderRef])
+  @@index([orderId])
+  @@map("manual_production_entries")
 }
 
 model WarpingDailyOutput {

@@ -8,6 +8,7 @@ export function permissionModule(key: PermissionKey) { return key.split('.')[0] 
 
 export function permissionForRequest(pathname: string, method: string): PermissionKey | null {
   if (pathname.startsWith('/api/auth/')) return null
+  if (pathname.startsWith('/orders/production')) return 'output.read'
   if (pathname === '/' || pathname.startsWith('/orders')) return 'orders.read'
   if (pathname.startsWith('/customers')) return 'orders.read'
   if (pathname.startsWith('/schedule')) return method === 'GET' ? 'schedule.read' : 'schedule.assign'
@@ -16,7 +17,10 @@ export function permissionForRequest(pathname: string, method: string): Permissi
   if (pathname === '/forbidden') return null
   if (pathname.startsWith('/settings/')) return 'access.users.manage'
   const write = !['GET', 'HEAD', 'OPTIONS'].includes(method)
-  if (pathname.startsWith('/api/production-records')) return 'output.read'
+  if (pathname.startsWith('/api/production-records/manual')) return method === 'POST' ? 'output.actual.enter' : 'output.read'
+  if (pathname.startsWith('/api/production-records/order-candidates')) return 'output.link.resolve'
+  if (pathname.startsWith('/api/production-records')) return method === 'GET' ? 'output.read' : 'output.actual.enter'
+  if (pathname.startsWith('/api/production-plans')) return method === 'GET' ? 'output.read' : method === 'POST' ? 'output.plan.create' : 'output.plan.update'
   if (pathname.startsWith('/api/orders')) {
     if (/approve/.test(pathname)) return 'orders.approve'
     if (/import/.test(pathname) || /\/bulk(?:$|-|\/)/.test(pathname) && write) return 'orders.import'
@@ -35,6 +39,7 @@ export function permissionForRequest(pathname: string, method: string): Permissi
     return write ? 'schedule.update' : 'schedule.read'
   }
   if (pathname.startsWith('/api/calendar')) return write ? 'schedule.calendar.manage' : 'schedule.read'
+  if (pathname.startsWith('/api/reports')) return write ? 'reports.print' : 'reports.read'
   if (pathname.startsWith('/api/schedule')) return write ? 'schedule.import' : 'schedule.read'
   if (pathname.startsWith('/api/machine-specs')) return write ? 'schedule.calendar.manage' : 'schedule.read'
   if (pathname.startsWith('/api/materials')) {
