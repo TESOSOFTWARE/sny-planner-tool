@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/materials/rolling/import/confirm/route.ts
 // POST /api/materials/rolling/import/confirm — Saves parsed RollingDailyMetric records to DB with Scoped Replacement.
 
@@ -12,6 +13,9 @@ import { acknowledgesRollingLosses, compareRollingDays, rollingLosses } from '@/
 let isRollingImportInProgress = false
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   if (isRollingImportInProgress) {
     return NextResponse.json(
       { success: false, error: 'Hệ thống đang xử lý một phiên import Rolling khác. Vui lòng đợi trong giây lát.' },

@@ -1,3 +1,4 @@
+import { requireUser } from '@/lib/auth/session'
 // src/app/orders/[id]/page.tsx
 // Server Component — fetches a single order, renders OrderDetail (R1 light theme).
 
@@ -7,6 +8,7 @@ import { redirect } from 'next/navigation'
 import { prisma } from '@/lib/db'
 import type { SerializedProductionOrder } from '@/types'
 import OrderDetail from '@/components/orders/OrderDetail'
+import OrderAttachments from '@/components/orders/OrderAttachments'
 
 interface Props {
   params: { id: string }
@@ -33,6 +35,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export const dynamic = 'force-dynamic'
 
 export default async function OrderDetailPage({ params }: Props) {
+  await requireUser()
+
   let order: SerializedProductionOrder | null = null
 
   try {
@@ -50,6 +54,9 @@ export default async function OrderDetailPage({ params }: Props) {
       orderDate: raw.orderDate.toISOString(),
       createdAt: raw.createdAt.toISOString(),
       updatedAt: raw.updatedAt.toISOString(),
+      etdDate: raw.etdDate?.toISOString().slice(0, 10) ?? null,
+      loadingDate: raw.loadingDate?.toISOString().slice(0, 10) ?? null,
+      loadingDate2: raw.loadingDate2?.toISOString().slice(0, 10) ?? null,
       uvPct: raw.uvPct != null ? raw.uvPct.toString() : null,
       rollLength:  raw.rollLength  != null ? raw.rollLength.toString()  : null,
       pieceLength: raw.pieceLength != null ? raw.pieceLength.toString() : null,
@@ -125,7 +132,8 @@ export default async function OrderDetailPage({ params }: Props) {
           </p>
         </div>
         <div className="p-lg md:p-[32px]">
-          <OrderDetail order={order} />
+      <OrderDetail order={order} />
+      <OrderAttachments orderId={order.id} />
         </div>
       </div>
     </div>

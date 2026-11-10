@@ -24,6 +24,23 @@ export function isValidISODate(value: string): boolean {
 
 const isoDateSchema = (message: string) => z.string().refine(isValidISODate, message)
 
+const productionOrderHeaderSourceFields = {
+  shippingTerms: z.string().max(200).transform(v => v.trim()).nullable().optional(),
+  paymentTerms: z.string().max(200).transform(v => v.trim()).nullable().optional(),
+}
+
+const productionOrderLineSourceFields = {
+  gaugeDenier: z.string().max(100).transform(v => v.trim()).nullable().optional(),
+  labelInstruction: z.string().max(200).transform(v => v.trim()).nullable().optional(),
+  shippingNote: z.string().max(200).transform(v => v.trim()).nullable().optional(),
+  etdDate: isoDateSchema('ETD phải là ngày hợp lệ (YYYY-MM-DD)').nullable().optional(),
+  etdNote: z.string().max(200).transform(v => v.trim()).nullable().optional(),
+  loadingDate: isoDateSchema('Loading date phải là ngày hợp lệ (YYYY-MM-DD)').nullable().optional(),
+  loadingDate2: isoDateSchema('Loading date 2 phải là ngày hợp lệ (YYYY-MM-DD)').nullable().optional(),
+  loadingDateNote: z.string().max(200).transform(v => v.trim()).nullable().optional(),
+  loadingDate2Note: z.string().max(200).transform(v => v.trim()).nullable().optional(),
+}
+
 /**
  * H2 (01/10): HEMMED không lưu số tấm / kích thước thùng/kiện.
  * Gọi ở mọi điểm persist để đảm bảo DB không chứa field dư.
@@ -186,6 +203,8 @@ export const createOrderSchema = z.object({
   requiresPacking: z.boolean().default(false),
   deliveryDate: isoDateSchema('Delivery date must be a valid date (YYYY-MM-DD)').nullable().optional(),
   containerSize: z.string().max(50, 'Container size must be 50 characters or fewer').transform((v) => v.trim()).nullable().optional(),
+  ...productionOrderHeaderSourceFields,
+  ...productionOrderLineSourceFields,
 
   // Technical specs
   meshType: z
@@ -403,6 +422,8 @@ export const updateOrderSchema = z.object({
   requiresPacking: z.boolean().optional(),
   deliveryDate: isoDateSchema('Delivery date must be a valid date (YYYY-MM-DD)').nullable().optional(),
   containerSize: z.string().max(50).transform(v => v.trim()).nullable().optional(),
+  ...productionOrderHeaderSourceFields,
+  ...productionOrderLineSourceFields,
 
   // Technical specs
   meshType: z
@@ -607,6 +628,8 @@ function createImportedOrderRowSchema(allowInferredPacking: boolean) { return z
     requiresPacking: z.boolean().default(false),
     deliveryDate: isoDateSchema('Ngày giao không hợp lệ (YYYY-MM-DD)').nullable().optional(),
     containerSize: z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
+    ...productionOrderHeaderSourceFields,
+    ...productionOrderLineSourceFields,
     hasEyelet:    z.boolean().default(false),
     eyeletColor:  z.string().max(50).nullable().optional().transform((v) => v?.trim() ?? null),
     eyeletLines:  z.number().int().positive().nullable().optional(),
@@ -714,6 +737,8 @@ export const draftOrderStateSchema = z.object({
   subLineIndex: z.number().finite().int().min(0),
   customer: z.string().min(1).max(100).transform((v) => v.trim()),
   orderDate: isoDateSchema('Ngày đặt không hợp lệ (YYYY-MM-DD)'),
+  ...productionOrderHeaderSourceFields,
+  ...productionOrderLineSourceFields,
   widthM: z.number().finite().gt(0).max(20).nullable().optional(),
   lengthM: z.number().finite().gt(0).max(100_000).nullable().optional(),
   gsm: z.number().finite().refine(hasGsmPrecision, gsmPrecisionError).gt(0).max(500).nullable().optional(),
@@ -773,6 +798,7 @@ export const draftOrderStateSchema = z.object({
   eyeletColor: z.string().max(50).transform((v) => v.trim()).nullable().optional(),
   eyeletLines: z.number().finite().int().positive().nullable().optional(),
   eyeletSpec: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
+  ...productionOrderLineSourceFields,
 }).superRefine((data, ctx) => {
   if (data.frFlag && (data.frPct == null || data.frPct <= 0)) {
     ctx.addIssue({ code: 'custom', path: ['frPct'], message: 'FR% phải > 0 khi chọn chống cháy (FR)' })
@@ -847,6 +873,7 @@ export const lineSchema = z
     beamCount:   z.number().finite().int().positive().nullable().optional(),
     eyeletLines: z.number().finite().int().positive().nullable().optional(),
     eyeletSpec:  z.string().max(200).nullable().optional(),
+    ...productionOrderLineSourceFields,
   })
   .refine(
     (data) => {
@@ -945,6 +972,7 @@ export const multiLineOrderSchema = z.object({
   orderDate:   isoDateSchema('Ngày đặt hàng phải là ngày hợp lệ (YYYY-MM-DD)'),
   deliveryDate: isoDateSchema('Ngày giao phải là ngày hợp lệ (YYYY-MM-DD)').nullable().optional(),
   containerSize: z.string().max(50).transform(v => v.trim()).nullable().optional(),
+  ...productionOrderHeaderSourceFields,
   description: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   remark:      z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   isDraft:     z.boolean().optional(),
@@ -1059,6 +1087,7 @@ export const draftMultiLineOrderSchema = z.object({
   orderDate:   z.string().transform(v => v.trim()).optional(),
   deliveryDate: z.string().nullable().optional(),
   containerSize: z.string().max(50).transform(v => v.trim()).nullable().optional(),
+  ...productionOrderHeaderSourceFields,
   description: z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   remark:      z.string().max(200).transform((v) => v.trim()).nullable().optional(),
   isDraft:     z.boolean().default(true),

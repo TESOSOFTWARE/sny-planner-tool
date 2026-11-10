@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/materials/import-transactions/confirm/route.ts
 // Confirm a stock snapshot with provenance. The client preview is advisory:
 // rows, decisions and replacement keys are revalidated under table locks.
@@ -43,6 +44,9 @@ function responseForConflict(code: string, error: string, decisions: StockDecisi
 }
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let form: FormData
   try { form = await req.formData() } catch {
     return NextResponse.json({ success: false, code: 'INVALID_INPUT', error: 'Cần gửi lại file Excel đã xem trước.' }, { status: 422 })

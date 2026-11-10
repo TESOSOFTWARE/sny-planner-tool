@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/materials/[id]/route.ts
 // PATCH /api/materials/[id] — update currentStock, minThreshold, note
 // DELETE /api/materials/[id] — delete material
@@ -43,6 +44,9 @@ const updateMaterialSchema = z.object({
 // ── PATCH ─────────────────────────────────────────────────────────────────────
 
 export async function PATCH(req: NextRequest, context: RouteContext) {
+  const accessError = await authError('PATCH', req)
+  if (accessError) return accessError
+
   const { id } = context.params
 
   let body: unknown
@@ -143,6 +147,9 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
 // ── DELETE ────────────────────────────────────────────────────────────────────
 
 export async function DELETE(_req: NextRequest, context: RouteContext) {
+  const accessError = await authError('DELETE', _req)
+  if (accessError) return accessError
+
   const { id } = context.params
 
   try {

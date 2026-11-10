@@ -1,3 +1,4 @@
+import { withTestSession } from '@/lib/auth/testSession'
 import test, { before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { NextRequest } from 'next/server'
@@ -22,7 +23,7 @@ const tx = {
 const fake = { $transaction: async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx) }
 const singleton = globalThis as unknown as { prisma: unknown }, previous = singleton.prisma
 let patch: typeof import('./route').PATCH
-before(async () => { singleton.prisma = fake; patch = (await import('./route')).PATCH })
+before(async () => { singleton.prisma = fake; patch = withTestSession((await import('./route')).PATCH, singleton.prisma) })
 after(() => { singleton.prisma = previous })
 beforeEach(() => { updates = 0 })
 function request(name: string) { return new NextRequest('http://localhost/api/materials/a', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }) }

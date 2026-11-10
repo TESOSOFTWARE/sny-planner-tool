@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/bulk-edit-pi/route.ts
 // PATCH /api/orders/bulk-edit-pi
 // Bulk updates shared PO fields across all sub-lines of a piNumber.
@@ -20,6 +21,9 @@ interface BulkEditBody {
 }
 
 export async function PATCH(req: NextRequest) {
+  const accessError = await authError('PATCH', req)
+  if (accessError) return accessError
+
   let body: BulkEditBody
   try {
     body = await req.json()

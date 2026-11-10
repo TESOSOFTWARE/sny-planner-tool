@@ -60,7 +60,20 @@ npm-cache/
 
 *.MD
 
+# MoM 30/10 task cards and implementation notes; generated customer rows stay local.
+!/workflows/plans/mom-2026-10-30-production-reports-auth-plan.md
+!/workflows/plans/mom-2026-10-30-completion-plan.md
+!/workflows/plans/mom-2026-10-30-tasks/*.md
+!/workflows/context/mom-2026-10-30/*.md
+!/workflows/context/handover-2026-11-09.md
+/workflows/context/mom-2026-10-30/*.csv
+/workflows/context/mom-2026-10-30/*.json
+
 # Agent harness (versioned)
 !/AGENTS.md
 !/CLAUDE.md
 !/.agents/**
+
+
+
+/plans/mom-2026-10-30-tasks

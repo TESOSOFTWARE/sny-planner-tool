@@ -1,3 +1,4 @@
+import { withTestSession } from '@/lib/auth/testSession'
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -25,7 +26,7 @@ const prisma = {
 let POST: typeof import('./route').POST
 const singleton = globalThis as unknown as { prisma: unknown }
 const previous = singleton.prisma
-before(async () => { singleton.prisma = prisma; POST = (await import('./route')).POST })
+before(async () => { singleton.prisma = prisma; POST = withTestSession((await import('./route')).POST, singleton.prisma) })
 after(() => { singleton.prisma = previous })
 
 function setRows(lengths: (number | null)[]) {

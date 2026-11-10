@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/extruder/import/confirm/route.ts
 // POST /api/extruder/import/confirm
 // Idempotent (Option B): xóa records cũ theo [machineId, reportDate] rồi insert mới.
@@ -29,6 +30,9 @@ const confirmBodySchema = z.object({
 })
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   // ── 1. Parse body ──────────────────────────────────────────────────────────
   let body: unknown
   try {

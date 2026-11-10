@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/template/route.ts
 // GET /api/orders/template
 // Generates and returns a downloadable .xlsx template for bulk order import
@@ -7,7 +8,10 @@ import { NextResponse } from 'next/server'
 import * as XLSX from 'xlsx'
 import { MAX_IMPORTED_ORDER_ROWS } from '@/lib/validations/order'
 
-export async function GET() {
+export async function GET(authRequest: Request) {
+  const accessError = await authError('GET', authRequest)
+  if (accessError) return accessError
+
   const headerRow = [
     'PI NUMBER ID',
     'PI NUMBER',
@@ -53,6 +57,17 @@ export async function GET() {
     'LINE NOTE',
     'REMARK',
     'DESCRIPTION',
+    'GAUGE & DENIER',
+    'LABEL INSTRUCTION',
+    'SHIPPING NOTE',
+    'ETD',
+    'ETD NOTE',
+    'LOADING DATE',
+    'LOADING DATE NOTE',
+    'LOADING DATE 2',
+    'LOADING DATE 2 NOTE',
+    'SHIPPING TERMS',
+    'PAYMENT TERMS',
   ]
   const titleRow = ['ORDER LIST - TEMPLATE (PI CONTAINER: 40HQ)', ...Array(headerRow.length - 1).fill('')]
 
@@ -101,6 +116,7 @@ export async function GET() {
     'Cuộn quấn màng co',                     // 40: LINE NOTE
     'Hàng xuất Ả Rập',                       // 41: REMARK
     'PE Shade Net UV 3 years',               // 42: DESCRIPTION
+    null, null, null, null, null, null, null, null, null, null, null,
   ]
 
   const sampleRow2 = [
@@ -148,6 +164,7 @@ export async function GET() {
     'Tấm gia công may viền',                 // 40: LINE NOTE
     'Đơn xuất kho EU',                       // 41: REMARK
     'PE Shade Net export EU',                // 42: DESCRIPTION
+    null, null, null, null, null, null, null, null, null, null, null,
   ]
 
   const sampleRow3 = [
@@ -195,6 +212,7 @@ export async function GET() {
     'Hàng tráng màng ngoài 430gsm',          // 40: LINE NOTE
     'Xuất khẩu chống thấm',                  // 41: REMARK
     'PE Shade Net waterproof 430gsm',        // 42: DESCRIPTION
+    null, null, null, null, null, null, null, null, null, null, null,
   ]
 
   const wsData = [titleRow, headerRow, sampleRow1, sampleRow2, sampleRow3]

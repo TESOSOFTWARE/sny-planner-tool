@@ -1,3 +1,4 @@
+import { withTestSession } from '@/lib/auth/testSession'
 // 1810-07: real parser and both POST handlers, synthetic files, fake Prisma only.
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -58,7 +59,7 @@ const metric = {
 const fake = { productionOrder: { findMany: async () => { reads++; return [] } }, rollingDailyMetric: metric, $transaction: async (run: (tx: { rollingDailyMetric: typeof metric }) => unknown) => run({ rollingDailyMetric: metric }) }
 const singleton = globalThis as unknown as { prisma: unknown }, previous = singleton.prisma
 let preview: typeof import('./import/route').POST, confirm: typeof import('./import/confirm/route').POST
-before(async () => { singleton.prisma = fake; preview = (await import('./import/route')).POST; confirm = (await import('./import/confirm/route')).POST })
+before(async () => { singleton.prisma = fake; preview = withTestSession((await import('./import/route')).POST, singleton.prisma); confirm = withTestSession((await import('./import/confirm/route')).POST, singleton.prisma) })
 after(() => { singleton.prisma = previous })
 function request(buffer: Buffer) {
   const form = new FormData()

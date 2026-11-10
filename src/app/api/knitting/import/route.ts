@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/knitting/import/route.ts
 // POST /api/knitting/import
 // Preview-only: parse the KNITTING report file, return dates + machine count.
@@ -9,6 +10,9 @@ import { parseKnittingReport, type KnittingDayData } from '@/lib/excel/parseKnit
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20 MB
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   // ── 1. Parse multipart ─────────────────────────────────────────────────────
   let formData: FormData
   try {

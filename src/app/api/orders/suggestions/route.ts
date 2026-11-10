@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -40,6 +41,9 @@ async function containsSuggestions(field: 'color' | 'meshType' | 'description', 
 }
 
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   const params = new URL(req.url).searchParams
   const parsed = querySchema.safeParse({ field: params.get('field'), q: params.get('q') ?? '', match: params.get('match') ?? undefined })
   if (!parsed.success) return NextResponse.json({ error: 'Trường gợi ý hoặc nội dung tìm kiếm không hợp lệ.' }, { status: 422 })

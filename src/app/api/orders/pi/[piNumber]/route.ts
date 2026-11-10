@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/pi/[piNumber]/route.ts
 // GET & PUT for PI Master-Detail editing.
 // GET: Fetches all sub-lines for a given PI Number.
@@ -16,6 +17,9 @@ interface Props {
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest, { params }: Props) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   const piNumber = decodeURIComponent(params.piNumber)
 
   try {
@@ -46,6 +50,9 @@ export async function GET(req: NextRequest, { params }: Props) {
       ...raw,
       orderDate: raw.orderDate.toISOString().slice(0, 10),
       deliveryDate: raw.deliveryDate ? raw.deliveryDate.toISOString().slice(0, 10) : null,
+      etdDate: raw.etdDate ? raw.etdDate.toISOString().slice(0, 10) : null,
+      loadingDate: raw.loadingDate ? raw.loadingDate.toISOString().slice(0, 10) : null,
+      loadingDate2: raw.loadingDate2 ? raw.loadingDate2.toISOString().slice(0, 10) : null,
       createdAt: raw.createdAt.toISOString(),
       updatedAt: raw.updatedAt.toISOString(),
       uvPct: raw.uvPct != null ? raw.uvPct.toString() : null,
@@ -78,6 +85,9 @@ export async function GET(req: NextRequest, { params }: Props) {
 }
 
 export async function PUT(req: NextRequest, { params }: Props) {
+  const accessError = await authError('PUT', req)
+  if (accessError) return accessError
+
   const piNumber = decodeURIComponent(params.piNumber)
 
   let body: any
@@ -93,6 +103,8 @@ export async function PUT(req: NextRequest, { params }: Props) {
     orderDate,
     deliveryDate,
     containerSize,
+    shippingTerms,
+    paymentTerms,
     description,
     remark,
     lifecycleStatus = 'APPROVED',
@@ -106,6 +118,9 @@ export async function PUT(req: NextRequest, { params }: Props) {
   }
   if (!orderDate || !/^\d{4}-\d{2}-\d{2}$/.test(orderDate)) {
     return NextResponse.json({ success: false, error: 'Ngày đặt hàng không hợp lệ (YYYY-MM-DD).' }, { status: 422 })
+  }
+  if ([shippingTerms, paymentTerms].some(value => value != null && (typeof value !== 'string' || value.length > 200))) {
+    return NextResponse.json({ success: false, error: 'Điều kiện giao hàng/thanh toán tối đa 200 ký tự.' }, { status: 422 })
   }
   if (!Array.isArray(lines) || lines.length === 0) {
     return NextResponse.json({ success: false, error: 'Cần có ít nhất 1 dòng sản phẩm trong đơn.' }, { status: 422 })
@@ -264,6 +279,17 @@ export async function PUT(req: NextRequest, { params }: Props) {
           orderDate: new Date(`${orderDate}T00:00:00.000Z`),
           deliveryDate: effectiveDeliveryDate,
           containerSize: containerSize ? containerSize.trim() : null,
+          shippingTerms: typeof shippingTerms === 'string' ? shippingTerms.trim() : null,
+          paymentTerms: typeof paymentTerms === 'string' ? paymentTerms.trim() : null,
+          gaugeDenier: line.gaugeDenier ?? null,
+          labelInstruction: line.labelInstruction ?? null,
+          shippingNote: line.shippingNote ?? null,
+          etdDate: line.etdDate ? new Date(`${line.etdDate}T00:00:00.000Z`) : null,
+          etdNote: line.etdNote ?? null,
+          loadingDate: line.loadingDate ? new Date(`${line.loadingDate}T00:00:00.000Z`) : null,
+          loadingDate2: line.loadingDate2 ? new Date(`${line.loadingDate2}T00:00:00.000Z`) : null,
+          loadingDateNote: line.loadingDateNote ?? null,
+          loadingDate2Note: line.loadingDate2Note ?? null,
           description: description ? description.trim() : null,
           remark: remark ? remark.trim() : null,
 

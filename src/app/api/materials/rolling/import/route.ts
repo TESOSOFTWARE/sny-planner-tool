@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/materials/rolling/import/route.ts
 // POST /api/materials/rolling/import — Preview & dry-run parse for uploaded Rolling report file.
 
@@ -9,6 +10,9 @@ import { rollingImportSnapshot } from '@/lib/materials/rollingImportSnapshot'
 import { compareRollingDays } from '@/lib/materials/rollingImportSafety'
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   try {
     const formData = await req.formData()
     const file = formData.get('file') as File | null

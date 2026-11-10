@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/journey-summary/route.ts
 // GET /api/orders/journey-summary
 // Computes Extruder, Warping progress weights and unlinked data warnings per piNumber.
@@ -35,7 +36,10 @@ export interface JourneyPISummary {
   unlinkedReason?: string
 }
 
-export async function GET() {
+export async function GET(authRequest: Request) {
+  const accessError = await authError('GET', authRequest)
+  if (accessError) return accessError
+
   try {
     // 1. Fetch all ProductionOrders
     const orders = await prisma.productionOrder.findMany({

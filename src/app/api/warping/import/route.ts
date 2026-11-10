@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/warping/import/route.ts
 // POST /api/warping/import
 // Preview-only: parse the WARPING report file, return summary.
@@ -9,6 +10,9 @@ import { parseWarpingReport, type WarpingRow } from '@/lib/excel/parseWarpingRep
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20 MB
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let formData: FormData
   try {
     formData = await req.formData()

@@ -1,9 +1,13 @@
+import { authError } from '@/lib/auth/session'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { customerSchema } from '@/lib/validations/customer'
 import { Prisma } from '@prisma/client'
 
-export async function GET() {
+export async function GET(authRequest: Request) {
+  const accessError = await authError('GET', authRequest)
+  if (accessError) return accessError
+
   try {
     const customers = await prisma.customer.findMany({
       orderBy: { name: 'asc' },
@@ -21,6 +25,9 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const accessError = await authError('POST', request)
+  if (accessError) return accessError
+
   try {
     const json = await request.json()
     const parsed = customerSchema.safeParse(json)

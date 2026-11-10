@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/warping/template/route.ts
 // GET /api/warping/template
 // Generate and return a .xlsx template file for Warping daily report input.
@@ -5,7 +6,10 @@
 import { NextResponse } from 'next/server'
 import * as XLSX from 'xlsx'
 
-export async function GET() {
+export async function GET(authRequest: Request) {
+  const accessError = await authError('GET', authRequest)
+  if (accessError) return accessError
+
   try {
     const wb = XLSX.utils.book_new()
 

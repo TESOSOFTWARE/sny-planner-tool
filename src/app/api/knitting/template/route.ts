@@ -1,7 +1,11 @@
+import { authError } from '@/lib/auth/session'
 import { NextResponse } from 'next/server'
 import * as xlsx from 'xlsx'
 
-export async function GET() {
+export async function GET(authRequest: Request) {
+  const accessError = await authError('GET', authRequest)
+  if (accessError) return accessError
+
   try {
     const wb = xlsx.utils.book_new()
     const wsData: any[][] = []

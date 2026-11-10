@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/materials/[id]/transactions/[txId]/route.ts
 // Deletes only a manual transaction outside a stock-report baseline.
 
@@ -7,6 +8,9 @@ import { prisma } from '@/lib/db'
 type Params = { params: { id: string; txId: string } }
 
 export async function DELETE(_req: NextRequest, { params }: Params) {
+  const accessError = await authError('DELETE', _req)
+  if (accessError) return accessError
+
   const { id, txId } = params
   try {
     const result = await prisma.$transaction(async (tx) => {

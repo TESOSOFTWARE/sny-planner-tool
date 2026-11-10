@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/import/route.ts
 // POST /api/orders/import
 // Accepts a multipart/form-data request with a .xlsx file (field name: "file").
@@ -13,6 +14,9 @@ import { MAX_IMPORTED_ORDER_ROWS } from '@/lib/validations/order'
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 // 10 MB
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   // ── 1. Read multipart form data ───────────────────────────────────────────
   let formData: FormData
   try {

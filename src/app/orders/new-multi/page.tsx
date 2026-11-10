@@ -1,3 +1,4 @@
+import { requireUser } from '@/lib/auth/session'
 // src/app/orders/new-multi/page.tsx
 // Multi-sub-line order entry page — enter all sub-lines of a PI in one form.
 
@@ -10,7 +11,9 @@ export const metadata: Metadata = {
   description: 'Tạo đơn hàng sản xuất mới.',
 }
 
-export default function NewMultiOrderPage() {
+export default async function NewMultiOrderPage() {
+  await requireUser()
+
   return (
     <div className="max-w-[1100px] mx-auto px-8 py-8">
 

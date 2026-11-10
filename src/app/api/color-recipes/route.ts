@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/color-recipes/route.ts
 // GET /api/color-recipes
 // Returns list of color recipes (Desert Sand A/B, etc.) to auto-populate bar specs on UI/WI.
@@ -8,6 +9,9 @@ import { prisma } from '@/lib/db'
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   try {
     const { searchParams } = new URL(req.url)
     const colorName = searchParams.get('colorName')

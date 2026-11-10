@@ -25,7 +25,8 @@ const NAV_ITEMS: NavItem[] = [
   { kind: 'link', icon: 'group', label: 'Customers', href: '/customers' },
   { kind: 'link', icon: 'calendar_month', label: 'Schedule', href: '/schedule' },
   { kind: 'link', icon: 'inventory_2', label: 'Materials', href: '/materials' },
-  { kind: 'disabled', icon: 'assessment', label: 'Reports' },
+  { kind: 'link', icon: 'assessment', label: 'Report', href: '/reports' },
+  { kind: 'link', icon: 'admin_panel_settings', label: 'Account & Permissions', href: '/settings/access' },
   { kind: 'disabled', icon: 'settings', label: 'Settings' },
 ]
 
@@ -49,12 +50,12 @@ function NavigationContent({
   return (
     <>
       <div className={compact ? 'px-sm py-md flex justify-center border-b border-[0.5px] border-outline-variant' : 'px-md pt-lg pb-md flex items-center gap-3 border-b border-[0.5px] border-outline-variant'}>
-        <div className="w-10 h-10 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center text-label-md font-inter font-semibold shrink-0" aria-label="Planner Admin">
-          PA
+        <div className="w-10 h-10 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center text-label-md font-inter font-semibold shrink-0" aria-label="SNY Planner">
+          SP
         </div>
         {!compact && (
           <div className="min-w-0">
-            <p className="text-label-md font-inter font-semibold text-on-surface truncate">Planner Admin</p>
+            <p className="text-label-md font-inter font-semibold text-on-surface truncate">SNY Planner</p>
             <p className="text-label-sm font-inter text-secondary truncate">SNY VINA Plant</p>
           </div>
         )}

@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/knitting/detail/import/confirm/route.ts
 // POST /api/knitting/detail/import/confirm
 // Idempotent (Option B): xóa records cũ theo [machineId, reportDate] trong knitting_daily_detail rồi insert mới.
@@ -45,6 +46,9 @@ const confirmBodySchema = z.object({
 })
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let body: unknown
   try {
     body = await req.json()

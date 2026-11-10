@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/materials/rolling/records/route.ts
 // GET /api/materials/rolling/records — Fetch RollingDailyMetric records with pagination & filters using pure Prisma ORM.
 
@@ -7,6 +8,9 @@ import { prisma } from '@/lib/db'
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   try {
     const { searchParams } = new URL(req.url)
     const date       = searchParams.get('date')?.trim()       // YYYY-MM-DD

@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { withAssignmentLock, overlapWhere, isLockRetryable, ASSIGNMENT_RETRY_MESSAGE } from '@/lib/schedule/assignmentLock'
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
@@ -9,6 +10,9 @@ import type { Prisma } from '@prisma/client';
 import { roundMeters, sameSpecGroup } from '@/lib/schedule/specGroup';
 
 export async function GET(request: Request) {
+  const accessError = await authError('GET', request)
+  if (accessError) return accessError
+
   try {
     const { searchParams } = new URL(request.url);
     const year = searchParams.get("year");
@@ -95,6 +99,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const accessError = await authError('POST', request)
+  if (accessError) return accessError
+
   try {
     const body = await request.json();
     const result = createAssignmentSchema.safeParse(body);

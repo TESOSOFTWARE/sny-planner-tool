@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/materials/route.ts
 // GET /api/materials  — return all materials ordered by name
 // POST /api/materials — create a new material
@@ -46,6 +47,9 @@ const createMaterialSchema = z.object({
 
 // [MoM §3.1] All displayed snapshots use one selected source date.
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   try {
     const requested=req.nextUrl.searchParams.get('reportDate')
     if(requested && !validReportDate(requested)) return NextResponse.json({success:false,error:'Ngày báo cáo không hợp lệ.'},{status:422})
@@ -90,6 +94,9 @@ export async function GET(req: NextRequest) {
 // ── POST ──────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let body: unknown
   try {
     body = await req.json()

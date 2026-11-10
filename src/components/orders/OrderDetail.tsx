@@ -290,6 +290,8 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
           {currentOrder.containerSize && (
             <ViewField label="Container size" value={currentOrder.containerSize} />
           )}
+          {currentOrder.shippingTerms && <ViewField label="Điều kiện giao hàng" value={currentOrder.shippingTerms} />}
+          {currentOrder.paymentTerms && <ViewField label="Điều kiện thanh toán" value={currentOrder.paymentTerms} />}
           <ViewField label="Width (m)"    value={currentOrder.widthM != null ? Number(currentOrder.widthM).toFixed(1) : null} mono />
           <ViewField label="Length (m)"   value={currentOrder.lengthM != null ? Number(currentOrder.lengthM).toLocaleString('vi-VN') : null} mono />
           <ViewField label="GSM (đơn hàng)" value={currentOrder.gsm ?? null} mono />
@@ -511,7 +513,9 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
         {(currentOrder.qty != null || currentOrder.uvPct != null || currentOrder.frFlag || currentOrder.frPct != null ||
           currentOrder.lineNote ||
           currentOrder.description || currentOrder.remark ||
-          currentOrder.meshType || currentOrder.needleCount != null || currentOrder.beamCount != null) && (
+          currentOrder.meshType || currentOrder.needleCount != null || currentOrder.beamCount != null ||
+          currentOrder.gaugeDenier || currentOrder.labelInstruction || currentOrder.shippingNote ||
+          currentOrder.etdDate || currentOrder.etdNote || currentOrder.loadingDate || currentOrder.loadingDateNote || currentOrder.loadingDate2 || currentOrder.loadingDate2Note) && (
           <div className="border-t-[0.5px] border-outline-variant pt-lg">
             <p className="text-label-sm font-inter font-medium text-secondary uppercase tracking-widest mb-md">
               Optional details
@@ -543,6 +547,15 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
               {currentOrder.remark && (
                 <div className="sm:col-span-2"><ViewField label="Remark" value={currentOrder.remark} /></div>
               )}
+              {currentOrder.gaugeDenier && <ViewField label="Gauge & Denier (nguyên văn)" value={currentOrder.gaugeDenier} />}
+              {currentOrder.labelInstruction && <ViewField label="Label / nhãn sản phẩm" value={currentOrder.labelInstruction} />}
+              {currentOrder.shippingNote && <ViewField label="Shipping (nguyên văn)" value={currentOrder.shippingNote} />}
+              {currentOrder.etdDate && <ViewField label="ETD" value={formatDate(currentOrder.etdDate)} />}
+              {currentOrder.etdNote && <ViewField label="ETD note" value={currentOrder.etdNote} />}
+              {currentOrder.loadingDate && <ViewField label="Loading date" value={formatDate(currentOrder.loadingDate)} />}
+              {currentOrder.loadingDateNote && <ViewField label="Loading date note" value={currentOrder.loadingDateNote} />}
+              {currentOrder.loadingDate2 && <ViewField label="Loading date 2" value={formatDate(currentOrder.loadingDate2)} />}
+              {currentOrder.loadingDate2Note && <ViewField label="Loading date 2 note" value={currentOrder.loadingDate2Note} />}
             </dl>
 
             {/* Thông số kỹ thuật */}

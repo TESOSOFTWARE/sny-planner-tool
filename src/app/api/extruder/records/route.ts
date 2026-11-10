@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/extruder/records/route.ts
 // GET /api/extruder/records
 // Query params (all optional):
@@ -10,6 +11,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   const sp = req.nextUrl.searchParams
 
   const dateStr   = sp.get('date')

@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/pi/[piNumber]/approve/route.ts
 // POST /api/orders/pi/[piNumber]/approve
 // Validates every sub-line in the PI as an approved order before atomically
@@ -79,6 +80,9 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: { piNumber: string } },
 ) {
+  const accessError = await authError('POST', _req)
+  if (accessError) return accessError
+
   const piNumber = decodeURIComponent(params.piNumber)
 
   try {

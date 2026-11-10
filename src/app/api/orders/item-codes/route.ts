@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { piPrefix, getCatalogItemCodesForPi, FINISHED_GOODS_ITEM_CODES, ItemCodeOption } from '@/lib/orders/itemCodeCatalog'
@@ -5,6 +6,9 @@ import { piPrefix, getCatalogItemCodesForPi, FINISHED_GOODS_ITEM_CODES, ItemCode
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
+  const accessError = await authError('GET', req)
+  if (accessError) return accessError
+
   try {
     const { searchParams } = new URL(req.url)
     if (searchParams.has('code')) {

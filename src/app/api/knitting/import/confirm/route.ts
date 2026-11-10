@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/knitting/import/confirm/route.ts
 // POST /api/knitting/import/confirm
 // Accepts the same .xlsx file, reads dailyMeters directly from col I (index 8)
@@ -12,6 +13,9 @@ import { Prisma } from '@prisma/client'
 const MAX_FILE_SIZE = 20 * 1024 * 1024
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   // ── 1. Parse multipart ─────────────────────────────────────────────────────
   let formData: FormData
   try {

@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { bulkEditSchema } from '@/lib/validations/bulkEdit'
@@ -7,6 +8,9 @@ import { scheduleDay } from '@/lib/schedule/importSafety'
 
 export const maxDuration = 60
 export async function POST(request: Request) {
+  const accessError = await authError('POST', request)
+  if (accessError) return accessError
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'Dữ liệu JSON không hợp lệ.' }, { status: 422 }) }
   const parsed = bulkEditSchema.safeParse(body)

@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/knitting/detail/import/route.ts
 // POST /api/knitting/detail/import
 // Preview-only: parse the KNITTING sheet for detail data, return summary.
@@ -12,6 +13,9 @@ import { collectRemarkValues, knownMeshKeys } from '@/lib/excel/knittingRemark'
 const MAX_FILE_SIZE = 25 * 1024 * 1024 // 25 MB
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let formData: FormData
   try {
     formData = await req.formData()

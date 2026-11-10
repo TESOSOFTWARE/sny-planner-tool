@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { updateCustomerSchema } from '@/lib/validations/customer'
@@ -8,6 +9,9 @@ interface RouteParams {
 }
 
 export async function PATCH(request: Request, { params }: RouteParams) {
+  const accessError = await authError('PATCH', request)
+  if (accessError) return accessError
+
   try {
     const json = await request.json()
     const parsed = updateCustomerSchema.safeParse(json)
@@ -66,6 +70,9 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 }
 
 export async function DELETE(request: Request, { params }: RouteParams) {
+  const accessError = await authError('DELETE', request)
+  if (accessError) return accessError
+
   try {
     // Check if customer has orders
     const count = await prisma.productionOrder.count({

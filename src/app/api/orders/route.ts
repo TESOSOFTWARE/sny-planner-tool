@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 // src/app/api/orders/route.ts
 // POST /api/orders — validate and create a new ProductionOrder in the DB.
 
@@ -8,6 +9,9 @@ import { calculateOrderWeight } from '@/lib/calculations/orderWeight'
 import { resolveLifecycle, cleanSubLineForValidation, clearHemmedFields } from '@/lib/validations/order'
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   // ── 1. Parse body ──────────────────────────────────────────────────────────
   let body: unknown
   try {
@@ -80,6 +84,17 @@ export async function POST(req: NextRequest) {
         isPlaceholder: lifecycle.isPlaceholder,
         ...(data.deliveryDate && { deliveryDate: new Date(data.deliveryDate) }),
         ...(data.containerSize != null && { containerSize: data.containerSize }),
+        shippingTerms: data.shippingTerms ?? null,
+        paymentTerms: data.paymentTerms ?? null,
+        gaugeDenier: data.gaugeDenier ?? null,
+        labelInstruction: data.labelInstruction ?? null,
+        shippingNote: data.shippingNote ?? null,
+        etdDate: data.etdDate ? new Date(`${data.etdDate}T00:00:00.000Z`) : null,
+        etdNote: data.etdNote ?? null,
+        loadingDate: data.loadingDate ? new Date(`${data.loadingDate}T00:00:00.000Z`) : null,
+        loadingDate2: data.loadingDate2 ? new Date(`${data.loadingDate2}T00:00:00.000Z`) : null,
+        loadingDateNote: data.loadingDateNote ?? null,
+        loadingDate2Note: data.loadingDate2Note ?? null,
         // Technical specs
         ...(data.meshType   != null && { meshType:    data.meshType }),
         ...(data.needleCount != null && { needleCount: data.needleCount }),

@@ -1,3 +1,4 @@
+import { withTestSession } from '@/lib/auth/testSession'
 // 1810-05: real GET handlers, fake Prisma only; never connects to a database.
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -43,11 +44,11 @@ before(async () => {
     knittingDailyDetail: model('knitting'), rollingDailyMetric: model('rolling'),
     packingDailyOutput: model('packing'),
   }
-  routes.extruder = (await import('../extruder/records/route')).GET
-  routes.warping = (await import('../warping/records/route')).GET
-  routes.knitting = (await import('../knitting/detail/records/route')).GET
-  routes.rolling = (await import('./rolling/records/route')).GET
-  routes.packing = (await import('./packing/records/route')).GET
+  routes.extruder = withTestSession((await import('../extruder/records/route')).GET, singleton.prisma)
+  routes.warping = withTestSession((await import('../warping/records/route')).GET, singleton.prisma)
+  routes.knitting = withTestSession((await import('../knitting/detail/records/route')).GET, singleton.prisma)
+  routes.rolling = withTestSession((await import('./rolling/records/route')).GET, singleton.prisma)
+  routes.packing = withTestSession((await import('./packing/records/route')).GET, singleton.prisma)
 })
 after(() => { singleton.prisma = previous })
 

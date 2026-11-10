@@ -1,3 +1,4 @@
+import { authError } from '@/lib/auth/session'
 import { createHash } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -161,6 +162,9 @@ function retryable(error: unknown): boolean {
 }
 
 export async function POST(req: NextRequest) {
+  const accessError = await authError('POST', req)
+  if (accessError) return accessError
+
   let body: unknown
   try {
     body = await req.json()

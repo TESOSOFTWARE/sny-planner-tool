@@ -1,3 +1,4 @@
+import { requireUser } from '@/lib/auth/session'
 import type { Metadata } from 'next'
 import { prisma } from '@/lib/db'
 import CustomerTable from '@/components/customers/CustomerTable'
@@ -10,6 +11,8 @@ export const metadata: Metadata = {
 export const dynamic = 'force-dynamic'
 
 export default async function CustomersPage() {
+  await requireUser()
+
   const raw = await prisma.customer.findMany({
     orderBy: { name: 'asc' },
     include: {
