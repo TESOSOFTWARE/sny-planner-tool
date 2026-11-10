@@ -99,6 +99,15 @@ export interface SubLineItem {
   eyeletColor: string
   eyeletLines: number | ''
   eyeletSpec: string
+  gaugeDenier: string
+  labelInstruction: string
+  shippingNote: string
+  etdDate: string
+  etdNote: string
+  loadingDate: string
+  loadingDateNote: string
+  loadingDate2: string
+  loadingDate2Note: string
 
   assignments?: Array<{
     id: string
@@ -116,6 +125,8 @@ export interface PiMasterDetailEditorProps {
   initialOrderDate: string
   initialDeliveryDate?: string | null
   initialContainerSize?: string | null
+  initialShippingTerms?: string | null
+  initialPaymentTerms?: string | null
   initialDescription?: string | null
   initialRemark?: string | null
   initialLifecycleStatus?: string
@@ -135,6 +146,8 @@ export default function PiMasterDetailEditor({
   initialOrderDate,
   initialDeliveryDate,
   initialContainerSize,
+  initialShippingTerms,
+  initialPaymentTerms,
   initialDescription,
   initialRemark,
   initialLifecycleStatus = 'APPROVED',
@@ -154,6 +167,8 @@ export default function PiMasterDetailEditor({
   const [orderDate, setOrderDate] = useState(initialOrderDate)
   const [deliveryDate, setDeliveryDate] = useState(initialDeliveryDate || '')
   const [containerSize, setContainerSize] = useState(initialContainerSize || '')
+  const [shippingTerms, setShippingTerms] = useState(initialShippingTerms || '')
+  const [paymentTerms, setPaymentTerms] = useState(initialPaymentTerms || '')
   const [description, setDescription] = useState(initialDescription || '')
   const [remark, setRemark] = useState(initialRemark || '')
   const [lifecycleStatus, setLifecycleStatus] = useState<'APPROVED' | 'RESERVED' | 'DRAFT'>(
@@ -249,6 +264,8 @@ export default function PiMasterDetailEditor({
     if (orderDate !== initialOrderDate) return true
     if (deliveryDate !== (initialDeliveryDate || '')) return true
     if (containerSize !== (initialContainerSize || '')) return true
+    if (shippingTerms !== (initialShippingTerms || '')) return true
+    if (paymentTerms !== (initialPaymentTerms || '')) return true
     if (description !== (initialDescription || '')) return true
     if (remark !== (initialRemark || '')) return true
     if (lifecycleStatus !== (initialLifecycleStatus === 'RESERVE' || initialLifecycleStatus === 'PLACEHOLDER' ? 'RESERVED' : initialLifecycleStatus || 'APPROVED')) return true
@@ -300,7 +317,16 @@ export default function PiMasterDetailEditor({
         l.hasEyelet !== init.hasEyelet ||
         l.eyeletColor !== init.eyeletColor ||
         l.eyeletLines !== init.eyeletLines ||
-        l.eyeletSpec !== init.eyeletSpec
+        l.eyeletSpec !== init.eyeletSpec ||
+        l.gaugeDenier !== init.gaugeDenier ||
+        l.labelInstruction !== init.labelInstruction ||
+        l.shippingNote !== init.shippingNote ||
+        l.etdDate !== init.etdDate ||
+        l.etdNote !== init.etdNote ||
+        l.loadingDate !== init.loadingDate ||
+        l.loadingDateNote !== init.loadingDateNote ||
+        l.loadingDate2 !== init.loadingDate2 ||
+        l.loadingDate2Note !== init.loadingDate2Note
       ) {
         return true
       }
@@ -315,6 +341,10 @@ export default function PiMasterDetailEditor({
     initialDeliveryDate,
     containerSize,
     initialContainerSize,
+    shippingTerms,
+    initialShippingTerms,
+    paymentTerms,
+    initialPaymentTerms,
     description,
     initialDescription,
     remark,
@@ -556,6 +586,15 @@ export default function PiMasterDetailEditor({
             eyeletColor: '',
             eyeletLines: '',
             eyeletSpec: '',
+            gaugeDenier: '',
+            labelInstruction: '',
+            shippingNote: '',
+            etdDate: '',
+            etdNote: '',
+            loadingDate: '',
+            loadingDateNote: '',
+            loadingDate2: '',
+            loadingDate2Note: '',
             assignments: [],
           }
       return [...prev, newLine]
@@ -738,6 +777,8 @@ export default function PiMasterDetailEditor({
         orderDate,
         deliveryDate: deliveryDate || null,
         containerSize: containerSize || null,
+        shippingTerms: shippingTerms || null,
+        paymentTerms: paymentTerms || null,
         description: description || null,
         remark: remark || null,
         lifecycleStatus,
@@ -1018,6 +1059,14 @@ export default function PiMasterDetailEditor({
               placeholder="VD: 40HQ x 1, 20FT x 1"
               className="w-full bg-surface border border-outline-variant rounded-lg px-3.5 py-2.5 text-sm focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none transition-all shadow-xs"
             />
+          </div>
+          <div className="lg:col-span-6">
+            <label className="block text-xs font-semibold text-on-surface-variant mb-1.5">Điều kiện giao hàng (Shipping Terms)</label>
+            <input type="text" maxLength={200} value={shippingTerms} onChange={e=>setShippingTerms(e.target.value)} placeholder="VD: FOB Hochiminh, Vietnam" className="w-full bg-surface border border-outline-variant rounded-lg px-3.5 py-2.5 text-sm focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none transition-all shadow-xs" />
+          </div>
+          <div className="lg:col-span-6">
+            <label className="block text-xs font-semibold text-on-surface-variant mb-1.5">Điều kiện thanh toán (Payment Terms)</label>
+            <input type="text" maxLength={200} value={paymentTerms} onChange={e=>setPaymentTerms(e.target.value)} placeholder="VD: T/T within 7 days after shipment" className="w-full bg-surface border border-outline-variant rounded-lg px-3.5 py-2.5 text-sm focus:border-primary focus:ring-1 focus:ring-primary/20 focus:outline-none transition-all shadow-xs" />
           </div>
 
 
@@ -1527,6 +1576,30 @@ export default function PiMasterDetailEditor({
                                 </ul>
                               </div>
                             )}
+
+                            <details className="rounded-lg border border-outline-variant/50 bg-surface-variant/10 p-3">
+                              <summary className="cursor-pointer text-xs font-semibold text-primary">Thông tin bổ sung từ ORDER LIST / PO</summary>
+                              <div className="mt-3 space-y-4">
+                                <fieldset className="grid grid-cols-1 gap-2 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
+                                  <legend className="px-1 text-[11px] font-semibold text-secondary">Thông số nguồn và nhãn</legend>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Gauge &amp; Denier</label><input value={line.gaugeDenier} onChange={e=>updateLineField(idx,'gaugeDenier',e.target.value)} maxLength={100} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Label / nhãn sản phẩm</label><input value={line.labelInstruction} onChange={e=>updateLineField(idx,'labelInstruction',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Shipping (nguyên văn)</label><input value={line.shippingNote} onChange={e=>updateLineField(idx,'shippingNote',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                </fieldset>
+                                <fieldset className="grid grid-cols-1 gap-2 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
+                                  <legend className="px-1 text-[11px] font-semibold text-secondary">Ngày theo nguồn</legend>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">ETD</label><input type="date" value={line.etdDate} onChange={e=>updateLineField(idx,'etdDate',e.target.value)} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Loading date</label><input type="date" value={line.loadingDate} onChange={e=>updateLineField(idx,'loadingDate',e.target.value)} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Loading date 2</label><input type="date" value={line.loadingDate2} onChange={e=>updateLineField(idx,'loadingDate2',e.target.value)} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                </fieldset>
+                                <fieldset className="grid grid-cols-1 gap-2 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
+                                  <legend className="px-1 text-[11px] font-semibold text-secondary">Ghi chú ngày dạng chữ từ PO</legend>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">ETD note</label><input value={line.etdNote} onChange={e=>updateLineField(idx,'etdNote',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Loading date note</label><input value={line.loadingDateNote} onChange={e=>updateLineField(idx,'loadingDateNote',e.target.value)} maxLength={200} placeholder="VD: Mid August, 2026" className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Loading date 2 note</label><input value={line.loadingDate2Note} onChange={e=>updateLineField(idx,'loadingDate2Note',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                </fieldset>
+                              </div>
+                            </details>
 
                             {/* 3 Khối Tiến trình Xưởng */}
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

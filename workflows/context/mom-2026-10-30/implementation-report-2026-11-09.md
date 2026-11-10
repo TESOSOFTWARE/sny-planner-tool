@@ -1,5 +1,14 @@
 # Báo cáo triển khai MoM 30/10 — cập nhật 10/11/2026
 
+## Bổ sung triển khai field Production Orders — 10/11/2026
+
+- Thêm 11 field nullable cho dữ liệu ORDER LIST/PO đã rõ: Gauge & Denier, Label instruction, Shipping note, ETD/date note, hai loading date/date note, Shipping Terms, Payment Terms.
+- Nối field qua schema/types/validation, tạo đơn, sửa đơn và PI, Excel parser/import, template, import comparison, form multi-line, PI editor và order detail. Ngày Excel hợp lệ lưu dạng date-only; nội dung không parse được giữ ở note để không mất dữ liệu nguồn.
+- Có SQL migration additive và rollback tại `prisma/sql/20261110_production_order_source_fields.sql` và `prisma/sql/rollback_20261110_production_order_source_fields.sql`.
+- DB local đã có đủ 11 cột khi preflight 10/11; migration không được chạy lại để tránh lỗi cột trùng. Chưa ghi dữ liệu PDF khách vào DB; không truy cập production.
+- Nhóm packing guide chi tiết, pallet, hàng may và work-order CC2018/AQ vẫn chưa hoàn tất vì cần inventory đầy đủ và làm rõ phạm vi/đơn vị. M30-06/07 vẫn chờ mẫu in.
+- Xác minh bổ sung: parser tests 16/16; toàn bộ suite hiện có 216/216; typecheck PASS; build exit 0; template có 55 cột và cả hai sample rows đều đủ 55 ô; `git diff --check` PASS. Build có cảnh báo môi trường thiếu ESLint và Browserslist DB cũ.
+
 Plan được người dùng duyệt: hoàn thiện M30-01..05 và M30-08..10 trong local; loại trừ M30-06/07; không deploy, không ghi production.
 
 ## Kết quả theo task

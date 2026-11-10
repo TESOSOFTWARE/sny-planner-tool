@@ -27,6 +27,8 @@ export interface SerializedProductionOrder {
   customer: string
   customerId: string | null
   orderDate: string
+  shippingTerms?: string | null
+  paymentTerms?: string | null
 
   widthM: number | null
   lengthM: number | null
@@ -75,6 +77,15 @@ export interface SerializedProductionOrder {
   requiresPacking: boolean
   deliveryDate: string | null
   containerSize: string | null
+  gaugeDenier?: string | null
+  labelInstruction?: string | null
+  shippingNote?: string | null
+  etdDate?: string | null
+  etdNote?: string | null
+  loadingDate?: string | null
+  loadingDate2?: string | null
+  loadingDateNote?: string | null
+  loadingDate2Note?: string | null
 
   meshType: string | null
   needleCount: number | null
@@ -174,6 +185,17 @@ export interface ParsedOrder {
   requiresPacking?: boolean
   deliveryDate?: string | null
   containerSize?: string | null
+  shippingTerms?: string | null
+  paymentTerms?: string | null
+  gaugeDenier?: string | null
+  labelInstruction?: string | null
+  shippingNote?: string | null
+  etdDate?: string | null
+  etdNote?: string | null
+  loadingDate?: string | null
+  loadingDate2?: string | null
+  loadingDateNote?: string | null
+  loadingDate2Note?: string | null
   hasEyelet?: boolean
   eyeletColor?: string | null
   eyeletLines?: number | null

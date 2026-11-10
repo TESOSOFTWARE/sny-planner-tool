@@ -94,6 +94,15 @@ interface LineItem {
   toleranceQtyPct: string
   toleranceSpecPct: string
   colorVersion: string
+  gaugeDenier: string
+  labelInstruction: string
+  shippingNote: string
+  etdDate: string
+  etdNote: string
+  loadingDate: string
+  loadingDateNote: string
+  loadingDate2: string
+  loadingDate2Note: string
 }
 
 // ── Styling helpers ───────────────────────────────────────────────────────────
@@ -223,6 +232,15 @@ function newLine(): LineItem {
     toleranceQtyPct: '10',
     toleranceSpecPct: '5',
     colorVersion: 'STD',
+    gaugeDenier: '',
+    labelInstruction: '',
+    shippingNote: '',
+    etdDate: '',
+    etdNote: '',
+    loadingDate: '',
+    loadingDateNote: '',
+    loadingDate2: '',
+    loadingDate2Note: '',
   }
 }
 
@@ -249,6 +267,8 @@ export default function MultiLineOrderForm() {
   const [orderDate,   setOrderDate]   = useState('')
   const [deliveryDate,setDeliveryDate]= useState('')
   const [containerSize,setContainerSize]= useState('')
+  const [shippingTerms,setShippingTerms]= useState('')
+  const [paymentTerms,setPaymentTerms]= useState('')
   const [description, setDescription] = useState('')
   const [remark,      setRemark]      = useState('')
   // P0: Canonical lifecycle status is the single source of truth
@@ -286,13 +306,13 @@ export default function MultiLineOrderForm() {
   }, [])
   useScheduleModalFocus(confirmation !== null, closeConfirmation, confirmationRef)
   const autoMesh = useRef<Record<number, boolean>>({})
-  const repeatFormRef = useRef({ piNumber, customer, orderDate, deliveryDate, containerSize, description, remark, lines })
-  repeatFormRef.current = { piNumber, customer, orderDate, deliveryDate, containerSize, description, remark, lines }
+  const repeatFormRef = useRef({ piNumber, customer, orderDate, deliveryDate, containerSize, shippingTerms, paymentTerms, description, remark, lines })
+  repeatFormRef.current = { piNumber, customer, orderDate, deliveryDate, containerSize, shippingTerms, paymentTerms, description, remark, lines }
   const loadRepeat = (source: { pi: string; orders: Record<string, unknown>[] }) => {
     const header = source.orders[0]
     const mapped = source.orders.map(order => {
       const line = newLine()
-      const stringFields = ['color', 'colorVersion', 'widthM', 'gsm', 'productionGsm', 'lengthM', 'qty', 'rollLength', 'pieceLength', 'uvPct', 'frPct', 'mbCode', 'itemCode', 'meshType', 'needleCount', 'beamCount', 'lineNote', 'eyeletColor', 'eyeletLines', 'eyeletSpec', 'outerWrapping', 'piecesPerCarton', 'piecesPerBale', 'boxDimensions', 'secondaryPackingType', 'palletDimensions', 'itemsPerPallet', 'packingNote', 'rawFabricGsm', 'coatingGsm', 'finishedGsm', 'toleranceQtyPct', 'toleranceSpecPct'] as const
+      const stringFields = ['color', 'colorVersion', 'widthM', 'gsm', 'productionGsm', 'lengthM', 'qty', 'rollLength', 'pieceLength', 'uvPct', 'frPct', 'mbCode', 'itemCode', 'meshType', 'needleCount', 'beamCount', 'lineNote', 'eyeletColor', 'eyeletLines', 'eyeletSpec', 'outerWrapping', 'piecesPerCarton', 'piecesPerBale', 'boxDimensions', 'secondaryPackingType', 'palletDimensions', 'itemsPerPallet', 'packingNote', 'rawFabricGsm', 'coatingGsm', 'finishedGsm', 'toleranceQtyPct', 'toleranceSpecPct', 'gaugeDenier', 'labelInstruction', 'shippingNote', 'etdDate', 'etdNote', 'loadingDate', 'loadingDateNote', 'loadingDate2', 'loadingDate2Note'] as const
       for (const field of stringFields) {
         if (order[field] != null) line[field] = String(order[field])
       }
@@ -310,6 +330,8 @@ export default function MultiLineOrderForm() {
     pickedCustomer.current = copiedCustomerId ? { name: String(header.customer ?? '').trim(), id: copiedCustomerId } : null
     setCustomerId(copiedCustomerId)
     setContainerSize(String(header.containerSize ?? ''))
+    setShippingTerms(String(header.shippingTerms ?? ''))
+    setPaymentTerms(String(header.paymentTerms ?? ''))
     // Mô tả cũ thường ghi "repeat of <PI trước>" — ghi lại theo PI nguồn thật thay vì chép.
     setDescription(`Repeat of ${source.pi}`)
     setRemark(String(header.remark ?? ''))
@@ -338,8 +360,8 @@ export default function MultiLineOrderForm() {
       if (response.status === 404) { setApiError(`Không tìm thấy PI ${pi}. Kiểm tra lại số PI.`); return }
       if (!response.ok || !Array.isArray(data.orders) || !data.orders.length) { setApiError(data.error || 'Không thể chép PI'); return }
       const source = { pi, orders: data.orders }
-      const { piNumber, customer, orderDate, deliveryDate, containerSize, description, remark, lines } = repeatFormRef.current
-      const hasData = !!(piNumber || customer || orderDate || deliveryDate || containerSize || description || remark) || lines.length > 1 || lines.some(line => {
+      const { piNumber, customer, orderDate, deliveryDate, containerSize, shippingTerms, paymentTerms, description, remark, lines } = repeatFormRef.current
+      const hasData = !!(piNumber || customer || orderDate || deliveryDate || containerSize || shippingTerms || paymentTerms || description || remark) || lines.length > 1 || lines.some(line => {
         const defaults = newLine()
         return (Object.keys(defaults) as (keyof LineItem)[]).some(field => field !== 'id' && line[field] !== defaults[field])
       })
@@ -657,6 +679,8 @@ export default function MultiLineOrderForm() {
       orderDate:   orderDate || undefined,
       deliveryDate: deliveryDate || undefined,
       containerSize: containerSize.trim() || undefined,
+      shippingTerms: shippingTerms.trim() || undefined,
+      paymentTerms: paymentTerms.trim() || undefined,
       description: description.trim() || undefined,
       remark:      remark.trim()      || undefined,
       isDraft: isDraftMode,
@@ -716,6 +740,15 @@ export default function MultiLineOrderForm() {
         finishedGsm: line.finishedGsm ? Number(line.finishedGsm) : undefined,
         toleranceQtyPct: line.toleranceQtyPct ? parseFloat(line.toleranceQtyPct) : undefined,
         toleranceSpecPct: line.toleranceSpecPct ? parseFloat(line.toleranceSpecPct) : undefined,
+        gaugeDenier: line.gaugeDenier.trim() || undefined,
+        labelInstruction: line.labelInstruction.trim() || undefined,
+        shippingNote: line.shippingNote.trim() || undefined,
+        etdDate: line.etdDate || undefined,
+        etdNote: line.etdNote.trim() || undefined,
+        loadingDate: line.loadingDate || undefined,
+        loadingDateNote: line.loadingDateNote.trim() || undefined,
+        loadingDate2: line.loadingDate2 || undefined,
+        loadingDate2Note: line.loadingDate2Note.trim() || undefined,
       })),
     }
 
@@ -930,6 +963,15 @@ export default function MultiLineOrderForm() {
               onChange={(e) => setContainerSize(e.target.value)}
               className={inputCls()}
             />
+          </div>
+
+          <div>
+            <Label>Điều kiện giao hàng (Shipping Terms)</Label>
+            <input id="ml-shippingTerms" type="text" maxLength={200} placeholder="VD: FOB Hochiminh, Vietnam" value={shippingTerms} onChange={e=>setShippingTerms(e.target.value)} className={inputCls()} />
+          </div>
+          <div>
+            <Label>Điều kiện thanh toán (Payment Terms)</Label>
+            <input id="ml-paymentTerms" type="text" maxLength={200} placeholder="VD: T/T within 7 days after shipment" value={paymentTerms} onChange={e=>setPaymentTerms(e.target.value)} className={inputCls()} />
           </div>
 
           {/* Description */}
@@ -1800,6 +1842,30 @@ export default function MultiLineOrderForm() {
                   />
                 </div>
               </div>
+
+              <details className="mt-4 rounded-lg border border-outline-variant/40 bg-surface-variant/10 p-3">
+                <summary className="cursor-pointer text-xs font-semibold text-primary">Thông tin bổ sung từ ORDER LIST / PO</summary>
+                <div className="mt-3 space-y-4">
+                  <fieldset className="grid grid-cols-1 gap-3 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
+                    <legend className="px-1 text-[11px] font-semibold text-secondary">Thông số nguồn và nhãn</legend>
+                    <div><Label>Gauge &amp; Denier (nguyên văn)</Label><input className={inputCls()} maxLength={100} value={line.gaugeDenier} onChange={e=>updateLine(line.id,{gaugeDenier:e.target.value})} /></div>
+                    <div><Label>Label / nhãn sản phẩm</Label><input className={inputCls()} maxLength={200} value={line.labelInstruction} onChange={e=>updateLine(line.id,{labelInstruction:e.target.value})} /></div>
+                    <div><Label>Shipping (nguyên văn từ ORDER LIST)</Label><input className={inputCls()} maxLength={200} value={line.shippingNote} onChange={e=>updateLine(line.id,{shippingNote:e.target.value})} /></div>
+                  </fieldset>
+                  <fieldset className="grid grid-cols-1 gap-3 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
+                    <legend className="px-1 text-[11px] font-semibold text-secondary">Ngày theo nguồn</legend>
+                    <div><Label>ETD</Label><input type="date" className={inputCls()} value={line.etdDate} onChange={e=>updateLine(line.id,{etdDate:e.target.value})} /></div>
+                    <div><Label>Loading date</Label><input type="date" className={inputCls()} value={line.loadingDate} onChange={e=>updateLine(line.id,{loadingDate:e.target.value})} /></div>
+                    <div><Label>Loading date 2</Label><input type="date" className={inputCls()} value={line.loadingDate2} onChange={e=>updateLine(line.id,{loadingDate2:e.target.value})} /></div>
+                  </fieldset>
+                  <fieldset className="grid grid-cols-1 gap-3 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
+                    <legend className="px-1 text-[11px] font-semibold text-secondary">Ghi chú ngày khi nguồn không có ngày chính xác</legend>
+                    <div><Label>ETD note</Label><input className={inputCls()} maxLength={200} placeholder="Giữ nguyên text nguồn" value={line.etdNote} onChange={e=>updateLine(line.id,{etdNote:e.target.value})} /></div>
+                    <div><Label>Loading date note</Label><input className={inputCls()} maxLength={200} placeholder="VD: Mid August, 2026" value={line.loadingDateNote} onChange={e=>updateLine(line.id,{loadingDateNote:e.target.value})} /></div>
+                    <div><Label>Loading date 2 note</Label><input className={inputCls()} maxLength={200} value={line.loadingDate2Note} onChange={e=>updateLine(line.id,{loadingDate2Note:e.target.value})} /></div>
+                  </fieldset>
+                </div>
+              </details>
 
               {/* ── Section 4: Tiêu chuẩn Dung sai & Dự tính Sản xuất (Tolerances & Preview) ── */}
               <div className="mt-4 bg-surface-variant/15 border border-outline-variant/40 rounded-lg p-3 space-y-3">

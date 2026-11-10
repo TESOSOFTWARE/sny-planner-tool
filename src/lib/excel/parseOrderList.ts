@@ -74,6 +74,23 @@ function safeDate(v: unknown): string | null {
   return null
 }
 
+function sourceDate(v: unknown, date1904: boolean): { date: string | null; note: string | null } {
+  if (v instanceof Date && !Number.isNaN(v.getTime())) return { date: v.toISOString().slice(0, 10), note: null }
+  if (typeof v === 'string') {
+    const value = v.trim()
+    return isValidISODate(value) ? { date: value, note: null } : { date: null, note: safeStr(value) }
+  }
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v) || v <= 0) return { date: null, note: null }
+    const parsed = XLSX.SSF.parse_date_code(v, { date1904 })
+    if (parsed && parsed.y > 0 && parsed.m > 0 && parsed.d > 0) {
+      const date = new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d)).toISOString().slice(0, 10)
+      return { date, note: null }
+    }
+  }
+  return { date: null, note: safeStr(v) }
+}
+
 function safeBool(v: unknown): boolean {
   if (v == null) return false
   if (typeof v === 'boolean') return v
@@ -125,6 +142,7 @@ function findColIdx(
 
 export function parseOrderList(buffer: Buffer): ParsedOrder[] {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true })
+  const date1904 = Boolean(wb.Workbook?.WBProps?.date1904)
   const sheetName = wb.SheetNames[0]
   if (!sheetName) {
     console.warn('[parseOrderList] Workbook has no sheets')
@@ -220,6 +238,17 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
   const lineNoteColIdx = findColIdx(headers, (h) => h.toUpperCase() === 'LINE NOTE' || h.toUpperCase() === 'NOTE' || h.toUpperCase().includes('GHI CHÚ DÒNG'))
   const requiresPackingColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('PACK') && (h.toUpperCase().includes('REQUIRE') || h.toUpperCase().includes('PACKING')))
   const deliveryDateColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('DELIVERY') && h.toUpperCase().includes('DATE') || h.toUpperCase().includes('GIAO HÀNG'))
+  const loadingDateColIdx = findColIdx(headers, h => h.trim().toUpperCase() === 'LOADING DATE')
+  const etdDateColIdx = findColIdx(headers, h => h.trim().toUpperCase() === 'ETD')
+  const loadingDate2ColIdx = findColIdx(headers, h => /^LOADING\s*DATE\s*2$/i.test(h.trim()))
+  const gaugeDenierColIdx = findColIdx(headers, h => h.toUpperCase().includes('GAUGE') && h.toUpperCase().includes('DENIER'))
+  const labelInstructionColIdx = findColIdx(headers, h => ['LABEL', 'LABEL INSTRUCTION'].includes(h.trim().toUpperCase()))
+  const shippingNoteColIdx = findColIdx(headers, h => ['SHIPPING', 'SHIPPING NOTE'].includes(h.trim().toUpperCase()))
+  const shippingTermsColIdx = findColIdx(headers, h => h.trim().toUpperCase() === 'SHIPPING TERMS')
+  const paymentTermsColIdx = findColIdx(headers, h => h.trim().toUpperCase() === 'PAYMENT TERMS')
+  const etdNoteColIdx = findColIdx(headers, h => h.trim().toUpperCase() === 'ETD NOTE')
+  const loadingDateNoteColIdx = findColIdx(headers, h => h.trim().toUpperCase() === 'LOADING DATE NOTE')
+  const loadingDate2NoteColIdx = findColIdx(headers, h => h.trim().toUpperCase() === 'LOADING DATE 2 NOTE')
   const containerSizeColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('CONTAINER'))
   const lifecycleColIdx = findColIdx(headers, (h) => h.toUpperCase().includes('LIFECYCLE') || h.toUpperCase() === 'STATUS' || h.toUpperCase().includes('TRẠNG THÁI') || h.toUpperCase().includes('TÌNH TRẠNG'))
   const hasEyeletColIdx = findColIdx(headers, (h) => h.toUpperCase() === 'EYELET' || (h.toUpperCase().includes('HAS') && h.toUpperCase().includes('EYELET')))
@@ -313,6 +342,17 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
     const lineNote = safeStr(get(lineNoteColIdx))
     const requiresPacking = safeBool(get(requiresPackingColIdx))
     const deliveryDate = safeDate(get(deliveryDateColIdx))
+    const loadingDate = sourceDate(get(loadingDateColIdx), date1904)
+    const etdDate = sourceDate(get(etdDateColIdx), date1904)
+    const loadingDate2 = sourceDate(get(loadingDate2ColIdx), date1904)
+    const gaugeDenier = safeStr(get(gaugeDenierColIdx))
+    const labelInstruction = safeStr(get(labelInstructionColIdx))
+    const shippingNote = safeStr(get(shippingNoteColIdx))
+    const shippingTerms = safeStr(get(shippingTermsColIdx))
+    const paymentTerms = safeStr(get(paymentTermsColIdx))
+    const etdSourceNote = safeStr(get(etdNoteColIdx))
+    const loadingSourceNote = safeStr(get(loadingDateNoteColIdx))
+    const loading2SourceNote = safeStr(get(loadingDate2NoteColIdx))
     const containerSize = safeStr(get(containerSizeColIdx))
     const hasEyelet = safeBool(get(hasEyeletColIdx))
     const eyeletColor = safeStr(get(eyeletColorColIdx))
@@ -515,6 +555,17 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       requiresPacking,
       deliveryDate,
       containerSize,
+      shippingTerms,
+      paymentTerms,
+      gaugeDenier,
+      labelInstruction,
+      shippingNote,
+      etdDate: etdDate.date,
+      etdNote: etdSourceNote ?? etdDate.note,
+      loadingDate: loadingDate.date,
+      loadingDateNote: loadingSourceNote ?? loadingDate.note,
+      loadingDate2: loadingDate2.date,
+      loadingDate2Note: loading2SourceNote ?? loadingDate2.note,
       hasEyelet,
       eyeletColor,
       eyeletLines,
@@ -585,6 +636,17 @@ export function parseOrderList(buffer: Buffer): ParsedOrder[] {
       requiresPacking,
       deliveryDate,
       containerSize,
+      shippingTerms,
+      paymentTerms,
+      gaugeDenier,
+      labelInstruction,
+      shippingNote,
+      etdDate: etdDate.date,
+      etdNote: etdSourceNote ?? etdDate.note,
+      loadingDate: loadingDate.date,
+      loadingDateNote: loadingSourceNote ?? loadingDate.note,
+      loadingDate2: loadingDate2.date,
+      loadingDate2Note: loading2SourceNote ?? loadingDate2.note,
       hasEyelet,
       eyeletColor,
       eyeletLines,
@@ -632,6 +694,17 @@ const IMPORT_COMPARISON_FIELDS = [
   'requiresPacking',
   'deliveryDate',
   'containerSize',
+  'shippingTerms',
+  'paymentTerms',
+  'gaugeDenier',
+  'labelInstruction',
+  'shippingNote',
+  'etdDate',
+  'etdNote',
+  'loadingDate',
+  'loadingDateNote',
+  'loadingDate2',
+  'loadingDate2Note',
   'meshType',
   'needleCount',
   'beamCount',
@@ -722,6 +795,17 @@ function comparisonValues(row: ParsedOrder | ProductionOrder): Record<ImportComp
     requiresPacking: row.requiresPacking === true,
     deliveryDate: normalizedDate(row.deliveryDate),
     containerSize: normalizedText(row.containerSize),
+    shippingTerms: normalizedText(row.shippingTerms),
+    paymentTerms: normalizedText(row.paymentTerms),
+    gaugeDenier: normalizedText(row.gaugeDenier),
+    labelInstruction: normalizedText(row.labelInstruction),
+    shippingNote: normalizedText(row.shippingNote),
+    etdDate: normalizedDate(row.etdDate),
+    etdNote: normalizedText(row.etdNote),
+    loadingDate: normalizedDate(row.loadingDate),
+    loadingDateNote: normalizedText(row.loadingDateNote),
+    loadingDate2: normalizedDate(row.loadingDate2),
+    loadingDate2Note: normalizedText(row.loadingDate2Note),
     meshType: normalizedText(row.meshType),
     needleCount: normalizedNumber(row.needleCount),
     beamCount: normalizedNumber(row.beamCount),

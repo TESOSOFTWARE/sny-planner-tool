@@ -155,6 +155,19 @@ model ProductionOrder {
   requiresPacking Boolean   @default(false)   // checkbox đóng gói (kept for backward compat)
   deliveryDate    DateTime?             // shared: ngày giao hàng
   containerSize   String?               // shared: "40HQ x 1", "20FT x 1"
+  shippingTerms   String?               // PO terms: e.g. FOB Hochiminh, Vietnam
+  paymentTerms    String?               // PO terms: e.g. T/T within 7 days after shipment
+
+  // Source fields from ORDER LIST / PO. Keep Shipping/Label and loading-date notes verbatim.
+  gaugeDenier      String?
+  labelInstruction String?
+  shippingNote     String?
+  etdDate          DateTime?
+  etdNote          String?
+  loadingDate      DateTime?
+  loadingDate2     DateTime?
+  loadingDateNote  String?
+  loadingDate2Note String?
 
   // Technical specs (added M3)
   meshType     String?               // Thể loại lưới

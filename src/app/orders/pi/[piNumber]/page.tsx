@@ -169,6 +169,15 @@ export default async function PiMasterDetailPage({ params }: Props) {
     eyeletColor: o.eyeletColor || '',
     eyeletLines: o.eyeletLines != null ? o.eyeletLines : '',
     eyeletSpec: o.eyeletSpec || '',
+    gaugeDenier: o.gaugeDenier || '',
+    labelInstruction: o.labelInstruction || '',
+    shippingNote: o.shippingNote || '',
+    etdDate: o.etdDate ? o.etdDate.toISOString().slice(0, 10) : '',
+    etdNote: o.etdNote || '',
+    loadingDate: o.loadingDate ? o.loadingDate.toISOString().slice(0, 10) : '',
+    loadingDateNote: o.loadingDateNote || '',
+    loadingDate2: o.loadingDate2 ? o.loadingDate2.toISOString().slice(0, 10) : '',
+    loadingDate2Note: o.loadingDate2Note || '',
 
     assignments: o.assignments.map((a) => ({
       ...a,
@@ -203,6 +212,8 @@ export default async function PiMasterDetailPage({ params }: Props) {
       initialOrderDate={primaryHeader.orderDate.toISOString().slice(0, 10)}
       initialDeliveryDate={primaryHeader.deliveryDate ? primaryHeader.deliveryDate.toISOString().slice(0, 10) : null}
       initialContainerSize={primaryHeader.containerSize}
+      initialShippingTerms={primaryHeader.shippingTerms}
+      initialPaymentTerms={primaryHeader.paymentTerms}
       initialDescription={primaryHeader.description}
       initialRemark={primaryHeader.remark}
       initialLifecycleStatus={primaryHeader.lifecycleStatus || 'APPROVED'}

@@ -2,7 +2,7 @@
 
 Nguồn: [MoM 30/10 §2, §4]; yêu cầu user 10/11: thống kê field còn thiếu trong các file Production Orders và lập plan sửa.
 
-Trạng thái: **PLAN — chưa bắt đầu thay schema/form/import trong plan này.** Kế hoạch này chỉ sửa phần dữ liệu đơn hàng/quy cách; M30-06/07 về mẫu in vẫn là phạm vi riêng và đang chờ SNY.
+Trạng thái: **ĐÃ TRIỂN KHAI MỘT LÁT CẮT LOCAL cho field ORDER LIST/PO đã rõ nghĩa; kiểm kê toàn bộ nguồn và các nhóm quy cách khác vẫn mở.** M30-06/07 về mẫu in vẫn là phạm vi riêng và đang chờ SNY.
 
 ## Mục tiêu
 
@@ -30,6 +30,14 @@ Lập danh mục có bằng chứng cho mọi trường trong nguồn Production
 | 7. QA/UAT | Sanitized fixtures lấy từ từng nguồn; DB local tách biệt; account theo role | Parser unit tests; API create/edit/import preview-confirm/retry; round-trip file → DB → UI; kiểm tra ngày/decimal/units; browser 1280/768, keyboard/focus/error/empty; SNY xác nhận UAT. | PASS chỉ cho case đã chạy; mapping/detail/tổng khớp theo đơn vị và precision; không gọi là nghiệm thu khi thiếu UAT. |
 
 ## Gap cần phân loại từ các nguồn hiện có
+
+### Kết quả triển khai 10/11/2026
+
+Đã bổ sung các field nullable theo từng dòng đơn: `gaugeDenier`, `labelInstruction`, `shippingNote`, `etdDate`, `etdNote`, `loadingDate`, `loadingDateNote`, `loadingDate2`, `loadingDate2Note`; cùng `shippingTerms` và `paymentTerms` cho thông tin PI/PO dùng chung. Các field được nối qua validation, tạo/sửa đơn, sửa PI, parser/import Excel, template và trang chi tiết. `ETD`/loading date được lưu kiểu ngày; nếu ô nguồn là text/giá trị không parse chắc chắn thì giữ nguyên trong note, không ép thành ngày. Giá trị `Shipping` opaque được giữ nguyên dạng text.
+
+Migration additive và rollback nằm tại `prisma/sql/20261110_production_order_source_fields.sql` và `prisma/sql/rollback_20261110_production_order_source_fields.sql`. Tại lần kiểm tra 10/11, DB local đã có đủ 11 cột với kiểu nullable tương ứng; vì vậy chưa chạy lại SQL migration để tránh duplicate-column. Không truy cập hoặc ghi production. PO `CVellis26-2` vẫn chưa được import.
+
+Phần này không đóng toàn bộ M30-01/04: thông tin strap/banding, core/wrap, pallet count/history, chi tiết may, và work order CC2018/AQ vẫn cần đối soát ngữ nghĩa/phạm vi trước khi thiết kế field riêng.
 
 | Nhóm | Hiện đã có trên web | Cần kiểm tra/khả năng thiếu |
 |---|---|---|

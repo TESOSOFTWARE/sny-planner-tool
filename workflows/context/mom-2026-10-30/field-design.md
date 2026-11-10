@@ -14,4 +14,12 @@ Mẫu bằng chứng theo ô và vị trí code nằm trong `field-coverage.csv`
 
 Đề xuất form chia section 3–4 trường mỗi nhóm, chỉ hiện section áp dụng cho item. Hướng dẫn chung của PI và quy cách riêng của item cần hai cấp khác nhau. Mỗi bản chỉ dẫn lưu nguồn và revision; mẫu đã phát hành giữ snapshot. Các trường tham gia tính toán cần typed value và unit rõ; ghi chú/ảnh giữ nguyên ngữ cảnh.
 
-Đính kèm hiện gắn với một item `ProductionOrder`, giới hạn 5 MB, nhận JPEG/PNG/WebP/PDF, kiểm tra chữ ký nội dung, lưu byte trong PostgreSQL và bảo vệ tải lên/xem/xóa bằng quyền order. Cách lưu DB có tính bền vững và nằm cùng backup DB; vận hành cần theo dõi tăng trưởng DB và backup. Chưa có migration chạy hoặc kiểm tra runtime local vì PostgreSQL local chưa hoạt động.
+Đính kèm hiện gắn với một item `ProductionOrder`, giới hạn 5 MB, nhận JPEG/PNG/WebP/PDF, kiểm tra chữ ký nội dung, lưu byte trong PostgreSQL và bảo vệ tải lên/xem/xóa bằng quyền order. Cách lưu DB có tính bền vững và nằm cùng backup DB; vận hành cần theo dõi tăng trưởng DB và backup. Migration attachment đã được áp dụng trên DB local theo báo cáo 09/11.
+
+## Lát cắt field ORDER LIST/PO bổ sung ngày 10/11/2026
+
+Đã thêm nullable field và nối qua create/edit/import/template/detail cho `Gauge & Denier`, `LABEL`, `Shipping`, `ETD`, `LOADING DATE`, `Loading date2`, `Shipping Terms`, `Payment Terms`. Giá trị text bất thường trong cột ngày được lưu nguyên vào note nguồn; không đoán ngày. `Shipping` được giữ nguyên là ghi chú nguồn do ví dụ chứa giá trị opaque. Terms từ PO được lưu riêng, không lấy từ cột Shipping.
+
+SQL additive và rollback ở `prisma/sql/20261110_production_order_source_fields.sql` và `prisma/sql/rollback_20261110_production_order_source_fields.sql`. Lúc kiểm tra local 10/11, cả 11 cột đã tồn tại với kiểu nullable tương ứng nên không chạy lặp migration. Chưa ghi dữ liệu khách từ PDF vào DB.
+
+Nhóm field còn thiếu/chưa chốt: packing guide (tolerance, strap/banding, label position, core/wrap, LOSS), pallet count/reference/history, garment/May D và các trường work-order của CC2018/AQ. Chúng không được coi là xong chỉ vì có attachment hoặc field note tổng quát.

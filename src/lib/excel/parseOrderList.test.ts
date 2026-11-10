@@ -22,7 +22,33 @@ const standardHeaders = [
   'DESCRIPTION', 'REMARK', 'MB CODE', 'PROD GSM', 'MESH TYPE',
   'SỐ KIM', 'SỐ DÀN', 'NOTE', 'PACKING', 'DELIVERY DATE', 'CONTAINER',
   'EYELET', 'EYELET COLOR', 'EYELET LINE', 'EYELET SPEC',
+  'GAUGE & DENIER', 'LABEL INSTRUCTION', 'SHIPPING NOTE', 'ETD', 'ETD NOTE',
+  'LOADING DATE', 'LOADING DATE NOTE', 'LOADING DATE 2', 'LOADING DATE 2 NOTE',
+  'SHIPPING TERMS', 'PAYMENT TERMS',
 ]
+
+test('MoM30 source fields preserve mixed loading-date text and order terms', () => {
+  const values: Record<string, unknown> = {
+    'PI NUMBER': 'CVELLIS26-2', CUSTOMER: 'TEST BUYER', NO: 1, DATE: '2026-07-01',
+    GSM: 75, WIDTH: 3, LENGTH: 100, COLOR: 'BLUE', 'ORDER TYPE': 'rolls', QTY: 450,
+    'GAUGE & DENIER': 'G28.5 / D615', 'LABEL INSTRUCTION': 'Blue product label',
+    'SHIPPING NOTE': 'Qatar', ETD: '2026-08-10', 'ETD NOTE': null,
+    'LOADING DATE': 'Mid August, 2026', 'LOADING DATE NOTE': null,
+    'LOADING DATE 2': '2026-08-15', 'LOADING DATE 2 NOTE': null,
+    'SHIPPING TERMS': 'FOB Hochiminh, Vietnam', 'PAYMENT TERMS': '100% T/T within 7 days after shipment',
+  }
+  const row = standardHeaders.map(header => values[header] ?? null)
+  const [parsed] = parseOrderList(makeOrderListWorkbook(standardHeaders, [row]))
+  assert.equal(parsed.gaugeDenier, 'G28.5 / D615')
+  assert.equal(parsed.labelInstruction, 'Blue product label')
+  assert.equal(parsed.shippingNote, 'Qatar')
+  assert.equal(parsed.etdDate, '2026-08-10')
+  assert.equal(parsed.loadingDate, null)
+  assert.equal(parsed.loadingDateNote, 'Mid August, 2026')
+  assert.equal(parsed.loadingDate2, '2026-08-15')
+  assert.equal(parsed.shippingTerms, 'FOB Hochiminh, Vietnam')
+  assert.equal(parsed.paymentTerms, '100% T/T within 7 days after shipment')
+})
 
 test('DoD-1.1: Import file with blank NO cells parses all rows without dropping any', () => {
   const rows: unknown[][] = []
@@ -402,10 +428,10 @@ test('deduplicateValidationErrors removes redundant manual and Zod messages for 
 test('1210-02: workbook import retains all five decimal GSM fields without rounding', () => {
   const headers = [...standardHeaders, 'RAW GSM', 'COATING GSM', 'FINISHED GSM']
   const row: unknown[] = ['PI-DECIMAL-GSM', 'CUSTOMER', 1, '2026-10-12', 50.8, 2, 100, 'BLUE', 'meters']
-  row[18] = 51.12
-  row[30] = 40.25
-  row[31] = 10.55
-  row[32] = 50.8
+  row[standardHeaders.indexOf('PROD GSM')] = 51.12
+  row[headers.indexOf('RAW GSM')] = 40.25
+  row[headers.indexOf('COATING GSM')] = 10.55
+  row[headers.indexOf('FINISHED GSM')] = 50.8
   const parsed = parseOrderList(makeOrderListWorkbook(headers, [row]))[0]
   assert.equal(parsed.isValid, true, parsed.validationErrors?.join('; '))
   assert.equal(parsed.gsm, 50.8)

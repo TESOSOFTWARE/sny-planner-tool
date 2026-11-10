@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: `Validation failed — ${messages}` }, { status: 422 })
   }
 
-  const { piNumber, customer, customerId, orderDate, deliveryDate, containerSize, description, remark, lines, requireNewPi } = parsed.data
+  const { piNumber, customer, customerId, orderDate, deliveryDate, containerSize, shippingTerms, paymentTerms, description, remark, lines, requireNewPi } = parsed.data
   const effectiveOrderDate = orderDate && /^\d{4}-\d{2}-\d{2}$/.test(orderDate)
     ? orderDate
     : new Date().toISOString().slice(0, 10)
@@ -136,6 +136,8 @@ export async function POST(req: NextRequest) {
           requiresPacking: line.requiresPacking ?? false,
           deliveryDate: deliveryDate ?? null,
           containerSize: containerSize ?? null,
+          shippingTerms: shippingTerms ?? null,
+          paymentTerms: paymentTerms ?? null,
           hasEyelet: line.hasEyelet ?? false,
           eyeletColor: line.eyeletColor ?? null,
           eyeletLines: line.eyeletLines ?? null,
@@ -215,6 +217,8 @@ export async function POST(req: NextRequest) {
             requiresPacking: state.requiresPacking ?? false,
             deliveryDate: state.deliveryDate ? new Date(`${state.deliveryDate}T00:00:00.000Z`) : null,
             containerSize: state.containerSize ?? null,
+            shippingTerms: shippingTerms ?? null,
+            paymentTerms: paymentTerms ?? null,
             meshType: state.meshType ?? null,
             needleCount: state.needleCount ?? null,
             beamCount: state.beamCount ?? null,
@@ -225,6 +229,15 @@ export async function POST(req: NextRequest) {
             eyeletColor: state.eyeletColor ?? null,
             eyeletLines: state.eyeletLines ?? null,
             eyeletSpec: state.eyeletSpec ?? null,
+            gaugeDenier: state.gaugeDenier ?? null,
+            labelInstruction: state.labelInstruction ?? null,
+            shippingNote: state.shippingNote ?? null,
+            etdDate: state.etdDate ? new Date(`${state.etdDate}T00:00:00.000Z`) : null,
+            etdNote: state.etdNote ?? null,
+            loadingDate: state.loadingDate ? new Date(`${state.loadingDate}T00:00:00.000Z`) : null,
+            loadingDate2: state.loadingDate2 ? new Date(`${state.loadingDate2}T00:00:00.000Z`) : null,
+            loadingDateNote: state.loadingDateNote ?? null,
+            loadingDate2Note: state.loadingDate2Note ?? null,
             colorVersion: (state as any).colorVersion ?? null,
             primaryPackingType: (state as any).primaryPackingType ?? 'ROLL',
             subPackingType: (state as any).subPackingType ?? null,
