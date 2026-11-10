@@ -24,4 +24,4 @@ Kế hoạch và nhập tay có API, validation và tab riêng tại `/orders/pr
 
 Actual Excel theo từng công đoạn tiếp tục dùng preview/confirm hiện hữu tại menu Reports; bảng Production Orders có liên kết sang khu vực import. Chưa có import workbook chung cho kế hoạch mới; các định dạng kế hoạch nguồn có cấu trúc khác nhau và chưa được gom thành một contract.
 
-Thiếu catalog mới không chặn lưu tham chiếu nguồn, nhưng chặn khẳng định tiến độ chính xác theo item. M30-06/07 vẫn cần mẫu in khác của SNY; không nghiệm thu bằng mẫu hiện tại.
+Thiếu catalog mới không chặn lưu tham chiếu nguồn, nhưng chặn khẳng định tiến độ chính xác theo item. M30-06/07 đã có mẫu in đề xuất TESO làm baseline theo duyệt của người dùng; cần SNY xác nhận trước nghiệm thu.

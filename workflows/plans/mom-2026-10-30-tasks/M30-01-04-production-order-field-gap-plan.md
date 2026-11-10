@@ -2,7 +2,7 @@
 
 Nguồn: [MoM 30/10 §2, §4]; yêu cầu user 10/11: thống kê field còn thiếu trong các file Production Orders và lập plan sửa.
 
-Trạng thái: **ĐÃ TRIỂN KHAI MỘT LÁT CẮT LOCAL cho field ORDER LIST/PO đã rõ nghĩa; kiểm kê toàn bộ nguồn và các nhóm quy cách khác vẫn mở.** M30-06/07 về mẫu in vẫn là phạm vi riêng và đang chờ SNY.
+Trạng thái: **ĐÃ TRIỂN KHAI MỘT LÁT CẮT LOCAL cho field ORDER LIST/PO đã rõ nghĩa; kiểm kê toàn bộ nguồn và các nhóm quy cách khác vẫn mở.** M30-06/07 đã có mẫu in đề xuất TESO làm baseline; chờ SNY xác nhận.
 
 ## Mục tiêu
 
@@ -72,4 +72,4 @@ Phần này không đóng toàn bộ M30-01/04: thông tin strap/banding, core/w
 
 ## Thứ tự phụ thuộc
 
-M30-01 source inventory → M30-02 PI/sub-line mapping → M30-03 field/data contract → M30-04 typed optional fields/attachment → M30-05 form/import/report view → local QA → SNY UAT. M30-06/07 print views vẫn tách riêng, chờ mẫu in SNY.
+M30-01 source inventory → M30-02 PI/sub-line mapping → M30-03 field/data contract → M30-04 typed optional fields/attachment → M30-05 form/import/report view → local QA → SNY UAT. M30-06/07 print views là luồng riêng, hiện có baseline TESO và chờ SNY xác nhận.

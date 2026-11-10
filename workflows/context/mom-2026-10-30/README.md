@@ -14,7 +14,7 @@ Chạy offline ngày 09/11/2026 bằng `python3 scripts/audit-mom-3010.py`. Ngu�
 
 Phương pháp M30-02: chỉ khảo sát dòng có ORDER, Color, Gauge và Denier; lấy phần trước hậu tố GSM làm mã ứng viên, so mã sau khi bỏ whitespace và đổi hoa. Đây là phép chẩn đoán đơn giản, không phải production resolver, không có fuzzy-match và không gán item ID. Hai dòng chỉ khớp PI vẫn phải rà item. Các dòng không đủ cột không nằm trong tập 193; cần thiết kế parser đầy đủ trước khi kết luận độ phủ file.
 
-M30-01 và M30-02 **chưa hoàn tất toàn phạm vi**. Người dùng hiện không có catalog mới; [đề xuất hợp đồng dữ liệu](data-contract.md) giữ PI thô và liên kết nullable. [Thiết kế field](field-design.md) ghi rõ trường cần bổ sung/rà lại. Người dùng cần mẫu in khác của SNY; M30-06/07 chờ mẫu này. Auth đã chốt chỉ email/mật khẩu và có [hướng dẫn local](local-login.md).
+M30-01 và M30-02 **chưa hoàn tất toàn phạm vi**. Người dùng hiện không có catalog mới; [đề xuất hợp đồng dữ liệu](data-contract.md) giữ PI thô và liên kết nullable. [Thiết kế field](field-design.md) ghi rõ trường cần bổ sung/rà lại. M30-06/07 hiện có mẫu in đề xuất TESO được người dùng duyệt làm baseline; cần SNY xác nhận và QA in thực tế trước nghiệm thu. Auth đã chốt chỉ email/mật khẩu và có [hướng dẫn local](local-login.md).
 
 Các file CSV bảo toàn mã và tọa độ nguồn; text bắt đầu bằng ký tự công thức được thêm dấu nháy để không thực thi khi mở bằng Excel. Đầu ra chứa dữ liệu khách, chỉ sử dụng trong phạm vi dự án.
 

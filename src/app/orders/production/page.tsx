@@ -32,8 +32,100 @@ type Stage = 'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing'
 type Entry = { id: string; stage: Stage; reportDate?: string; planDate?: string; machineId: string | null; shift: string | null; orderRef: string | null; orderId: string | null; color: string | null; metricLabel: string; metricValue?: string; plannedValue?: string; unit: string; note: string | null; revision?: number; updatedAt: string }
 type OrderCandidate = { id: string; piNumber: string; subLineIndex: number; customer: string; itemCode: string | null; color: string | null; lifecycleStatus: string }
 type DropdownOptions = { machines: string[]; colors: string[]; orderRefs: string[]; metrics: string[]; units: string[] }
+type PrintPlan = {
+  id: string; date: string; machineId: string | null; shift: string | null; orderRef: string | null; orderId: string | null;
+  color: string | null; metricLabel: string; plannedValue: string; unit: string; note: string | null; revision: number;
+  order: { piNumber: string; subLineIndex: number; customer: string; itemCode: string | null; color: string | null; mbCode: string | null; widthM: number | null; gsm: number | null; productionGsm: number | null } | null;
+}
+type PrintPayload = { success: boolean; error?: string; stage: 'extruder' | 'knitting'; from: string; to: string; plans: PrintPlan[] }
 const stageOptions: [Stage, string][] = [['extruder', 'Kéo sợi'], ['warping', 'Mắc sợi'], ['knitting', 'Dệt'], ['rolling', 'Cuộn'], ['packing', 'Đóng gói']]
 const blankForm = { machineId: '', shift: '', orderRef: '', orderId: '', color: '', metricLabel: '', value: '', unit: 'kg', note: '' }
+
+function printDateRange(date: string, mode: 'week' | 'month') {
+  const [year, month, day] = date.split('-').map(Number)
+  if (mode === 'month') return { from: `${year}-${String(month).padStart(2, '0')}-01`, to: `${year}-${String(month).padStart(2, '0')}-${String(new Date(Date.UTC(year, month, 0)).getUTCDate()).padStart(2, '0')}` }
+  const selected = new Date(Date.UTC(year, month - 1, day))
+  const mondayOffset = (selected.getUTCDay() + 6) % 7
+  const from = new Date(selected.getTime() - mondayOffset * 86400000)
+  const to = new Date(from.getTime() + 6 * 86400000)
+  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) }
+}
+
+const printDate = (value: string) => value.split('-').reverse().join('/')
+const printNumber = (value: string | number | null | undefined) => value == null ? '—' : Number(value).toLocaleString('vi-VN', { maximumFractionDigits: 2 })
+
+function ProductionPlanPrint({ stage, date, onClose }: { stage: 'extruder' | 'knitting'; date: string; onClose: () => void }) {
+  const [mode, setMode] = useState<'week' | 'month'>('week')
+  const [payload, setPayload] = useState<PrintPayload | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const range = stage === 'extruder' ? { from: date, to: date } : printDateRange(date, mode)
+  const title = stage === 'extruder' ? 'KẾ HOẠCH KÉO SỢI HẰNG NGÀY' : mode === 'week' ? 'KẾ HOẠCH DỆT THEO TUẦN' : 'KẾ HOẠCH DỆT THEO THÁNG'
+
+  async function loadPreview() {
+    setLoading(true); setError(''); setPayload(null)
+    try {
+      const query = new URLSearchParams({ stage, from: range.from, to: range.to })
+      const response = await fetch(`/api/production-plans/print-data?${query}`)
+      const result = await response.json()
+      if (!response.ok || !result.success) throw new Error(result.error ?? 'Không tải được bản in.')
+      setPayload(result as PrintPayload)
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Không tải được bản in.') }
+    finally { setLoading(false) }
+  }
+
+  const plans = payload?.plans ?? []
+  const totalsByUnit = Array.from(plans.reduce((totals, plan) => totals.set(plan.unit, (totals.get(plan.unit) ?? 0) + Number(plan.plannedValue)), new Map<string, number>()).entries())
+  const printGroups = stage === 'extruder' ? plans.reduce<PrintPlan[][]>((groups, plan) => {
+    const current = groups[groups.length - 1]
+    if (!current || current[0].machineId !== plan.machineId) groups.push([plan])
+    else current.push(plan)
+    return groups
+  }, []) : [plans]
+  return <section className="space-y-3 rounded border border-outline-variant p-4" aria-label="Mẫu in kế hoạch">
+    <div className="no-print flex flex-wrap items-end gap-3">
+      <div className="mr-auto"><h2 className="font-semibold text-primary">Mẫu in cho xưởng</h2><p className="mt-1 text-xs text-secondary">{stage === 'extruder' ? 'Lịch theo ngày, tách theo máy kéo sợi.' : 'Chọn tuần hoặc tháng; lịch được nhóm theo máy và PI/item.'}</p></div>
+      {stage === 'knitting' && <label className="text-sm">Kỳ in<select className={control} value={mode} onChange={e => { setMode(e.target.value as 'week' | 'month'); setPayload(null) }}><option value="week">Theo tuần (T2–CN)</option><option value="month">Theo tháng</option></select></label>}
+      <p className="text-sm">Khoảng ngày: <strong>{printDate(range.from)} – {printDate(range.to)}</strong></p>
+      <button type="button" disabled={loading} onClick={loadPreview} className="rounded border border-primary px-4 py-2 text-sm text-primary disabled:opacity-60">{loading ? 'Đang tải…' : 'Xem trước bản in'}</button>
+      {payload && <button type="button" onClick={() => window.print()} className="rounded bg-primary px-4 py-2 text-sm text-white">In lịch</button>}
+      <button type="button" onClick={onClose} className="rounded border px-3 py-2 text-sm">Đóng</button>
+    </div>
+    {error && <p role="alert" className="no-print text-sm text-error">{error}</p>}
+    {payload && <div id="production-print-sheet" className={stage === 'extruder' ? 'print-extruder' : 'print-knitting'}>
+      <header className="print-header">
+        <div className="font-bold tracking-wide">SNY VINA</div><h1>{title}</h1>
+        <div>{stage === 'extruder' ? 'Ngày sản xuất' : 'Kỳ kế hoạch'}: {printDate(payload.from)}{payload.from !== payload.to && ` – ${printDate(payload.to)}`}</div>
+        <div>Ngày in: {printDate(new Date().toLocaleDateString('sv-SE'))}　|　Đơn vị kế hoạch được giữ theo dữ liệu đã lập</div>
+      </header>
+      {!plans.length ? <p className="print-empty">Không có kế hoạch trong khoảng thời gian đã chọn.</p> : <div className="print-table-stack">{printGroups.map((group, groupIndex) => {
+        const columns = stage === 'extruder'
+          ? ['STT', 'Máy / Ca', 'PI / Mã đơn', 'Item', 'Khách hàng', 'Màu / MB Code', 'GSM', 'Chỉ tiêu', 'Kế hoạch', 'Thực tế', 'Phiên bản', 'Ghi chú']
+          : ['STT', 'Ngày', 'Máy dệt', 'PI / Mã đơn', 'Item', 'Khách hàng', 'Màu', 'Khổ (m)', 'GSM', 'Kế hoạch', 'Thực tế', 'Phiên bản', 'Ghi chú']
+        return <table key={`${group[0]?.machineId ?? 'machine'}-${groupIndex}`} className={`print-table ${stage === 'extruder' ? 'print-machine-table' : ''}`}>
+        <thead><tr><th colSpan={columns.length} className="print-report-title">{title} · {printDate(payload.from)}{payload.from !== payload.to && ` – ${printDate(payload.to)}`}{stage === 'extruder' ? ` · Máy ${group[0]?.machineId ?? 'chưa phân máy'}` : ''}</th></tr><tr>{columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
+        <tbody>{group.map((plan, index) => {
+          const order = plan.order, item = order ? (order.itemCode || `Dòng ${order.subLineIndex + 1}`) : plan.orderId ? 'Item' : 'Chưa gắn item'
+          const pi = order?.piNumber ?? plan.orderRef ?? '—', color = order?.color ?? plan.color ?? '—', gsm = order?.productionGsm ?? order?.gsm
+          return <tr key={plan.id}>
+            <td>{index + 1}</td>
+            {stage === 'extruder' ? <>
+              <td>{plan.machineId ?? '—'}{plan.shift ? ` / ${plan.shift === 'D' ? 'Ngày' : 'Đêm'}` : ''}</td><td>{pi}</td><td>{item}</td><td>{order?.customer ?? '—'}</td>
+              <td>{color}{order?.mbCode ? ` / ${order.mbCode}` : ''}</td><td>{printNumber(gsm)}</td><td>{plan.metricLabel}</td><td>{printNumber(plan.plannedValue)} {plan.unit}</td>
+              <td className="print-handwritten"></td><td>v{plan.revision}</td><td>{plan.note || '—'}</td>
+            </> : <>
+              <td>{printDate(plan.date)}</td><td>{plan.machineId ?? '—'}{plan.shift ? ` / ${plan.shift === 'D' ? 'Ngày' : 'Đêm'}` : ''}</td><td>{pi}</td><td>{item}</td>
+              <td>{order?.customer ?? '—'}</td><td>{color}</td><td>{printNumber(order?.widthM)}</td><td>{printNumber(gsm)}</td>
+              <td>{printNumber(plan.plannedValue)} {plan.unit}</td><td className="print-handwritten"></td><td>v{plan.revision}</td><td>{plan.note || '—'}</td>
+            </>}
+          </tr>
+        })}</tbody>
+      </table>})}</div>}
+      {plans.length > 0 && <div className="print-totals"><strong>Tổng kế hoạch:</strong> {totalsByUnit.map(([unit, total]) => `${printNumber(total)} ${unit}`).join('　|　')}<span>Thực tế: ____________________</span></div>}
+      <footer className="print-signatures"><span>Người vận hành: ____________________</span><span>Quản đốc xác nhận: ____________________</span><span>Người lập kế hoạch: ____________________</span></footer>
+    </div>}
+  </section>
+}
 
 function EntryForm({ kind, stage, date, onSaved, editing, onCancel }: { kind: 'actual' | 'plan'; stage: Stage; date: string; onSaved: () => void; editing?: Entry | null; onCancel?: () => void }) {
   const [form, setForm] = useState(blankForm), [saving, setSaving] = useState(false), [error, setError] = useState(''), [candidates, setCandidates] = useState<OrderCandidate[]>([]), [lookupError, setLookupError] = useState('')
@@ -95,6 +187,7 @@ function EntryForm({ kind, stage, date, onSaved, editing, onCancel }: { kind: 'a
 function ProductionEntryWorkspace({ kind }: { kind: 'actual' | 'plan' }) {
   const [stage, setStage] = useState<Stage>('extruder'), [date, setDate] = useState(new Date().toISOString().slice(0, 10))
   const [rows, setRows] = useState<Entry[]>([]), [loading, setLoading] = useState(false), [error, setError] = useState(''), [editing, setEditing] = useState<Entry | null>(null)
+  const [showPrint, setShowPrint] = useState(false)
   const endpoint = kind === 'plan' ? '/api/production-plans' : '/api/production-records/manual'
   const load = async () => {
     setLoading(true); setError('')
@@ -105,6 +198,9 @@ function ProductionEntryWorkspace({ kind }: { kind: 'actual' | 'plan' }) {
   useEffect(() => { void load() }, [stage, date])
   const control = 'rounded border border-outline px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary'
   return <section className="space-y-4">
+    {kind === 'plan' && (stage === 'extruder' || stage === 'knitting') && <div>{showPrint
+      ? <ProductionPlanPrint key={`${stage}-${date}`} stage={stage} date={date} onClose={() => setShowPrint(false)} />
+      : <button type="button" onClick={() => setShowPrint(true)} className="no-print rounded border border-primary px-4 py-2 text-sm text-primary">Mở mẫu in</button>}</div>}
     <div className="flex flex-wrap items-end gap-3"><label className="text-sm">Công đoạn<select className={control} value={stage} onChange={e => setStage(e.target.value as Stage)}>{stageOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm">Ngày<input type="date" className={control} value={date} onChange={e => setDate(e.target.value)} /></label></div>
     <EntryForm key={`${kind}-${stage}-${date}-${editing?.id ?? 'new'}`} kind={kind} stage={stage} date={date} editing={editing} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); void load() }} />
     {kind === 'actual' && <p className="text-sm text-secondary">Máy, PI, màu, chỉ tiêu và đơn vị có danh sách chọn từ dữ liệu sẵn có. Nếu giá trị chưa có, chọn mục “Nhập … khác”. Các file báo cáo Excel theo công đoạn được nhập ở <Link href="/reports" className="text-primary underline">Báo cáo thống kê</Link>. Dòng PI chưa xác minh được item được giữ nguyên và chưa gắn đơn.</p>}

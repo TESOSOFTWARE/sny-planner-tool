@@ -42,3 +42,49 @@ body {
     text-wrap: balance;
   }
 }
+
+#production-print-sheet {
+  background: #fff;
+  color: #111;
+  padding: 1rem;
+}
+
+.print-header { margin-bottom: 1rem; text-align: center; }
+.print-header h1 { margin: .3rem 0; font-size: 1.2rem; font-weight: 700; }
+.print-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.print-table-stack { display: grid; gap: 1rem; }
+.print-table th, .print-table td { border: 1px solid #555; padding: .35rem; text-align: left; vertical-align: top; }
+.print-table th { background: #eee; }
+.print-table .print-report-title { text-align: center; font-size: .95rem; }
+.print-handwritten { min-width: 5rem; min-height: 2rem; }
+.print-signatures { display: flex; justify-content: space-between; gap: 1rem; margin-top: 2rem; font-size: .8rem; }
+.print-totals { display: flex; justify-content: space-between; gap: 1rem; margin-top: .7rem; font-size: .85rem; }
+.print-empty { padding: 2rem; text-align: center; }
+
+@media print {
+  @page extruder-sheet { size: A4 landscape; margin: 10mm; }
+  @page knitting-sheet { size: A3 landscape; margin: 10mm; }
+
+  html, body { background: #fff !important; }
+  body * { visibility: hidden !important; }
+  #production-print-sheet, #production-print-sheet * { visibility: visible !important; }
+  #production-print-sheet {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    padding: 0;
+    color: #111 !important;
+    background: #fff !important;
+  }
+  #production-print-sheet.print-extruder { page: extruder-sheet; }
+  #production-print-sheet.print-knitting { page: knitting-sheet; }
+  #production-print-sheet .print-table { font-size: 8pt; }
+  #production-print-sheet .print-table-stack { display: block; }
+  #production-print-sheet .print-table th, #production-print-sheet .print-table td { padding: 3px; }
+  #production-print-sheet .print-table tr { break-inside: avoid; }
+  #production-print-sheet.print-extruder .print-machine-table + .print-machine-table { break-before: page; page-break-before: always; }
+  #production-print-sheet .print-header { margin-bottom: 7mm; }
+  #production-print-sheet .print-header h1 { font-size: 15pt; }
+  #production-print-sheet .print-signatures { margin-top: 12mm; }
+  .no-print { display: none !important; }
+}
