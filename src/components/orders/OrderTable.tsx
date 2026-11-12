@@ -12,9 +12,11 @@ import type { OrderTableItem } from '@/types'
 import { OrderStatus, calcOrderStatus } from '@/lib/orderStatus'
 import { PiStatusBadge, MachinePlanBadge } from './DraftBadge'
 import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
+import ProductionRecordsWorkspace from '@/components/orders/ProductionRecordsWorkspace'
 
 interface OrderTableProps {
   orders: OrderTableItem[]
+  canReadOutput: boolean
 }
 
 /** Format an ISO date string as DD/MM/YYYY */
@@ -44,9 +46,10 @@ const COLOR_MAP: Record<string, string> = {
   ORANGE:        '#f97316',
 }
 
-export default function OrderTable({ orders }: OrderTableProps) {
+export default function OrderTable({ orders, canReadOutput }: OrderTableProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const [activeView, setActiveView] = useState<'orders' | 'output'>('orders')
 
   const rawPage = parseInt(searchParams.get('page') || '1', 10)
   const requestedPage = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage
@@ -179,7 +182,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
        {/* Filter Tabs — lọc theo trạng thái sản xuất */}
        <div className="flex items-center gap-1.5 overflow-x-auto border-b border-outline-variant pb-2">
          {(['ALL', 'PENDING', 'SCHEDULED', 'RUNNING', 'DONE'] as const).map((tab) => {
-           const isActive = statusFilter === tab
+           const isActive = activeView === 'orders' && statusFilter === tab
            const label = 
              tab === 'ALL' ? 'Tất cả' :
              tab === 'PENDING' ? 'Chưa lên lịch' :
@@ -190,7 +193,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
             <button
               key={tab}
               disabled={deleting}
-              onClick={() => updateUrl({ status: tab, page: '1' }, false)}
+              onClick={() => { setActiveView('orders'); updateUrl({ status: tab, page: '1' }, false) }}
               className={`px-3.5 py-1.5 text-sm font-medium rounded-t-md transition-colors border-b-2 -mb-[9px] whitespace-nowrap ${
                 isActive 
                   ? 'border-primary text-primary bg-surface-container font-semibold' 
@@ -201,8 +204,18 @@ export default function OrderTable({ orders }: OrderTableProps) {
             </button>
           )
         })}
+        {canReadOutput && <button
+          type="button"
+          aria-pressed={activeView === 'output'}
+          disabled={deleting}
+          onClick={() => setActiveView('output')}
+          className={`px-3.5 py-1.5 text-sm font-medium rounded-t-md transition-colors border-b-2 -mb-[9px] whitespace-nowrap ${activeView === 'output' ? 'border-primary text-primary bg-surface-container font-semibold' : 'border-transparent text-secondary hover:text-on-surface hover:bg-surface-container-lowest'}`}
+        >
+          Sản lượng
+        </button>}
       </div>
 
+      {activeView === 'output' ? <ProductionRecordsWorkspace embedded /> : <>
       {/* Search + count row */}
       <div className="flex items-center gap-md pt-2">
         {/* Search input */}
@@ -467,6 +480,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
           </div>
         </div>
       </div>}
+      </>}
     </div>
   )
 }

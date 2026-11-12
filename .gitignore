@@ -59,6 +59,8 @@ npm-cache/
 !prisma/sql/*.sql
 
 *.MD
+!/REPORT/BACKLOG.md
+!/REPORT/2026-11-12/CLAUDE/production-orders-output-view-tab.md
 
 # MoM 30/10 task cards and implementation notes; generated customer rows stay local.
 !/workflows/plans/mom-2026-10-30-production-reports-auth-plan.md
