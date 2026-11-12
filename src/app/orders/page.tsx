@@ -1,4 +1,5 @@
 import { requireUser } from '@/lib/auth/session'
+import { userHasPermission } from '@/lib/auth/permissions'
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { prisma } from '@/lib/db'
@@ -30,7 +31,8 @@ function KpiCard({ label, value, icon }: { label: string; value: number; icon: s
 }
 
 export default async function OrdersPage() {
-  await requireUser()
+  const user = await requireUser()
+  const canReadOutput = await userHasPermission(user.id, 'output.read')
 
   let orders: OrderTableItem[] = []
   let fetchError: string | null = null
@@ -105,7 +107,6 @@ export default async function OrdersPage() {
         </div>
 
         <div className="flex items-center gap-md mt-1">
-          <Link href="/orders/production" className="inline-flex items-center rounded-md border border-primary px-4 py-2 text-sm font-medium text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Sản lượng</Link>
           <a
             id="btn-download-template"
             href="/api/orders/template"
@@ -172,7 +173,7 @@ export default async function OrdersPage() {
         </div>
       )}
 
-      {!fetchError && <OrderTable orders={orders} />}
+      {!fetchError && <OrderTable orders={orders} canReadOutput={canReadOutput} />}
     </div>
   )
 }
