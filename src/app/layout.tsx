@@ -10,7 +10,7 @@ import TopNav from '@/components/layout/TopNav'
 import SideNav from '@/components/layout/SideNav'
 import { headers } from 'next/headers'
 import { requireUser } from '@/lib/auth/session'
-import { permissionForRequest } from '@/lib/auth/permissions'
+import { permissionForRequest, userPermissionKeys, type PermissionKey } from '@/lib/auth/permissions'
 import { redirect } from 'next/navigation'
 
 const inter = Inter({
@@ -32,6 +32,17 @@ export const metadata: Metadata = {
     'Internal production planning tool for SNY factory, Vietnam. Manage orders, machine schedules, and materials.',
 }
 
+function homePath(permissions: PermissionKey[]) {
+  if (permissions.includes('orders.read')) return '/orders'
+  if (permissions.includes('output.read')) return '/orders/production'
+  if (permissions.includes('customers.read')) return '/customers'
+  if (permissions.includes('schedule.read')) return '/schedule'
+  if (permissions.includes('materials.read')) return '/materials'
+  if (permissions.includes('reports.read')) return '/reports'
+  if (permissions.includes('access.users.manage')) return '/settings/access'
+  return '/forbidden'
+}
+
 export default async function RootLayout({
   children,
 }: {
@@ -39,12 +50,12 @@ export default async function RootLayout({
 }) {
   const isLogin = headers().get('x-sny-path') === '/login'
   const user = isLogin ? null : await requireUser()
+  const permissions = user ? await userPermissionKeys(user.id) : []
   if (user && headers().get('x-sny-path') !== '/forbidden') {
     const path = headers().get('x-sny-path') ?? '/orders'
     const permission = permissionForRequest(path, 'GET')
     if (!permission) redirect('/forbidden')
-    const { userHasPermission } = await import('@/lib/auth/permissions')
-    if (!await userHasPermission(user.id, permission)) redirect('/forbidden')
+    if (!permissions.includes(permission)) redirect('/forbidden')
   }
   return (
     <html lang="en" className={`${inter.variable} ${noto.variable}`}>
@@ -53,10 +64,10 @@ export default async function RootLayout({
       </head>
       <body className="font-inter">
         {/* Fixed top navigation bar */}
-        {!isLogin && <TopNav email={user?.email} />}
+        {!isLogin && <TopNav email={user?.email} homeHref={homePath(permissions)} />}
 
         {/* Fixed left side navigation bar */}
-        {!isLogin && <SideNav />}
+        {!isLogin && <SideNav permissions={permissions} />}
 
         {/* Main content area — offset for nav bars */}
         <main className={isLogin ? '' : 'pl-[72px] xl:pl-[280px] pt-[64px] min-h-screen bg-background'}>

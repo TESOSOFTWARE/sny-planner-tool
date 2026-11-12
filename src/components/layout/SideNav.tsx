@@ -4,12 +4,14 @@ import Link from 'next/link'
 import { useRef, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import { useScheduleModalFocus } from '@/components/schedule/useModalFocus'
+import type { PermissionKey } from '@/lib/auth/permissions'
 
 type ActiveNavItem = {
   kind: 'link'
   icon: string
   label: string
   href: string
+  permissions: PermissionKey[]
 }
 
 type DisabledNavItem = {
@@ -21,13 +23,12 @@ type DisabledNavItem = {
 type NavItem = ActiveNavItem | DisabledNavItem
 
 const NAV_ITEMS: NavItem[] = [
-  { kind: 'link', icon: 'factory', label: 'Production', href: '/orders' },
-  { kind: 'link', icon: 'group', label: 'Customers', href: '/customers' },
-  { kind: 'link', icon: 'calendar_month', label: 'Schedule', href: '/schedule' },
-  { kind: 'link', icon: 'inventory_2', label: 'Materials', href: '/materials' },
-  { kind: 'link', icon: 'assessment', label: 'Report', href: '/reports' },
-  { kind: 'link', icon: 'admin_panel_settings', label: 'Account & Permissions', href: '/settings/access' },
-  { kind: 'disabled', icon: 'settings', label: 'Settings' },
+  { kind: 'link', icon: 'factory', label: 'Production', href: '/orders', permissions: ['orders.read', 'output.read'] },
+  { kind: 'link', icon: 'group', label: 'Customers', href: '/customers', permissions: ['customers.read'] },
+  { kind: 'link', icon: 'calendar_month', label: 'Schedule', href: '/schedule', permissions: ['schedule.read'] },
+  { kind: 'link', icon: 'inventory_2', label: 'Materials', href: '/materials', permissions: ['materials.read'] },
+  { kind: 'link', icon: 'assessment', label: 'Report', href: '/reports', permissions: ['reports.read'] },
+  { kind: 'link', icon: 'admin_panel_settings', label: 'Account & Permissions', href: '/settings/access', permissions: ['access.users.manage'] },
 ]
 
 function isActive(pathname: string, href: string) {
@@ -40,10 +41,12 @@ function isActive(pathname: string, href: string) {
 
 function NavigationContent({
   pathname,
+  permissions,
   compact = false,
   onNavigate,
 }: {
   pathname: string
+  permissions: PermissionKey[]
   compact?: boolean
   onNavigate?: () => void
 }) {
@@ -62,7 +65,7 @@ function NavigationContent({
       </div>
 
       <nav className="flex-1 px-sm py-md space-y-xs overflow-y-auto" aria-label="Điều hướng chính">
-        {NAV_ITEMS.map((item) => {
+        {NAV_ITEMS.filter(item => item.kind === 'disabled' || item.permissions.some(permission => permissions.includes(permission))).map((item) => {
           const itemTitle = item.kind === 'disabled' ? `${item.label} - Giai đoạn 2` : item.label
 
           if (item.kind === 'disabled') {
@@ -83,12 +86,13 @@ function NavigationContent({
             )
           }
 
-          const active = isActive(pathname, item.href)
+          const href = item.href === '/orders' && !permissions.includes('orders.read') ? '/orders/production' : item.href
+          const active = isActive(pathname, href)
 
           return (
             <Link
               key={item.label}
-              href={item.href}
+              href={href}
               onClick={onNavigate}
               aria-label={item.label}
               aria-current={active ? 'page' : undefined}
@@ -118,7 +122,7 @@ function NavigationContent({
   )
 }
 
-export default function SideNav() {
+export default function SideNav({ permissions }: { permissions: PermissionKey[] }) {
   const pathname = usePathname()
   const [expanded, setExpanded] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -146,10 +150,10 @@ export default function SideNav() {
         </button>
 
         <div className="hidden xl:flex flex-1 flex-col min-h-0">
-          <NavigationContent pathname={pathname} />
+          <NavigationContent pathname={pathname} permissions={permissions} />
         </div>
         <div className="flex xl:hidden flex-1 flex-col min-h-0">
-          <NavigationContent pathname={pathname} compact />
+          <NavigationContent pathname={pathname} permissions={permissions} compact />
         </div>
       </aside>
 
@@ -179,7 +183,7 @@ export default function SideNav() {
                 <span className="material-symbols-outlined text-[24px]" aria-hidden="true">close</span>
               </button>
             </div>
-            <NavigationContent pathname={pathname} onNavigate={closeOverlay} />
+            <NavigationContent pathname={pathname} permissions={permissions} onNavigate={closeOverlay} />
           </div>
         </>
       )}
