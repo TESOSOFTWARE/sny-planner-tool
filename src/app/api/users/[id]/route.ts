@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db'
 import { authError, currentUser, tokenHash, SESSION_COOKIE } from '@/lib/auth/session'
 import { cookies } from 'next/headers'
 import { hashPassword } from '@/lib/auth/password'
-const schema = z.object({ roleIds: z.array(z.string().min(1)).min(1).max(20), locked: z.boolean(), newPassword: z.string().min(12).max(128).optional() })
+const schema = z.object({ roleIds: z.array(z.string().min(1)).length(1), locked: z.boolean(), newPassword: z.string().min(12).max(128).optional() })
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await authError('PATCH', req, 'access.users.manage'); if (denied) return denied
   const body = schema.safeParse(await req.json().catch(() => null))
