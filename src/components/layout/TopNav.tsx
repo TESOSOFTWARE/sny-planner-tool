@@ -8,7 +8,7 @@ import Link from 'next/link'
 import { useState } from 'react'
 import ToasterProvider from '@/components/ui/ToasterProvider'
 
-export default function TopNav({ email }: { email?: string }) {
+export default function TopNav({ email, homeHref = '/orders' }: { email?: string; homeHref?: string }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
   async function logout() {
     setBusy(true); setError('')
@@ -25,7 +25,7 @@ export default function TopNav({ email }: { email?: string }) {
       <div className="max-w-[1440px] mx-auto px-container-margin h-full flex items-center justify-between">
 
         {/* Left: brand */}
-        <Link href="/orders" className="flex items-center gap-2 shrink-0">
+        <Link href={homeHref} className="flex items-center gap-2 shrink-0">
           <span className="text-headline-md font-inter font-semibold text-primary tracking-tight">
             SNY<span className="text-on-surface-variant font-medium"> Planner</span>
           </span>

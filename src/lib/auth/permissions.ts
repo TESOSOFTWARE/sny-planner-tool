@@ -10,7 +10,7 @@ export function permissionForRequest(pathname: string, method: string): Permissi
   if (pathname.startsWith('/api/auth/')) return null
   if (pathname.startsWith('/orders/production')) return 'output.read'
   if (pathname === '/' || pathname.startsWith('/orders')) return 'orders.read'
-  if (pathname.startsWith('/customers')) return 'orders.read'
+  if (pathname.startsWith('/customers')) return 'customers.read'
   if (pathname.startsWith('/schedule')) return method === 'GET' ? 'schedule.read' : 'schedule.assign'
   if (pathname.startsWith('/materials')) return 'materials.read'
   if (pathname.startsWith('/reports')) return 'reports.read'
@@ -61,4 +61,12 @@ export function permissionForRequest(pathname: string, method: string): Permissi
 export async function userHasPermission(userId: string, permission: PermissionKey): Promise<boolean> {
   const count = await prisma.snyUserRole.count({ where: { userId, role: { permissions: { some: { permissionKey: permission } } } } })
   return count > 0
+}
+
+export async function userPermissionKeys(userId: string): Promise<PermissionKey[]> {
+  const assignments = await prisma.snyUserRole.findMany({
+    where: { userId },
+    select: { role: { select: { permissions: { select: { permissionKey: true } } } } },
+  })
+  return Array.from(new Set(assignments.flatMap(assignment => assignment.role.permissions.map(permission => permission.permissionKey as PermissionKey))))
 }

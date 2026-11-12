@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db'
 import { authError, currentUser, tokenHash, SESSION_COOKIE } from '@/lib/auth/session'
 import { cookies } from 'next/headers'
 import { hashPassword } from '@/lib/auth/password'
-const schema = z.object({ roleIds: z.array(z.string().min(1)).min(1).max(20), locked: z.boolean(), newPassword: z.string().min(12).max(128).optional() })
+const schema = z.object({ roleIds: z.array(z.string().min(1)).length(1), locked: z.boolean(), newPassword: z.string().min(12).max(128).optional() })
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const denied = await authError('PATCH', req, 'access.users.manage'); if (denied) return denied
   const body = schema.safeParse(await req.json().catch(() => null))
@@ -34,5 +34,44 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   } catch (error) {
     if (error instanceof Error && error.message === 'ROLE_MISSING') return NextResponse.json({ success: false, error: 'Một role đã bị xóa.' }, { status: 409 })
     return NextResponse.json({ success: false, error: 'Không cập nhật được tài khoản.' }, { status: 500 })
+  }
+}
+
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  const denied = await authError('DELETE', req, 'access.users.manage'); if (denied) return denied
+  const actor = await currentUser()
+  if (!actor) return NextResponse.json({ success: false, error: 'Vui lòng đăng nhập.' }, { status: 401 })
+
+  try {
+    const outcome = await prisma.$transaction(async tx => {
+      const target = await tx.snyUser.findUnique({ where: { id: params.id }, include: { roles: { include: { role: true } } } })
+      if (!target) return 'NOT_FOUND'
+      if (actor.id === target.id) return 'SELF_DELETE'
+
+      const hasAdmin = target.roles.some(assignment => assignment.role.isSystem && assignment.role.name === 'Admin')
+      if (hasAdmin) {
+        const otherActiveAdmins = await tx.snyUserRole.count({
+          where: {
+            userId: { not: target.id },
+            role: { isSystem: true, name: 'Admin' },
+            user: { lockedUntil: null },
+          },
+        })
+        if (otherActiveAdmins === 0) return 'LAST_ADMIN'
+      }
+
+      await tx.snySession.deleteMany({ where: { userId: target.id } })
+      await tx.snyUserRole.deleteMany({ where: { userId: target.id } })
+      await tx.snyUser.delete({ where: { id: target.id } })
+      return 'DELETED'
+    }, { isolationLevel: 'Serializable' })
+
+    if (outcome === 'NOT_FOUND') return NextResponse.json({ success: false, error: 'Không tìm thấy tài khoản.' }, { status: 404 })
+    if (outcome === 'SELF_DELETE') return NextResponse.json({ success: false, error: 'Không thể xóa tài khoản đang đăng nhập.' }, { status: 409 })
+    if (outcome === 'LAST_ADMIN') return NextResponse.json({ success: false, error: 'Không thể xóa Admin hoạt động cuối cùng.' }, { status: 409 })
+    return NextResponse.json({ success: true })
+  } catch (error) {
+    if ((error as { code?: string })?.code === 'P2034') return NextResponse.json({ success: false, error: 'Tài khoản hoặc quyền Admin vừa thay đổi. Tải lại danh sách rồi thử lại.' }, { status: 409 })
+    return NextResponse.json({ success: false, error: 'Không xóa được tài khoản.' }, { status: 500 })
   }
 }

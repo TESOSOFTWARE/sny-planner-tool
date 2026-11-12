@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/db'
 import { authError } from '@/lib/auth/session'
 import { hashPassword } from '@/lib/auth/password'
-const createSchema = z.object({ email: z.string().trim().toLowerCase().email().max(254), password: z.string().min(12).max(128), roleIds: z.array(z.string().min(1)).min(1).max(20) })
+const createSchema = z.object({ email: z.string().trim().toLowerCase().email().max(254), password: z.string().min(12).max(128), roleIds: z.array(z.string().min(1)).length(1) })
 export async function GET(req: NextRequest) {
   const denied = await authError('GET', req, 'access.users.manage'); if (denied) return denied
   const users = await prisma.snyUser.findMany({ select: { id: true, email: true, createdAt: true, lockedUntil: true, roles: { select: { role: { select: { id: true, name: true } } } } }, orderBy: { email: 'asc' } })
