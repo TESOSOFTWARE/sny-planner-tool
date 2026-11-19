@@ -158,7 +158,7 @@ export default function OrderTable({ orders, canReadOutput }: OrderTableProps) {
         else setBulkError(data.error ?? 'Không thể xoá đơn hàng.')
         return
       }
-      const reasons: Record<string,string> = { NOT_FOUND:'không còn tồn tại', HAS_OUTPUT:'đã có sản lượng hoặc phiếu kho', ASSIGNED:'đang có lịch máy', HAS_OUTPUT_ON_SCHEDULE:'máy đã có sản lượng trong lịch' }
+      const reasons: Record<string,string> = { NOT_FOUND:'không còn tồn tại', HAS_OUTPUT:'đã có sản lượng hoặc phiếu kho', HAS_HANDOFF:'đã có lịch sử bàn giao WIP', ASSIGNED:'đang có lịch máy', HAS_OUTPUT_ON_SCHEDULE:'máy đã có sản lượng trong lịch' }
       const skipped = data.skipped ?? []
       setSkippedDetails(skipped.map(row => `${row.piNumber ?? row.id}: ${reasons[row.reason] ?? row.reason}`))
       setBulkMessage(`Đã xoá ${data.deleted?.length ?? 0} đơn · gỡ ${data.removedAssignments ?? 0} lịch · bỏ qua ${skipped.length}`)

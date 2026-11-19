@@ -1844,33 +1844,33 @@ export default function MultiLineOrderForm() {
               </div>
 
               <details className="mt-4 rounded-lg border border-outline-variant/40 bg-surface-variant/10 p-3">
-                <summary className="cursor-pointer text-xs font-semibold text-primary">Thông tin bổ sung từ ORDER LIST / PO</summary>
+                <summary className="cursor-pointer text-xs font-semibold text-primary">Thông tin theo đơn đặt hàng</summary>
                 <div className="mt-3 space-y-4">
                   <fieldset className="grid grid-cols-1 gap-3 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
-                    <legend className="px-1 text-[11px] font-semibold text-secondary">Thông số nguồn và nhãn</legend>
-                    <div><Label>Gauge &amp; Denier (nguyên văn)</Label><input className={inputCls()} maxLength={100} value={line.gaugeDenier} onChange={e=>updateLine(line.id,{gaugeDenier:e.target.value})} /></div>
-                    <div><Label>Label / nhãn sản phẩm</Label><input className={inputCls()} maxLength={200} value={line.labelInstruction} onChange={e=>updateLine(line.id,{labelInstruction:e.target.value})} /></div>
-                    <div><Label>Shipping (nguyên văn từ ORDER LIST)</Label><input className={inputCls()} maxLength={200} value={line.shippingNote} onChange={e=>updateLine(line.id,{shippingNote:e.target.value})} /></div>
+                    <legend className="px-1 text-[11px] font-semibold text-secondary">Thông số kỹ thuật và nhận diện sản phẩm</legend>
+                    <div><Label>Gauge / Denier</Label><input className={inputCls()} maxLength={100} value={line.gaugeDenier} onChange={e=>updateLine(line.id,{gaugeDenier:e.target.value})} /></div>
+                    <div><Label>Yêu cầu nhãn sản phẩm</Label><input className={inputCls()} maxLength={200} value={line.labelInstruction} onChange={e=>updateLine(line.id,{labelInstruction:e.target.value})} /></div>
+                    <div><Label>Ghi chú giao hàng (Shipping)</Label><input className={inputCls()} maxLength={200} value={line.shippingNote} onChange={e=>updateLine(line.id,{shippingNote:e.target.value})} /></div>
                   </fieldset>
                   <fieldset className="grid grid-cols-1 gap-3 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
-                    <legend className="px-1 text-[11px] font-semibold text-secondary">Ngày theo nguồn</legend>
-                    <div><Label>ETD</Label><input type="date" className={inputCls()} value={line.etdDate} onChange={e=>updateLine(line.id,{etdDate:e.target.value})} /></div>
-                    <div><Label>Loading date</Label><input type="date" className={inputCls()} value={line.loadingDate} onChange={e=>updateLine(line.id,{loadingDate:e.target.value})} /></div>
-                    <div><Label>Loading date 2</Label><input type="date" className={inputCls()} value={line.loadingDate2} onChange={e=>updateLine(line.id,{loadingDate2:e.target.value})} /></div>
+                    <legend className="px-1 text-[11px] font-semibold text-secondary">Lịch giao hàng</legend>
+                    <div><Label>Ngày dự kiến xuất hàng (ETD)</Label><input type="date" className={inputCls()} value={line.etdDate} onChange={e=>updateLine(line.id,{etdDate:e.target.value})} /></div>
+                    <div><Label>Ngày xếp hàng (Loading date)</Label><input type="date" className={inputCls()} value={line.loadingDate} onChange={e=>updateLine(line.id,{loadingDate:e.target.value})} /></div>
+                    <div><Label>Ngày xếp hàng 2</Label><input type="date" className={inputCls()} value={line.loadingDate2} onChange={e=>updateLine(line.id,{loadingDate2:e.target.value})} /></div>
                   </fieldset>
                   <fieldset className="grid grid-cols-1 gap-3 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
-                    <legend className="px-1 text-[11px] font-semibold text-secondary">Ghi chú ngày khi nguồn không có ngày chính xác</legend>
-                    <div><Label>ETD note</Label><input className={inputCls()} maxLength={200} placeholder="Giữ nguyên text nguồn" value={line.etdNote} onChange={e=>updateLine(line.id,{etdNote:e.target.value})} /></div>
-                    <div><Label>Loading date note</Label><input className={inputCls()} maxLength={200} placeholder="VD: Mid August, 2026" value={line.loadingDateNote} onChange={e=>updateLine(line.id,{loadingDateNote:e.target.value})} /></div>
-                    <div><Label>Loading date 2 note</Label><input className={inputCls()} maxLength={200} value={line.loadingDate2Note} onChange={e=>updateLine(line.id,{loadingDate2Note:e.target.value})} /></div>
+                    <legend className="px-1 text-[11px] font-semibold text-secondary">Ghi chú lịch giao hàng</legend>
+                    <div><Label>Ghi chú ETD</Label><input className={inputCls()} maxLength={200} placeholder="VD: Giữa tháng 8/2026" value={line.etdNote} onChange={e=>updateLine(line.id,{etdNote:e.target.value})} /></div>
+                    <div><Label>Ghi chú ngày xếp hàng</Label><input className={inputCls()} maxLength={200} placeholder="VD: Giữa tháng 8/2026" value={line.loadingDateNote} onChange={e=>updateLine(line.id,{loadingDateNote:e.target.value})} /></div>
+                    <div><Label>Ghi chú ngày xếp hàng 2</Label><input className={inputCls()} maxLength={200} value={line.loadingDate2Note} onChange={e=>updateLine(line.id,{loadingDate2Note:e.target.value})} /></div>
                   </fieldset>
                 </div>
               </details>
 
-              {/* ── Section 4: Tiêu chuẩn Dung sai & Dự tính Sản xuất (Tolerances & Preview) ── */}
+              {/* ── Section 4: Tolerance settings for this order line ── */}
               <div className="mt-4 bg-surface-variant/15 border border-outline-variant/40 rounded-lg p-3 space-y-3">
                 <div className="text-xs font-semibold text-primary uppercase tracking-wider">
-                  4. Tiêu chuẩn Dung sai & Dự tính Sản xuất
+                  4. Dung sai theo đơn hàng
                 </div>
 
                 {/* Quản lý Dung sai */}
@@ -1886,7 +1886,7 @@ export default function MultiLineOrderForm() {
                     />
                   </div>
                   <div>
-                    <Label>Dung sai rộng/dài/nặng (±%)</Label>
+                    <Label>Dung sai quy cách (khổ / dài / nặng, ±%)</Label>
                     <input
                       id={`ml-line-${line.id}-toleranceSpecPct`}
                       type="number" min={0} step={0.5}

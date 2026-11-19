@@ -7,6 +7,7 @@ import { authError } from '@/lib/auth/session'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { preserveOrderLinks, OutputLinkConflict } from '@/lib/excel/preserveOrderLinks'
+import { assertHandoffsCoveredAfterImport, HandoffImportConflict } from '@/lib/production/handoffs'
 import { z } from 'zod'
 import { productionPiResolver } from '@/lib/excel/productionPi'
 import { applyRemarkDecisions, knownMeshKeys, remarkKey, RemarkDecisionRequired } from '@/lib/excel/knittingRemark'
@@ -87,6 +88,7 @@ export async function POST(req: NextRequest) {
         resolvePi: productionPiResolver(orderRows.map(row => row.piNumber)),
       }, remarkDecisions)
       const linkedRows = preserveOrderLinks(classified, existingRows, orderRows)
+      await assertHandoffsCoveredAfterImport(tx, 'knitting', existingRows, linkedRows)
       // Rule B: Delete existing records in knitting_daily_detail for [machineId, reportDate] pairs in the file —
       // one statement; a delete per group (400 for a month) exceeded the transaction timeout on Neon (N13).
       await tx.knittingDailyDetail.deleteMany({ where: groups })
@@ -121,6 +123,7 @@ export async function POST(req: NextRequest) {
       insertedCount = data.length
     }, { timeout: 60_000, maxWait: 5_000 })
   } catch (err) {
+    if (err instanceof HandoffImportConflict) return NextResponse.json({ success: false, code: 'HANDOFF_ACTUAL_CONFLICT', error: err.message }, { status: 409 })
     if (err instanceof RemarkDecisionRequired) return NextResponse.json({ success: false, code: 'REMARK_DECISION_REQUIRED', values: err.values, error: err.message }, { status: 409 })
     if (err instanceof OutputLinkConflict) {
       return NextResponse.json({ success: false, code: 'OUTPUT_LINK_CONFLICT', error: err.message }, { status: 409 })

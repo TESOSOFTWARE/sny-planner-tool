@@ -209,6 +209,8 @@ export async function PUT(req: NextRequest, { params }: Props) {
           )
         }
       }
+      const handoffCount = toDelete.length ? await tx.productionHandoff.count({ where: { orderId: { in: toDelete.map(order => order.id) } } }) : 0
+      if (handoffCount > 0) throw new Error('HANDOFF_EXISTS: Không thể xóa dòng PI đã có lịch sử bàn giao WIP.')
 
       // Move retained IDs outside both current and final 1..N indices first.
       // The unique key is checked on each write, even inside a transaction.
@@ -391,7 +393,7 @@ export async function PUT(req: NextRequest, { params }: Props) {
     console.error(`[PUT /api/orders/pi/${piNumber}] Error:`, err)
     const message = typeof err?.message === 'string' ? err.message : ''
     const isWriteConflict = err?.code === 'P2002' || err?.code === 'P2034'
-    const isConflict = isWriteConflict || message.startsWith('STALE_UPDATE') || message.startsWith('INDEX_RANGE')
+    const isConflict = isWriteConflict || message.startsWith('STALE_UPDATE') || message.startsWith('INDEX_RANGE') || message.startsWith('HANDOFF_EXISTS')
     const isInvalid = message.startsWith('INVALID_LINE_ID') || message.startsWith('LINE_ASSIGNED')
     const error = isWriteConflict
       ? 'Đơn hàng đang có thay đổi xung đột. Vui lòng tải lại PI và kiểm tra trước khi lưu.'

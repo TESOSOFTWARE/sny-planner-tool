@@ -24,10 +24,10 @@ export async function GET(request: NextRequest) {
     }
     if (stage === 'knitting') {
       const [rows, total] = await Promise.all([
-        prisma.knittingDailyDetail.findMany({ ...paging, orderBy: [{ reportDate: 'desc' }, { id: 'asc' }], select: { id: true, reportDate: true, orderRef: true, orderId: true, color: true, machineId: true, shift: true, weightKgs: true, lengthM: true } }),
+        prisma.knittingDailyDetail.findMany({ ...paging, orderBy: [{ reportDate: 'desc' }, { id: 'asc' }], select: { id: true, reportDate: true, orderRef: true, orderId: true, color: true, machineId: true, shift: true, weightKgs: true, lengthM: true, mValue: true } }),
         prisma.knittingDailyDetail.count({ where }),
       ])
-      return NextResponse.json({ success: true, total, records: rows.map(r => ({ id: r.id, date: r.reportDate.toISOString(), orderRef: r.orderRef, orderId: r.orderId, color: r.color, machine: r.machineId, shift: r.shift, kilograms: r.weightKgs.toString(), meters: r.lengthM?.toString() ?? null, metric: null, value: null, unit: null, source: 'Báo cáo Excel' })) })
+      return NextResponse.json({ success: true, total, records: rows.map(r => ({ id: r.id, date: r.reportDate.toISOString(), orderRef: r.orderRef, orderId: r.orderId, color: r.color, machine: r.machineId, shift: r.shift, kilograms: r.weightKgs.toString(), meters: r.mValue?.toString() ?? null, metric: null, value: null, unit: null, source: 'Báo cáo Excel' })) })
     }
     if (stage === 'packing') {
       const manualWhere = { ...where, stage: 'packing' }

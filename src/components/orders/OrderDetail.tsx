@@ -485,7 +485,7 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
                     )}
                     {(o.toleranceSpecPct != null || showAllV41) && (
                       <ViewField
-                        label="Dung sai rộng/dài/nặng (±%)"
+                        label="Dung sai quy cách (khổ / dài / nặng, ±%)"
                         value={o.toleranceSpecPct != null ? `±${o.toleranceSpecPct}%` : null}
                         mono
                       />
@@ -547,9 +547,9 @@ export default function OrderDetail({ order: initialOrder }: OrderDetailProps) {
               {currentOrder.remark && (
                 <div className="sm:col-span-2"><ViewField label="Remark" value={currentOrder.remark} /></div>
               )}
-              {currentOrder.gaugeDenier && <ViewField label="Gauge & Denier (nguyên văn)" value={currentOrder.gaugeDenier} />}
+              {currentOrder.gaugeDenier && <ViewField label="Gauge / Denier" value={currentOrder.gaugeDenier} />}
               {currentOrder.labelInstruction && <ViewField label="Label / nhãn sản phẩm" value={currentOrder.labelInstruction} />}
-              {currentOrder.shippingNote && <ViewField label="Shipping (nguyên văn)" value={currentOrder.shippingNote} />}
+              {currentOrder.shippingNote && <ViewField label="Ghi chú giao hàng (Shipping)" value={currentOrder.shippingNote} />}
               {currentOrder.etdDate && <ViewField label="ETD" value={formatDate(currentOrder.etdDate)} />}
               {currentOrder.etdNote && <ViewField label="ETD note" value={currentOrder.etdNote} />}
               {currentOrder.loadingDate && <ViewField label="Loading date" value={formatDate(currentOrder.loadingDate)} />}

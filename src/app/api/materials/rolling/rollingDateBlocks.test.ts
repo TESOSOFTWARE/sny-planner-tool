@@ -56,7 +56,7 @@ const metric = {
   deleteMany: async () => { writes++; return { count: 0 } },
   createMany: async ({ data }: { data: unknown[] }) => { writes++; return { count: data.length } },
 }
-const fake = { productionOrder: { findMany: async () => { reads++; return [] } }, rollingDailyMetric: metric, $transaction: async (run: (tx: { rollingDailyMetric: typeof metric }) => unknown) => run({ rollingDailyMetric: metric }) }
+const fake = { productionOrder: { findMany: async () => { reads++; return [] } }, rollingDailyMetric: metric, $transaction: async (run: (tx: { rollingDailyMetric: typeof metric; $executeRaw: () => Promise<number> }) => unknown) => run({ rollingDailyMetric: metric, $executeRaw: async () => 0 }) }
 const singleton = globalThis as unknown as { prisma: unknown }, previous = singleton.prisma
 let preview: typeof import('./import/route').POST, confirm: typeof import('./import/confirm/route').POST
 before(async () => { singleton.prisma = fake; preview = withTestSession((await import('./import/route')).POST, singleton.prisma); confirm = withTestSession((await import('./import/confirm/route')).POST, singleton.prisma) })

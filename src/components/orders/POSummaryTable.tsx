@@ -38,6 +38,40 @@ interface Props {
   orders: SerializedProductionOrder[]
 }
 
+type JourneyStage = 'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing'
+type JourneyInfo = {
+  extruderWeightKg: number
+  warpingWeightKg: number
+  hasExtruderData: boolean
+  hasWarpingData: boolean
+  knittingMeters: number
+  knittingWeightKg: number
+  hasKnittingData: boolean
+  hasKnittingMetersData: boolean
+  hasUnlinkedExtruderData: boolean
+  hasUnlinkedWarpingData: boolean
+  hasUnlinkedKnittingData: boolean
+  hasUnlinkedRollingData: boolean
+  hasUnlinkedPackingData: boolean
+  rollingMetrics: { metricLabel: string; value: number | null }[]
+  packingMetrics: { metricLabel: string; unit: string; value: number }[]
+  stages: Record<JourneyStage, { lastUpdatedAt: string; source: string } | null>
+  hasUnlinkedData: boolean
+}
+
+function sourceLabel(source: string) {
+  if (source === 'import') return 'Import Excel'
+  if (source === 'manual') return 'Nhập tay'
+  return source
+}
+
+function stageUpdated(info: JourneyInfo, stage: JourneyStage) {
+  const meta = info.stages[stage]
+  return meta
+    ? `${sourceLabel(meta.source)} · cập nhật ${new Date(meta.lastUpdatedAt).toLocaleString('vi-VN')}`
+    : 'Chưa có dữ liệu nguồn'
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function groupOrders(orders: SerializedProductionOrder[]): PIGroup[] {
@@ -107,10 +141,26 @@ function orderTypeLabel(t: string) {
   return 'Mét'
 }
 
+function packingTargets(subLines: SerializedProductionOrder[]) {
+  const targets = new Map<string, { label: string; value: number; complete: boolean }>()
+  for (const line of subLines) {
+    if (line.isDraft) continue
+    const unit = line.orderType === 'rolls' ? 'rolls' : line.orderType === 'pieces' ? 'pieces' : 'm'
+    const value = unit === 'm' ? line.lengthM : line.qty
+    const entry = targets.get(unit) ?? { label: unit === 'm' ? 'm' : unit === 'rolls' ? 'cuộn' : 'tấm', value: 0, complete: true }
+    if (value == null) entry.complete = false
+    else entry.value += Number(value)
+    targets.set(unit, entry)
+  }
+  return Array.from(targets.entries()).map(([unit, target]) => ({ unit, ...target }))
+}
+
 // Tiến độ sản xuất per order (lazy-loaded khi expand)
 interface ProgressEntry {
-  producedMeters: number
-  remainingMeters: number
+  producedMeters: number | null
+  remainingMeters: number | null
+  hasData: boolean
+  hasUnlinkedData: boolean
 }
 type ProgressMap = Record<string, ProgressEntry> // key = orderId
 
@@ -125,7 +175,35 @@ function SubLineTable({
 }) {
   const showPacking = subLines.some(s => s.requiresPacking)
   return (
-    <div className="overflow-x-auto">
+    <div className="space-y-3">
+      <div className="grid gap-2 md:grid-cols-2">
+        {subLines.map(s => {
+          const itemProgress = progress[s.id]
+          const targetMeters = s.lengthM != null ? Number(s.lengthM) : null
+          const quantity = s.qty != null ? Number(s.qty).toLocaleString('vi-VN') : null
+          const targetLabel = s.orderType === 'rolls' && quantity
+            ? `${quantity} cuộn${targetMeters != null ? ` · ${fmt(targetMeters)} m` : ''}`
+            : s.orderType === 'pieces' && quantity
+              ? `${quantity} tấm${targetMeters != null ? ` · ${fmt(targetMeters)} m` : ''}`
+              : targetMeters != null ? `${fmt(targetMeters)} m` : 'Chưa có mục tiêu mét'
+
+          return <article key={s.id} className="rounded-lg border border-outline-variant bg-surface-container-lowest p-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <Link href={`/orders/${s.id}`} className="font-mono font-semibold text-primary hover:underline">Dòng #{s.subLineIndex}</Link>
+              <span className="font-medium text-on-surface">{s.color || 'Chưa có màu'} · {s.widthM != null ? `${Number(s.widthM).toLocaleString('vi-VN')} m` : 'chưa có khổ'} · {s.gsm != null ? `${s.gsm} GSM` : 'chưa có GSM'}</span>
+              {s.itemCode && <span className="text-xs text-secondary">{s.itemCode}</span>}
+            </div>
+            <div className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+              <div><p className="text-xs text-secondary">Mục tiêu theo PO</p><p className="mt-1 font-mono font-medium">{targetLabel}</p></div>
+              <div><p className="text-xs text-secondary">Dệt thực tế đã liên kết</p><p className="mt-1 font-mono font-medium">{itemProgress?.hasData ? `${fmt(itemProgress.producedMeters)} m` : itemProgress?.hasUnlinkedData ? 'Có báo cáo PI chưa gắn item' : itemProgress ? 'Chưa có actual' : 'Đang tải…'}</p></div>
+              <div><p className="text-xs text-secondary">Còn theo mục tiêu mét</p><p className="mt-1 font-mono font-medium">{itemProgress?.hasData && itemProgress.remainingMeters != null ? `${fmt(itemProgress.remainingMeters)} m` : 'Chưa xác định'}</p></div>
+            </div>
+          </article>
+        })}
+      </div>
+      <details className="rounded border border-outline-variant">
+        <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-primary">Xem bảng thông số kỹ thuật chi tiết</summary>
+        <div className="overflow-x-auto">
       <table className="w-full text-xs font-inter border-collapse">
         <thead>
           <tr className="bg-surface-container-low border-b border-outline-variant text-secondary uppercase tracking-wider">
@@ -150,8 +228,8 @@ function SubLineTable({
             <th className="px-3 py-2 text-left font-medium">Màu eyelet</th>
             {showPacking && <th className="px-3 py-2 text-center font-medium">Đóng gói</th>}
             <th className="px-3 py-2 text-left font-medium">Ghi chú</th>
-            <th className="px-3 py-2 text-left font-medium">Đã SX (m)</th>
-            <th className="px-3 py-2 text-right font-medium">Còn lại (m)</th>
+            <th className="px-3 py-2 text-left font-medium">Dệt thực tế (m)</th>
+            <th className="px-3 py-2 text-right font-medium">Còn theo PO (m)</th>
             <th className="px-3 py-2 text-left font-medium">Nguồn</th>
           </tr>
         </thead>
@@ -239,20 +317,22 @@ function SubLineTable({
               )}
               <td className="px-3 py-2 text-secondary max-w-[150px] truncate" title={s.lineNote ?? undefined}>{s.lineNote ?? '—'}</td>
               <td className="px-3 py-2 font-mono text-primary font-semibold">
-                {progress[s.id] != null
-                  ? `${progress[s.id].producedMeters.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} m`
-                  : <span className="text-outline text-[10px]">...</span>}
+                {progress[s.id] == null
+                  ? <span className="text-outline text-[10px]">...</span>
+                  : progress[s.id].hasData
+                    ? `${progress[s.id].producedMeters?.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} m`
+                    : <span className="text-outline text-[10px]" title={progress[s.id].hasUnlinkedData ? 'Có báo cáo ghi PI này nhưng chưa liên kết được với dòng hàng.' : undefined}>{progress[s.id].hasUnlinkedData ? 'Chờ gắn item' : 'Chưa có số liệu'}</span>}
               </td>
               <td className="px-3 py-2 font-mono text-right">
-                {progress[s.id] != null
+                {progress[s.id]?.hasData
                   ? (
                     <span className={progress[s.id].remainingMeters === 0 ? 'text-[#15803d] font-semibold' : 'text-on-surface'}>
                       {progress[s.id].remainingMeters === 0
                         ? '✔'
-                        : `${progress[s.id].remainingMeters.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} m`}
+                        : `${progress[s.id].remainingMeters?.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} m`}
                     </span>
                   )
-                  : <span className="text-outline text-[10px]">...</span>}
+                  : <span className="text-outline text-[10px]">{progress[s.id] ? '—' : '...'}</span>}
               </td>
               <td className="px-3 py-2 text-secondary">
                 {s.dataSource === 'import' ? 'Import' : s.dataSource === 'seed' ? 'Demo' : 'Manual'}
@@ -261,6 +341,8 @@ function SubLineTable({
           ))}
         </tbody>
       </table>
+        </div>
+      </details>
     </div>
   )
 }
@@ -272,7 +354,7 @@ export default function POSummaryTable({ orders }: Props) {
   const [expandedPIs, setExpandedPIs]   = useState<Set<string>>(new Set())
   // progress: keyed by orderId — lazy-loaded when a PI group is expanded
   const [progress, setProgress]         = useState<ProgressMap>({})
-  const [journeyMap, setJourneyMap]     = useState<Record<string, { extruderWeightKg: number; warpingWeightKg: number; hasUnlinkedData: boolean }>>({})
+  const [journeyMap, setJourneyMap]     = useState<Record<string, JourneyInfo>>({})
   const [bulkEditPI, setBulkEditPI]     = useState<{ piNumber: string; group: PIGroup } | null>(null)
 
   useEffect(() => {
@@ -299,13 +381,15 @@ export default function POSummaryTable({ orders }: Props) {
         try {
           const res = await fetch(`/api/knitting/progress/${s.id}`)
           if (!res.ok) return { id: s.id, data: null }
-          const json = await res.json() as { success: boolean; producedMeters?: number; remainingMeters?: number }
+          const json = await res.json() as { success: boolean; producedMeters?: number | null; remainingMeters?: number | null; hasData?: boolean; hasUnlinkedData?: boolean }
           if (!json.success) return { id: s.id, data: null }
           return {
             id: s.id,
             data: {
-              producedMeters: json.producedMeters ?? 0,
-              remainingMeters: json.remainingMeters ?? 0,
+              producedMeters: json.producedMeters ?? null,
+              remainingMeters: json.remainingMeters ?? null,
+              hasData: json.hasData ?? false,
+              hasUnlinkedData: json.hasUnlinkedData ?? false,
             },
           }
         } catch {
@@ -499,82 +583,76 @@ export default function POSummaryTable({ orders }: Props) {
                 {/* Expanded sub-lines */}
                 {isOpen && (
                   <div className="border-t-[0.5px] border-outline-variant">
-                    {/* Order Journey bar — only shown when totalRequiredYarnKg > 0 */}
-                    {group.totalRequiredYarnKg != null && group.totalRequiredYarnKg > 0 && (
+                    {/* PI stage summary: raw PI totals stay separate from sub-line actuals below. */}
+                    {(group.totalRequiredYarnKg != null && group.totalRequiredYarnKg > 0 || journeyMap[group.piNumber] != null) && (
                       <div className="bg-surface-container-low px-4 py-2.5 border-b border-outline-variant/60 flex flex-wrap items-center justify-between gap-3">
                         <div className="flex items-center gap-2">
                           <span className="material-symbols-outlined text-primary text-[18px]">route</span>
                           <span className="text-xs font-inter font-semibold text-on-surface uppercase tracking-wider">
-                            Hành trình sản xuất <span className="normal-case font-normal text-secondary">(Nhu cầu sợi: {fmt(group.totalRequiredYarnKg)} kg)</span>:
+                            Hành trình theo PI {group.totalRequiredYarnKg != null && group.totalRequiredYarnKg > 0 && <span className="normal-case font-normal text-secondary">(Nhu cầu sợi: {fmt(group.totalRequiredYarnKg)} kg)</span>}
                           </span>
                         </div>
 
                         {(() => {
-                          const info = journeyMap[group.piNumber]
-                          const reqKg = group.totalRequiredYarnKg!
+                          const info = journeyMap[group.piNumber] ?? { extruderWeightKg: 0, warpingWeightKg: 0, hasExtruderData: false, hasWarpingData: false, knittingMeters: 0, knittingWeightKg: 0, hasKnittingData: false, hasKnittingMetersData: false, hasUnlinkedExtruderData: false, hasUnlinkedWarpingData: false, hasUnlinkedKnittingData: false, hasUnlinkedRollingData: false, hasUnlinkedPackingData: false, rollingMetrics: [], packingMetrics: [], stages: { extruder: null, warping: null, knitting: null, rolling: null, packing: null }, hasUnlinkedData: false }
+                          const reqKg = group.totalRequiredYarnKg ?? 0
                           const extKg = info?.extruderWeightKg || 0
                           const warpKg = info?.warpingWeightKg || 0
-                          const hasUnlinked = info?.hasUnlinkedData || false
-
-                          const extPct = Math.min(100, (extKg / reqKg) * 100)
-                          const warpPct = Math.min(100, (warpKg / reqKg) * 100)
+                          const extPct = reqKg > 0 ? (extKg / reqKg) * 100 : null
+                          const targetLines = group.subLines.filter(line => !line.isDraft)
+                          const meterTargets = targetLines.filter(line => line.lengthM != null)
+                          const knittingTargetMeters = meterTargets.reduce((sum, line) => sum + Number(line.lengthM), 0)
+                          const knittingTargetComplete = targetLines.length > 0 && meterTargets.length === targetLines.length
+                          const packTargets = packingTargets(group.subLines)
 
                           return (
-                            <div className="flex items-center gap-4 text-xs font-inter flex-wrap">
-                              {/* Kéo sợi */}
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-medium text-secondary">Kéo:</span>
-                                {extKg > 0 ? (
-                                  <span className="font-mono font-semibold text-primary">
-                                    {extPct.toFixed(1)}% <span className="text-secondary font-normal">({fmt(extKg)} kg)</span>
-                                  </span>
-                                ) : hasUnlinked ? (
-                                  <span
-                                    className="inline-flex items-center gap-1 text-[10px] font-medium bg-[#F59E0B]/10 text-[#B45309] px-2 py-0.5 rounded cursor-help"
-                                    title="Có báo cáo SX ghi PI này nhưng chưa xác định chính xác dòng nào — kiểm tra tay tại tab Extruder/Warping/Knitting"
-                                  >
-                                    ⚠️ Có dữ liệu chưa liên kết
-                                  </span>
-                                ) : (
-                                  <span className="text-outline">0% - Chưa sản xuất</span>
-                                )}
+                            <div className="grid w-full grid-cols-1 gap-2 text-xs font-inter sm:grid-cols-2 xl:grid-cols-3">
+                              <div className="rounded border border-outline-variant bg-surface-container-lowest px-3 py-2">
+                                <p className="text-secondary">Kéo sợi</p>
+                                <p className="mt-1 font-mono font-semibold text-primary">{info.hasExtruderData ? `${fmt(extKg)} kg` : info.hasUnlinkedExtruderData ? 'Có dữ liệu chưa gắn dòng' : 'Chưa có dữ liệu'}</p>
+                                {info.hasExtruderData && extPct != null && <p className="text-[11px] text-secondary">{extPct.toFixed(1)}% nhu cầu · {extKg <= reqKg ? `còn ${fmt(reqKg - extKg)} kg` : `vượt ${fmt(extKg - reqKg)} kg`}</p>}
+                                <p className="mt-1 text-[10px] text-secondary">{stageUpdated(info, 'extruder')}</p>
                               </div>
-
-                              {/* Cuốn */}
-                              <div className="flex items-center gap-1.5 border-l border-outline-variant/50 pl-3">
-                                <span className="font-medium text-secondary">Cuốn:</span>
-                                {warpKg > 0 ? (
-                                  <span className="font-mono font-semibold text-primary">
-                                    {warpPct.toFixed(1)}% <span className="text-secondary font-normal">({fmt(warpKg)} kg)</span>
-                                  </span>
-                                ) : hasUnlinked ? (
-                                  <span
-                                    className="inline-flex items-center gap-1 text-[10px] font-medium bg-[#F59E0B]/10 text-[#B45309] px-2 py-0.5 rounded cursor-help"
-                                    title="Có báo cáo SX ghi PI này nhưng chưa xác định chính xác dòng nào — kiểm tra tay tại tab Extruder/Warping/Knitting"
-                                  >
-                                    ⚠️ Có dữ liệu chưa liên kết
-                                  </span>
-                                ) : (
-                                  <span className="text-outline">0% - Chưa sản xuất</span>
-                                )}
+                              <div className="rounded border border-outline-variant bg-surface-container-lowest px-3 py-2">
+                                <p className="text-secondary">Dệt</p>
+                                {info.hasKnittingData
+                                  ? <p className="mt-1 font-mono font-semibold text-primary">{info.hasKnittingMetersData ? `${fmt(info.knittingMeters)} m` : '— m'} · {fmt(info.knittingWeightKg)} kg</p>
+                                  : <p className="mt-1 font-medium text-secondary">{info.hasUnlinkedKnittingData ? 'Có dữ liệu chưa gắn dòng' : 'Chưa có dữ liệu'}</p>}
+                                {meterTargets.length > 0 && <p className="text-[11px] text-secondary">{knittingTargetComplete ? `Mục tiêu ${fmt(knittingTargetMeters)} m` : 'Mục tiêu mét của PO chưa đủ dữ liệu'}{knittingTargetComplete && info.hasKnittingMetersData ? ` · ${knittingTargetMeters >= info.knittingMeters ? `còn ${fmt(knittingTargetMeters - info.knittingMeters)} m` : `vượt ${fmt(info.knittingMeters - knittingTargetMeters)} m`} theo PO` : ''}</p>}
+                                <p className="mt-1 text-[10px] text-secondary">{stageUpdated(info, 'knitting')}</p>
                               </div>
-
-                              {/* Dệt */}
-                              <div className="flex items-center gap-1.5 border-l border-outline-variant/50 pl-3">
-                                <span className="font-medium text-secondary">Dệt:</span>
-                                <span className="text-secondary font-medium">Theo dõi theo dòng bên dưới</span>
-                                {hasUnlinked && (
-                                  <span
-                                    className="inline-flex items-center gap-1 text-[10px] font-medium bg-[#F59E0B]/10 text-[#B45309] px-1.5 py-0.5 rounded cursor-help"
-                                    title="Có báo cáo SX ghi PI này nhưng chưa xác định chính xác dòng nào — kiểm tra tay tại tab Extruder/Warping/Knitting"
-                                  >
-                                    ⚠️ Có dữ liệu chưa liên kết
-                                  </span>
-                                )}
+                              <div className="rounded border border-outline-variant bg-surface-container-lowest px-3 py-2">
+                                <p className="text-secondary">Đóng gói</p>
+                                {packTargets.length > 0 && <ul className="mt-1 space-y-1">{packTargets.map(target => <li key={target.unit} className="text-xs">
+                                  <span className="font-medium">Mục tiêu PO: {target.complete ? `${fmt(target.value)} ${target.label}` : `chưa đủ dữ liệu mục tiêu (${target.label})`}</span>
+                                </li>)}</ul>}
+                                {info.packingMetrics.length > 0
+                                  ? <details className="mt-2"><summary className="cursor-pointer text-[11px] text-primary">Xem số nhập tay</summary><ul className="mt-1 space-y-0.5">{info.packingMetrics.map(item => <li key={`${item.metricLabel}:${item.unit}`} className="font-mono text-primary">{item.metricLabel}: {fmt(item.value)} {item.unit}</li>)}</ul></details>
+                                  : <p className="mt-1 font-medium text-secondary">Chờ file SNY có actual theo PI/item</p>}
+                                <p className="mt-1 text-[10px] text-secondary">{info.packingMetrics.length ? `${stageUpdated(info, 'packing')} · nhập tay, chưa đối soát file` : 'Chưa có nguồn actual đóng gói theo PI'}</p>
                               </div>
+                              <details className="rounded border border-outline-variant bg-surface-container-lowest px-3 py-2 sm:col-span-2 xl:col-span-3">
+                                <summary className="cursor-pointer font-medium text-primary">Xem công đoạn trung gian: Mắc sợi và Cuộn</summary>
+                                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                  <div className="rounded border border-outline-variant px-3 py-2">
+                                    <p className="text-secondary">Mắc sợi</p>
+                                    <p className="mt-1 font-mono font-semibold text-primary">{info.hasWarpingData ? `${fmt(warpKg)} kg` : info.hasUnlinkedWarpingData ? 'Có dữ liệu chưa gắn dòng' : 'Chưa có dữ liệu'}</p>
+                                    <p className="text-[11px] text-secondary">Chưa so với mục tiêu WIP</p>
+                                    <p className="mt-1 text-[10px] text-secondary">{stageUpdated(info, 'warping')}</p>
+                                  </div>
+                                  <div className="rounded border border-outline-variant px-3 py-2">
+                                    <p className="text-secondary">Cuộn</p>
+                                    {info.rollingMetrics.length > 0
+                                      ? <ul className="mt-1 space-y-0.5">{info.rollingMetrics.map(item => <li key={item.metricLabel} className="font-mono text-primary">{item.metricLabel}: {item.value == null ? '—' : fmt(item.value)}</li>)}</ul>
+                                      : <p className="mt-1 font-medium text-secondary">{info.hasUnlinkedRollingData ? 'Có dữ liệu chưa gắn dòng' : 'Chưa có dữ liệu'}</p>}
+                                    <p className="mt-1 text-[10px] text-secondary">{stageUpdated(info, 'rolling')} · giữ nhãn nguồn</p>
+                                  </div>
+                                </div>
+                              </details>
                             </div>
                           )
                         })()}
+                        {journeyMap[group.piNumber]?.hasUnlinkedData && <p className="w-full text-xs text-amber-800">Một số báo cáo chỉ khớp mã PI, chưa khớp dòng hàng. Tổng PI có thể gồm dữ liệu chưa liên kết; không dùng để kết luận theo từng item.</p>}
                       </div>
                     )}
                     <SubLineTable subLines={group.subLines} progress={progress} />

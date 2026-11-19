@@ -8,6 +8,7 @@ import { prisma } from '@/lib/db'
 import { rollingPeriodFromFileName, validateRollingPeriod } from '@/lib/materials/rollingPeriod'
 import { rollingImportSnapshot } from '@/lib/materials/rollingImportSnapshot'
 import { acknowledgesRollingLosses, compareRollingDays, rollingLosses } from '@/lib/materials/rollingImportSafety'
+import { assertHandoffsCoveredAfterImport, HandoffImportConflict } from '@/lib/production/handoffs'
 
 // In-memory Mutex to prevent overlapping concurrent rolling imports
 let isRollingImportInProgress = false
@@ -93,8 +94,10 @@ export async function POST(req: NextRequest) {
 
     // Execute deletion of exact scope and batch insertion atomically inside transaction
     const result = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SET LOCAL lock_timeout = '5s'`
+      await tx.$executeRaw`LOCK TABLE "rolling_daily_metrics" IN SHARE ROW EXCLUSIVE MODE`
       const existing = await tx.rollingDailyMetric.findMany({
-        where: { date: { in: targetDates } }, select: { date: true, orderRef: true },
+        where: { date: { in: targetDates } }, select: { date: true, orderRef: true, orderId: true, metricLabel: true, metricValue: true },
       })
       const replacementDays = compareRollingDays(existing, rollingData)
       const losses = rollingLosses(replacementDays)
@@ -103,6 +106,7 @@ export async function POST(req: NextRequest) {
       if (losses.length && (formData.get('acknowledgeLoss') !== 'true' || !acknowledgesRollingLosses(losses, acknowledged))) {
         return { blocked: true as const, replacementDays }
       }
+      await assertHandoffsCoveredAfterImport(tx, 'rolling', existing, rollingData)
       const deleteRes = await tx.rollingDailyMetric.deleteMany({
         where: {
           date: { in: targetDates },
@@ -124,7 +128,7 @@ export async function POST(req: NextRequest) {
         deletedCount: deleteRes.count,
         insertedCount: count,
       }
-    })
+    }, { timeout: 60_000, maxWait: 5_000 })
 
     if (result.blocked) return NextResponse.json({ success: false, error: 'Có mã ORDER sẽ mất dữ liệu Rolling hoặc danh sách đã thay đổi. Vui lòng kiểm tra và xác nhận lại.', replacementDays: result.replacementDays }, { status: 409 })
 
@@ -138,6 +142,7 @@ export async function POST(req: NextRequest) {
     })
   } catch (error: any) {
     if (error instanceof RollingDateConflictError) return NextResponse.json({ success: false, error: error.message }, { status: 422 })
+    if (error instanceof HandoffImportConflict) return NextResponse.json({ success: false, code: 'HANDOFF_ACTUAL_CONFLICT', error: error.message }, { status: 409 })
     console.error('Error confirming rolling import:', error)
     return NextResponse.json(
       { success: false, error: error.message || 'Lỗi khi lưu dữ liệu Rolling vào cơ sở dữ liệu.' },

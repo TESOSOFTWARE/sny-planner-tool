@@ -24,6 +24,7 @@ type NavItem = ActiveNavItem | DisabledNavItem
 
 const NAV_ITEMS: NavItem[] = [
   { kind: 'link', icon: 'factory', label: 'Production', href: '/orders', permissions: ['orders.read', 'output.read'] },
+  { kind: 'link', icon: 'swap_horiz', label: 'PO Handoff', href: '/production-handoffs', permissions: ['output.read'] },
   { kind: 'link', icon: 'group', label: 'Customers', href: '/customers', permissions: ['customers.read'] },
   { kind: 'link', icon: 'calendar_month', label: 'Schedule', href: '/schedule', permissions: ['schedule.read'] },
   { kind: 'link', icon: 'inventory_2', label: 'Materials', href: '/materials', permissions: ['materials.read'] },

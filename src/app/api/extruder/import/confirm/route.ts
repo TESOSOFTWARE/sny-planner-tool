@@ -7,6 +7,7 @@ import { authError } from '@/lib/auth/session'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { preserveOrderLinks, OutputLinkConflict } from '@/lib/excel/preserveOrderLinks'
+import { assertHandoffsCoveredAfterImport, HandoffImportConflict } from '@/lib/production/handoffs'
 import { z } from 'zod'
 
 export const maxDuration = 60  // Matches the 60s transaction timeout below
@@ -69,6 +70,7 @@ export async function POST(req: NextRequest) {
       const existingRows = await tx.extruderDailyOutput.findMany({ where: groups })
       const orderRows = await tx.productionOrder.findMany({ select: { id: true, piNumber: true } })
       const linkedRows = preserveOrderLinks(rows, existingRows, orderRows)
+      await assertHandoffsCoveredAfterImport(tx, 'extruder', existingRows, linkedRows)
       // Delete existing records cho các [machineId, reportDate] trong file — một lệnh,
       // vì xoá từng nhóm làm vượt timeout transaction trên Neon (N13).
       await tx.extruderDailyOutput.deleteMany({ where: groups })
@@ -91,6 +93,7 @@ export async function POST(req: NextRequest) {
       insertedCount = data.length
     }, { timeout: 60_000, maxWait: 5_000 })
   } catch (err) {
+    if (err instanceof HandoffImportConflict) return NextResponse.json({ success: false, code: 'HANDOFF_ACTUAL_CONFLICT', error: err.message }, { status: 409 })
     if (err instanceof OutputLinkConflict) {
       return NextResponse.json({ success: false, code: 'OUTPUT_LINK_CONFLICT', error: err.message }, { status: 409 })
     }

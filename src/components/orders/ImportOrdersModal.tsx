@@ -95,7 +95,7 @@ const FIELD_LABELS: Record<string, string> = {
   paymentTerms: 'Điều kiện thanh toán',
   gaugeDenier: 'Gauge & Denier',
   labelInstruction: 'Label',
-  shippingNote: 'Shipping (nguyên văn)',
+  shippingNote: 'Ghi chú giao hàng (Shipping theo PO)',
   etdDate: 'ETD',
   etdNote: 'ETD note',
   loadingDate: 'Loading date',

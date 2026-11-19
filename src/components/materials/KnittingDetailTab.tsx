@@ -37,6 +37,7 @@ interface ApiResponse {
   records: KnittingDetailRecord[]
   total:   number
   totalWeightKgs: string
+  totalMeters: string
   totalLengthM:   string
   machineCount:   number
   error?:  string
@@ -83,7 +84,7 @@ export default function KnittingDetailTab({ onImport }: Props) {
 
   // Server totals over every filtered row, not only the loaded page (N12)
   const totalKg = Number(data?.totalWeightKgs ?? 0)
-  const totalM = Number(data?.totalLengthM ?? 0)
+  const totalM = Number(data?.totalMeters ?? 0)
   const machineCount = data?.machineCount ?? 0
   const summaryUnavailable = isLoading || !!fetchError
 
@@ -153,7 +154,7 @@ export default function KnittingDetailTab({ onImport }: Props) {
         <StatCard label="Tổng dòng"     value={summaryUnavailable ? '—' : total}                                                                                    icon="format_list_numbered" />
         <StatCard label="Máy dệt hoạt động" value={summaryUnavailable ? '—' : machineCount}                                                                         icon="grid_view" />
         <StatCard label="Tổng sản lượng" value={summaryUnavailable ? '—' : `${totalKg.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} kg`} icon="scale" />
-        <StatCard label="Tổng chiều dài" value={summaryUnavailable ? '—' : `${totalM.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} m`} icon="straighten" />
+        <StatCard label="Tổng mét sản phẩm (M)" value={summaryUnavailable ? '—' : `${totalM.toLocaleString('vi-VN', { maximumFractionDigits: 0 })} m`} icon="straighten" />
       </div>
 
       {/* Table */}

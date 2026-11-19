@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
         take: limit,
       }),
       prisma.knittingDailyDetail.count({ where }),
-      prisma.knittingDailyDetail.aggregate({ where, _sum: { weightKgs: true, lengthM: true } }),
+      prisma.knittingDailyDetail.aggregate({ where, _sum: { weightKgs: true, lengthM: true, mValue: true } }),
       prisma.knittingDailyDetail.findMany({ where, distinct: ['machineId'], select: { machineId: true } }),
     ])
 
@@ -77,6 +77,7 @@ export async function GET(req: NextRequest) {
       records: serialized,
       total,
       totalWeightKgs: sum._sum.weightKgs?.toString() ?? '0',
+      totalMeters: sum._sum.mValue?.toString() ?? '0',
       totalLengthM: sum._sum.lengthM?.toString() ?? '0',
       machineCount: machines.length,
       page,

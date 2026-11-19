@@ -16,7 +16,7 @@ const schema = z.object({
 class StaleSelection extends Error {
   constructor(public added: string[], public missing: string[], public changed: string[]) { super('Lịch đã thay đổi, tải lại và chọn lại.') }
 }
-type Reason = 'NOT_FOUND' | 'HAS_OUTPUT' | 'ASSIGNED' | 'HAS_OUTPUT_ON_SCHEDULE'
+type Reason = 'NOT_FOUND' | 'HAS_OUTPUT' | 'HAS_HANDOFF' | 'ASSIGNED' | 'HAS_OUTPUT_ON_SCHEDULE'
 
 export async function POST(request: Request) {
   const accessError = await authError('POST', request)
@@ -47,6 +47,8 @@ export async function POST(request: Request) {
         ...await tx.knittingDailyDetail.findMany(outputWhere), ...await tx.rollingDailyMetric.findMany(outputWhere),
       ]
       const outputOrderIds = new Set(outputRows.map(row => row.orderId))
+      const handoffRows = await tx.productionHandoff.findMany({ where: { orderId: { in: ids } }, select: { orderId: true } })
+      const handoffOrderIds = new Set(handoffRows.map(row => row.orderId))
       // MaterialTransaction.orderId stores PI TEXT, not a ProductionOrder ID.
       const slips = orders.length ? await tx.materialTransaction.findMany({
         where: { OR: Array.from(new Set(orders.map(row => row.piNumber))).map(pi => ({ orderId: { equals: pi, mode: 'insensitive' as const } })) },
@@ -58,6 +60,7 @@ export async function POST(request: Request) {
       for (const id of ids) {
         const order = byId.get(id)
         if (!order) { skipped.push({ id, piNumber: null, reason: 'NOT_FOUND' }); continue }
+        if (handoffOrderIds.has(id)) { skipped.push({ id, piNumber: order.piNumber, reason: 'HAS_HANDOFF' }); continue }
         const assigned = assignments.filter(row => row.orderId === id)
         if (outputOrderIds.has(id) || slipPis.has(order.piNumber.trim().toLowerCase())) { skipped.push({ id, piNumber: order.piNumber, reason: 'HAS_OUTPUT' }); continue }
         if (assigned.length && !allowRemoval) { skipped.push({ id, piNumber: order.piNumber, reason: 'ASSIGNED', machines: Array.from(new Set(assigned.map(row => row.machineId))) }); continue }

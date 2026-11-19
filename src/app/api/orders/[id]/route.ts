@@ -304,6 +304,8 @@ export async function DELETE(_req: NextRequest, context: RouteContext) {
       // Hold the order row until the count and deletion have both completed.
       const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM production_orders WHERE id = ${id} FOR UPDATE`
       if (locked.length === 0) return { notFound: true as const }
+      const handoffCount = await tx.productionHandoff.count({ where: { orderId: id } })
+      if (handoffCount > 0) return { handoffs: true as const, handoffCount }
       const assignmentCount = await tx.machineAssignment.count({ where: { orderId: id } })
       if (assignmentCount > 0) {
         const assignments = await tx.machineAssignment.findMany({
@@ -327,6 +329,7 @@ export async function DELETE(_req: NextRequest, context: RouteContext) {
         error: `Không thể xoá đơn vì còn ${result.assignmentCount} lịch máy (${result.machines.join(', ')}). Gỡ hoặc chuyển phân công trước khi xoá.`,
       }, { status: 409 })
     }
+    if (result.handoffs === true) return NextResponse.json({ success: false, code: 'ORDER_HAS_HANDOFFS', error: `Không thể xóa dòng đơn vì đã có ${result.handoffCount} bản ghi bàn giao WIP. Hãy giữ lại lịch sử bàn giao.` }, { status: 409 })
     return NextResponse.json({ success: true })
   } catch (err: unknown) {
     if (err !== null && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'P2025') {
