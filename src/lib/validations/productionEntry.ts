@@ -31,6 +31,8 @@ export const productionPlanUpdateInput = productionPlanInput.extend({
 
 export function utcDay(value: string) {
   const [year, month, date] = value.split('-').map(Number)
+  if (![year, month, date].every(Number.isInteger)) return null
   const result = new Date(Date.UTC(year, month - 1, date))
+  if (!Number.isFinite(result.getTime())) return null
   return result.toISOString().slice(0, 10) === value ? result : null
 }

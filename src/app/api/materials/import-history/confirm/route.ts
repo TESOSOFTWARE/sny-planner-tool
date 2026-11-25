@@ -42,13 +42,21 @@ export async function POST(req: NextRequest) {
         const material = await tx.material.create({ data: { name: row.materialName.trim(), group: row.group, ...importedTaxonomy(row), currentStock: 0, stockReportDate: null, stockReportDirty: false, unit: 'kg' } })
         createdIds.set('new:' + key, material.id)
       }
-      const data = plan.writes.map(write => ({ ...write, materialId: createdIds.get(write.materialId) ?? write.materialId }))
-      const created = data.length ? (await tx.materialReportSnapshot.createMany({ data })).count : 0
+      const data = plan.writes.map(({ updateExisting: _updateExisting, ...write }) => ({ ...write, materialId: createdIds.get(write.materialId) ?? write.materialId }))
+      const creates = data.filter((_, index) => !plan.writes[index].updateExisting)
+      const updates = data.filter((_, index) => plan.writes[index].updateExisting)
+      const created = creates.length ? (await tx.materialReportSnapshot.createMany({ data: creates })).count : 0
+      for (const update of updates) {
+        await tx.materialReportSnapshot.update({
+          where: { materialId_reportDate: { materialId: update.materialId, reportDate: update.reportDate } },
+          data: { payload: update.payload, contentHash: update.contentHash, version: update.version },
+        })
+      }
       for (const update of plan.stockUpdates) {
         const materialId = createdIds.get(update.materialId) ?? update.materialId
         await tx.material.update({ where: { id: materialId }, data: { currentStock: update.to.stock, stockReportDate: new Date(update.to.date + 'T00:00:00.000Z'), stockReportDirty: false } })
       }
-      const receipt = { created, materialsCreated: createdIds.size, stockUpdated: plan.stockUpdates.map(update => ({ ...update, materialId: createdIds.get(update.materialId) ?? update.materialId })), stockKept: plan.stockKept, totalRows: plan.preview.totalRows, counts: plan.preview.counts }
+      const receipt = { created, updated: updates.length, materialsCreated: createdIds.size, stockUpdated: plan.stockUpdates.map(update => ({ ...update, materialId: createdIds.get(update.materialId) ?? update.materialId })), stockKept: plan.stockKept, totalRows: plan.preview.totalRows, counts: plan.preview.counts }
       await markProductionImportAttemptCommitted(tx, attempt, receipt)
       return { success: true, ...receipt }
     }, { maxWait: 5000, timeout: 30000 })

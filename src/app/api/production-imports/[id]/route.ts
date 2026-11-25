@@ -9,11 +9,6 @@ import { publicImportResult, publicImportSheetResults } from '@/lib/production/i
 
 const sheetSchema = z.enum(STATISTICAL_REPORT_SHEETS)
 const jsonInput = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
-  if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`).join(',')}}`
-  return JSON.stringify(value)
-}
 const updateSchema = z.object({
   sheet: sheetSchema,
   state: z.enum(['PREPARED', 'PROCESSING', 'CONFIRMED', 'FAILED', 'UNCERTAIN', 'RECONCILE_CONFIRMED', 'RECONCILE_FAILED']),
@@ -70,11 +65,11 @@ export async function PATCH(request: NextRequest, context: { params: { id: strin
         if (!parsed.data.sourceRows) return { kind: 'rows' as const }
         const byteLength = Buffer.byteLength(JSON.stringify(parsed.data.sourceRows), 'utf8')
         if (byteLength > 3_800_000) return { kind: 'large' as const }
-        if (stored && (stored.status !== 'PREPARED' || stableJson(stored.sourceRows) !== stableJson(parsed.data.sourceRows))) return { kind: 'state' as const }
+        if (stored && stored.status !== 'PREPARED' && stored.status !== 'FAILED') return { kind: 'state' as const }
         await tx.productionReportImportSheet.upsert({
           where: { batchId_sheetName: { batchId: batch.id, sheetName: parsed.data.sheet } },
           create: { batchId: batch.id, sheetName: parsed.data.sheet, sourceRows: jsonInput(parsed.data.sourceRows), status: 'PREPARED', result: jsonInput({}) },
-          update: { status: 'PREPARED' },
+          update: { sourceRows: jsonInput(parsed.data.sourceRows), status: 'PREPARED', result: jsonInput({}), attemptToken: null, attemptCommittedAt: null },
         })
       } else if (parsed.data.state === 'PROCESSING') {
         if (!stored) return { kind: 'rows' as const }

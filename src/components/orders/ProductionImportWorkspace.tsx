@@ -5,7 +5,7 @@ import ImportOrdersModal from '@/components/orders/ImportOrdersModal'
 import { prepareStatisticalReportUpload, ReportUploadError } from '@/lib/excel/uploadTrim'
 import { STATISTICAL_REPORT_SHEETS, summarizeImportRows, type ImportReviewRow, type StatisticalReportSheet } from '@/lib/production/importReview'
 import { remarkKey, type RemarkValue } from '@/lib/excel/knittingRemark'
-import { rollingLosses, type RollingDayComparison } from '@/lib/materials/rollingImportSafety'
+import type { RollingDayComparison } from '@/lib/materials/rollingImportSafety'
 import type { Resolution, Resolutions } from '@/lib/materials/reportHistoryImport'
 
 type SheetPreview = {
@@ -15,7 +15,7 @@ type SheetPreview = {
   error?: string
 }
 
-type ImportOutcome = { state: 'done' | 'failed' | 'uncertain'; message: string; count?: number; needsPreviewRefresh?: boolean }
+type ImportOutcome = { state: 'done' | 'failed' | 'uncertain'; message: string; count?: number; added?: number; updated?: number; unchanged?: number; skipped?: number; needsPreviewRefresh?: boolean }
 type ImportBatchSheetResult = { status?: string; result?: Record<string, unknown>; updatedAt?: string }
 type ImportBatchSummary = {
   id: string; fileName: string; fileHash: string; decisionHash: string; reportMonth: string
@@ -35,6 +35,7 @@ type HdpeStockUpdate = { materialId: string; name: string; from: { stock: string
 type HdpeStockKept = { materialId: string; name: string; reason: string; reportEnd: string }
 type HdpeSkippedRow = { sourceRow: number; materialName: string; group: string; reportDate: string; status: string; reasons: string[]; differences?: Array<{ field: string; stored: unknown; incoming: unknown }> }
 type RollingSkippedDateBlock = { dateLabelRaw: string; note: string | null; blocked?: boolean; hasData?: boolean }
+type ImportExecutionContext = { file: File; sourceFile: File; sourceFileHash: string; reportMonth: string; month: string; year: string; previews: SheetPreview[]; resolutions: Resolutions; remarkDecisions: Record<string, 'MESH' | 'NOTE'> }
 const LABELS: Record<StatisticalReportSheet, string> = {
   HDPE: 'HDPE',
   EXTRUDER: 'Kéo sợi',
@@ -117,14 +118,14 @@ function sheetTotals(sheet: StatisticalReportSheet, rows: ImportReviewRow[]): st
 function previewOutcome(sheet: StatisticalReportSheet, payload: Record<string, unknown>): string {
   if (sheet === 'HDPE' && payload.counts && typeof payload.counts === 'object') {
     const counts = payload.counts as Record<string, unknown>
-    return `Mới ${Number(counts.new ?? 0)} · giống hệt ${Number(counts.identical ?? 0)} · cần xử lý ${Number(counts.invalid ?? 0) + Number(counts.unknown_material ?? 0) + Number(counts.ambiguous ?? 0) + Number(counts.conflict_existing ?? 0)}`
+    return `Mới ${Number(counts.new ?? 0)} · sửa ${Number(counts.updated ?? 0)} · giữ nguyên ${Number(counts.identical ?? 0)} · bỏ qua ${Number(counts.invalid ?? 0) + Number(counts.unknown_material ?? 0) + Number(counts.ambiguous ?? 0)}`
   }
   if (sheet === 'ROLLING' && Array.isArray(payload.replacementDays)) {
     const days = payload.replacementDays as RollingDayComparison[]
-    return `${days.length} ngày · hiện có ${days.reduce((sum, day) => sum + day.currentCount, 0)} dòng → file có ${days.reduce((sum, day) => sum + day.incomingCount, 0)} dòng`
+    return `${days.length} ngày · đối chiếu từng dòng · dòng vắng mặt sẽ được giữ nguyên`
   }
   const rows = Array.isArray(payload.rows) ? payload.rows.length : 0
-  return rows ? `${rows.toLocaleString('vi-VN')} dòng · confirm thay theo máy/ngày` : 'Sẵn sàng kiểm tra'
+  return rows ? `${rows.toLocaleString('vi-VN')} dòng · tự thêm mới/cập nhật, không xóa dòng cũ` : 'Sẵn sàng nhập'
 }
 
 function fileForm(file: File, extras: Record<string, string> = {}) {
@@ -162,7 +163,6 @@ export default function ProductionImportWorkspace() {
   const [activeSheet, setActiveSheet] = useState<StatisticalReportSheet>('HDPE')
   const [resolutions, setResolutions] = useState<Resolutions>({})
   const [remarkDecisions, setRemarkDecisions] = useState<Record<string, 'MESH' | 'NOTE'>>({})
-  const [acknowledgeRollingLoss, setAcknowledgeRollingLoss] = useState(false)
   const [page, setPage] = useState(1)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -197,9 +197,6 @@ export default function ProductionImportWorkspace() {
   const historyColumns = Array.from(new Set(historicalRows.flatMap(row => Object.keys(row))))
   const hdpePreview = previewBySheet.get('HDPE')?.payload
   const unknownMaterials = Array.isArray(hdpePreview?.unknownMaterials) ? hdpePreview.unknownMaterials as UnknownMaterial[] : []
-  const materialCandidates = Array.isArray(hdpePreview?.materials)
-    ? hdpePreview.materials as Array<{ id: string; name: string; group: string }>
-    : []
   const hdpeStockUpdates = Array.isArray(hdpePreview?.stockUpdates) ? hdpePreview.stockUpdates as HdpeStockUpdate[] : []
   const hdpeStockKept = Array.isArray(hdpePreview?.stockKept) ? hdpePreview.stockKept as HdpeStockKept[] : []
   const hdpeSkippedRows = Array.isArray(hdpePreview?.skippedRows) ? hdpePreview.skippedRows as HdpeSkippedRow[] : []
@@ -210,15 +207,13 @@ export default function ProductionImportWorkspace() {
   const rollingPreview = previewBySheet.get('ROLLING')?.payload
   const replacementDays = Array.isArray(rollingPreview?.replacementDays) ? rollingPreview.replacementDays as RollingDayComparison[] : []
   const skippedRollingDateBlocks = Array.isArray(rollingPreview?.skippedDateBlocks) ? rollingPreview.skippedDateBlocks as RollingSkippedDateBlock[] : []
-  const hasBlockedRollingDateBlocks = skippedRollingDateBlocks.some(block => block.blocked || block.hasData)
-  const losses = rollingLosses(replacementDays)
+  const missingRollingPiCount = new Set(replacementDays.flatMap(day => day.missingPIs)).size
+  const rollingInvalidMetricCount = Array.isArray(rollingPreview?.invalidMetrics) ? rollingPreview.invalidMetrics.length : 0
   const allDone = STATISTICAL_REPORT_SHEETS.every(sheet => outcomes[sheet]?.state === 'done')
   const hasUncertainOutcome = Object.values(outcomes).some(outcome => outcome?.state === 'uncertain')
-  const allSheetsReady = previews.length === STATISTICAL_REPORT_SHEETS.length && STATISTICAL_REPORT_SHEETS.every(sheet => !previewBySheet.get(sheet)?.error)
+  const hasReadySheet = previews.length === STATISTICAL_REPORT_SHEETS.length && STATISTICAL_REPORT_SHEETS.some(sheet => !previewBySheet.get(sheet)?.error)
   const hasPeriodConflict = previews.some(preview => summarizeImportRows(preview.rows, reportMonth).outOfPeriodDates.length > 0)
-  const remarksComplete = unknownRemarks.length <= 200 && unknownRemarks.every(value => remarkDecisions[remarkKey(value.value)])
-  const unknownMaterialsResolved = unknownMaterials.every(material => resolutions[material.materialKey] !== undefined)
-  const canConfirm = Boolean(file && allSheetsReady && !busy && !allDone && !hasUncertainOutcome && !previewNeedsRefresh && !hasPeriodConflict && !invalidRowCount && !hasBlockedRollingDateBlocks && remarksComplete && unknownMaterialsResolved && (!losses.length || acknowledgeRollingLoss))
+  const canConfirm = Boolean(file && hasReadySheet && !busy && !allDone && !hasUncertainOutcome && !previewNeedsRefresh && !hasPeriodConflict)
   const hasPartialOutcome = Object.values(outcomes).some(outcome => outcome?.state === 'done') && !allDone
 
   const reloadBatchHistory = useCallback(async (append = false, requestedCursor: { createdAt: string; id: string } | null = null) => {
@@ -258,14 +253,16 @@ export default function ProductionImportWorkspace() {
     setMessage('')
     setResolutions({})
     setRemarkDecisions({})
-    setAcknowledgeRollingLoss(false)
     setError('')
     setPage(1)
     const suggested = next ? monthFromFileName(next.name) : null
-    if (suggested) { setMonth(suggested.month); setYear(suggested.year) }
+    if (suggested) {
+      setMonth(suggested.month); setYear(suggested.year)
+      if (next && category === 'statistical') void previewWorkbook(next, suggested, true)
+    }
   }
 
-  async function requestPreview(sheet: StatisticalReportSheet, source: File, selectedMonth: string, selectedYear: string): Promise<SheetPreview> {
+  async function requestPreview(sheet: StatisticalReportSheet, source: File, selectedMonth: string, selectedYear: string, selectedResolutions: Resolutions = resolutions): Promise<SheetPreview> {
     const query = sheet === 'HDPE'
       ? '/api/materials/import-history'
       : sheet === 'EXTRUDER'
@@ -276,7 +273,7 @@ export default function ProductionImportWorkspace() {
             ? '/api/knitting/detail/import'
             : '/api/materials/rolling/import'
     const extra: Record<string, string> = sheet === 'HDPE'
-      ? { resolutions: JSON.stringify(resolutions) }
+      ? { resolutions: JSON.stringify(selectedResolutions) }
       : sheet === 'ROLLING'
         ? { month: String(Number(selectedMonth)), year: selectedYear }
         : {}
@@ -286,62 +283,79 @@ export default function ProductionImportWorkspace() {
       return { sheet, rows: [], payload, error: typeof payload.error === 'string' ? payload.error : `Không đọc được sheet ${sheet}.` }
     }
     const parsedRows = Array.isArray(payload.rows) ? payload.rows.filter((row): row is ImportReviewRow => Boolean(row) && typeof row === 'object') : []
-    if (!parsedRows.length) return { sheet, rows: [], payload, error: 'Sheet không có dòng dữ liệu để xem trước.' }
     return { sheet, rows: parsedRows, payload }
   }
 
-  async function previewWorkbook() {
-    const originalFile = sourceFile ?? file
+  async function previewWorkbook(fileOverride?: File, periodOverride?: { month: string; year: string }, autoConfirm = false) {
+    const originalFile = fileOverride ?? sourceFile ?? file
     if (!originalFile) { setError('Kéo thả hoặc chọn workbook Excel trước.'); return }
-    if (!/^\d{4}-\d{2}$/.test(reportMonth)) { setError('Chọn tháng và năm báo cáo hợp lệ.'); return }
-    if (Number(month) < 1 || Number(month) > 12 || Number(year) < 1900 || Number(year) > 2100) { setError('Chọn tháng và năm trong khoảng hợp lệ.'); return }
-    setBusy(true); setError(''); setPreviews([]); setPage(1); setAcknowledgeRollingLoss(false)
+    const selectedMonth = periodOverride?.month ?? month
+    const selectedYear = periodOverride?.year ?? year
+    const selectedReportMonth = selectedMonth && selectedYear ? `${selectedYear}-${String(Number(selectedMonth)).padStart(2, '0')}` : ''
+    if (!/^\d{4}-\d{2}$/.test(selectedReportMonth)) { setError('Chọn tháng và năm báo cáo hợp lệ.'); return }
+    if (Number(selectedMonth) < 1 || Number(selectedMonth) > 12 || Number(selectedYear) < 1900 || Number(selectedYear) > 2100) { setError('Chọn tháng và năm trong khoảng hợp lệ.'); return }
+    setBusy(true); setError(''); setPreviews([]); setPage(1)
     try {
       const [uploadFile, contentHash] = await Promise.all([prepareStatisticalReportUpload(originalFile), sha256File(originalFile)])
       setFile(uploadFile)
       setSourceFileHash(contentHash)
+      const selectedResolutions = fileOverride ? {} : resolutions
       const results = await Promise.all(STATISTICAL_REPORT_SHEETS.map(async sheet => {
-        try { return await requestPreview(sheet, uploadFile, month, year) }
+        try { return await requestPreview(sheet, uploadFile, selectedMonth, selectedYear, selectedResolutions) }
         catch { return { sheet, rows: [], payload: {}, error: `Không kết nối được khi đọc sheet ${sheet}.` } satisfies SheetPreview }
       }))
       setPreviews(results)
       setPreviewNeedsRefresh(false)
       const firstWithRows = results.find(result => result.rows.length)
       if (firstWithRows) setActiveSheet(firstWithRows.sheet)
+      if (autoConfirm) {
+        const hasReadySheet = results.length === STATISTICAL_REPORT_SHEETS.length && results.some(result => !result.error)
+        const hasOutOfPeriod = results.some(result => summarizeImportRows(result.rows, selectedReportMonth).outOfPeriodDates.length > 0)
+        if (!hasReadySheet || hasOutOfPeriod) {
+          setError(!hasReadySheet ? 'Không đọc được sheet nào để nhập; xem lỗi theo sheet.' : 'Ngày trong file không khớp tháng đã nhận diện; hãy chọn đúng tháng rồi nhập lại.')
+        } else {
+          setBusy(false)
+          await confirmWorkbook({ file: uploadFile, sourceFile: originalFile, sourceFileHash: contentHash, reportMonth: selectedReportMonth, month: selectedMonth, year: selectedYear, previews: results, resolutions: selectedResolutions, remarkDecisions: fileOverride ? {} : remarkDecisions })
+        }
+      }
     } catch (problem: unknown) {
       setError(problem instanceof ReportUploadError ? problem.message : 'Không thể kết nối để phân tích workbook. Hãy thử lại.')
     } finally { setBusy(false) }
   }
 
-  async function confirmSheet(sheet: StatisticalReportSheet, batchId: string, attemptToken: string): Promise<ImportOutcome> {
-    const preview = previewBySheet.get(sheet)
-    if (!preview || !file) return { state: 'failed', message: 'Thiếu dữ liệu xem trước.' }
+  async function confirmSheet(sheet: StatisticalReportSheet, batchId: string, attemptToken: string, context?: ImportExecutionContext): Promise<ImportOutcome> {
+    const activePreviews = context?.previews ?? previews
+    const activePreviewBySheet = new Map(activePreviews.map(preview => [preview.sheet, preview]))
+    const activeFile = context?.file ?? file
+    const activeMonth = context?.month ?? month
+    const activeYear = context?.year ?? year
+    const activeReportMonth = context?.reportMonth ?? reportMonth
+    const activeResolutions = context?.resolutions ?? resolutions
+    const activeRemarkDecisions = context?.remarkDecisions ?? remarkDecisions
+    const preview = activePreviewBySheet.get(sheet)
+    if (!preview || !activeFile) return { state: 'failed', message: 'Thiếu dữ liệu xem trước.' }
     let response: Response
     if (sheet === 'HDPE') {
       response = await fetch('/api/materials/import-history/confirm', {
-        method: 'POST', body: fileForm(file, { resolutions: JSON.stringify(resolutions), expectedSnapshot: String(preview.payload.expectedSnapshot ?? ''), importBatchId: batchId, importAttemptToken: attemptToken }),
+        method: 'POST', body: fileForm(activeFile, { resolutions: JSON.stringify(activeResolutions), expectedSnapshot: String(preview.payload.expectedSnapshot ?? ''), importBatchId: batchId, importAttemptToken: attemptToken }),
       })
     } else if (sheet === 'EXTRUDER') {
-      response = await fetch('/api/extruder/import/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows: preview.rows, sourceFileName: file.name, importAttempt: { batchId, token: attemptToken } }) })
+      response = await fetch('/api/extruder/import/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows: preview.rows, sourceFileName: activeFile.name, reportMonth: activeReportMonth, importAttempt: { batchId, token: attemptToken } }) })
     } else if (sheet === 'WARPING') {
-      response = await fetch('/api/warping/import/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows: preview.rows, sourceFileName: file.name, importAttempt: { batchId, token: attemptToken } }) })
+      response = await fetch('/api/warping/import/confirm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows: preview.rows, sourceFileName: activeFile.name, reportMonth: activeReportMonth, importAttempt: { batchId, token: attemptToken } }) })
     } else if (sheet === 'KNITTING') {
       response = await fetch('/api/knitting/detail/import/confirm', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rows: preview.rows, sourceFileName: file.name, remarkDecisions: unknownRemarks.map(({ value }) => ({ value, target: remarkDecisions[remarkKey(value)] })), importAttempt: { batchId, token: attemptToken } }),
+        body: JSON.stringify({ rows: preview.rows, sourceFileName: activeFile.name, reportMonth: activeReportMonth, remarkDecisions: Object.entries(activeRemarkDecisions).map(([value, target]) => ({ value, target })), importAttempt: { batchId, token: attemptToken } }),
       })
     } else {
       const extra: Record<string, string> = {
-        month: String(Number(month)), year,
+        month: String(Number(activeMonth)), year: activeYear,
         expectedSnapshot: String(preview.payload.expectedSnapshot ?? ''),
         importBatchId: batchId,
         importAttemptToken: attemptToken,
       }
-      if (losses.length && acknowledgeRollingLoss) {
-        extra.acknowledgeLoss = 'true'
-        extra.acknowledgedLosses = JSON.stringify(losses)
-      }
-      response = await fetch('/api/materials/rolling/import/confirm', { method: 'POST', body: fileForm(file, extra) })
+      response = await fetch('/api/materials/rolling/import/confirm', { method: 'POST', body: fileForm(activeFile, extra) })
     }
     const payload = await response.json() as Record<string, unknown>
     if (!response.ok || payload.success !== true) return {
@@ -349,28 +363,35 @@ export default function ProductionImportWorkspace() {
       message: typeof payload.error === 'string' ? payload.error : `Import ${sheet} thất bại.`,
       needsPreviewRefresh: response.status >= 400,
     }
-    const count = Number(payload.recordsInserted ?? payload.created ?? payload.totalRows ?? 0)
+    const count = Number(payload.recordsAdded ?? payload.recordsInserted ?? payload.created ?? payload.totalRows ?? 0)
+    const updated = Number(payload.recordsUpdated ?? payload.updated ?? 0)
+    const payloadCounts = payload.counts && typeof payload.counts === 'object' ? payload.counts as Record<string, unknown> : {}
+    const unchanged = Number(payload.recordsUnchanged ?? payloadCounts.identical ?? 0)
+    const invalidSkipped = Number(payload.invalidSkipped ?? (Number(payloadCounts.invalid ?? 0) + Number(payloadCounts.unknown_material ?? 0) + Number(payloadCounts.ambiguous ?? 0)))
+    const missing = Number(payload.missingInSource ?? 0)
+    const ambiguous = Number(payload.ambiguousSkipped ?? 0)
+    const rowSummary = `Thêm ${count.toLocaleString('vi-VN')} · sửa ${updated.toLocaleString('vi-VN')} · không đổi ${unchanged.toLocaleString('vi-VN')} · bỏ qua ${invalidSkipped.toLocaleString('vi-VN') + ambiguous.toLocaleString('vi-VN')}`
     if (sheet === 'HDPE') {
-      const counts = payload.counts && typeof payload.counts === 'object' ? payload.counts as Record<string, unknown> : {}
-      return { state: 'done', message: `Đã ghi ${count.toLocaleString('vi-VN')} snapshot; giống hệt ${Number(counts.identical ?? 0)}; bỏ qua/lỗi ${Number(counts.invalid ?? 0) + Number(counts.unknown_material ?? 0) + Number(counts.ambiguous ?? 0) + Number(counts.conflict_existing ?? 0)}.`, count }
+      return { state: 'done', message: `${rowSummary} snapshot tồn kho.`, count, added: count, updated, unchanged, skipped: invalidSkipped + ambiguous }
     }
-    const replaced = Number(payload.recordsDeleted ?? 0)
-    if (sheet === 'ROLLING') {
-      const dates = Number(payload.datesScoped ?? 0)
-      return { state: 'done', message: `Đã import ${count.toLocaleString('vi-VN')} dòng; thay dữ liệu của ${dates.toLocaleString('vi-VN')} ngày (${replaced.toLocaleString('vi-VN')} dòng cũ).`, count }
-    }
-    return { state: 'done', message: `Đã import ${count.toLocaleString('vi-VN')} dòng; thay ${replaced.toLocaleString('vi-VN')} nhóm máy/ngày.`, count }
+    return { state: 'done', message: `${rowSummary}${missing ? ` · giữ nguyên ${missing.toLocaleString('vi-VN')} dòng vắng khỏi file` : ''}.`, count, added: count, updated, unchanged, skipped: invalidSkipped + ambiguous }
   }
 
-  async function createImportBatch(): Promise<{ batch: ImportBatchSummary; existing: boolean }> {
-    if (!sourceFileHash || !sourceFile) throw new Error('Chưa tính được mã nhận diện file gốc; hãy phân tích lại workbook.')
+  async function createImportBatch(context?: ImportExecutionContext): Promise<{ batch: ImportBatchSummary; existing: boolean }> {
+    const activeSourceFile = context?.sourceFile ?? sourceFile
+    const activeSourceFileHash = context?.sourceFileHash ?? sourceFileHash
+    const activeReportMonth = context?.reportMonth ?? reportMonth
+    const activeResolutions = context?.resolutions ?? resolutions
+    const activeRemarkDecisions = context?.remarkDecisions ?? remarkDecisions
+    if (!activeSourceFileHash || !activeSourceFile) throw new Error('Chưa tính được mã nhận diện file gốc; hãy phân tích lại workbook.')
     const decisions = {
-      materials: Object.fromEntries(Object.entries(resolutions).sort(([a], [b]) => a.localeCompare(b))),
-      knittingRemarks: Object.fromEntries(Object.entries(remarkDecisions).sort(([a], [b]) => a.localeCompare(b))),
+      materials: Object.fromEntries(Object.entries(activeResolutions).sort(([a], [b]) => a.localeCompare(b))),
+      knittingRemarks: Object.fromEntries(Object.entries(activeRemarkDecisions).sort(([a], [b]) => a.localeCompare(b))),
+      defaults: { unknownMaterial: 'skip', unknownKnittingRemark: 'NOTE' },
     }
     const response = await fetch('/api/production-imports', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileName: sourceFile.name, fileHash: sourceFileHash, reportMonth, selectedSheets: STATISTICAL_REPORT_SHEETS, decisions }),
+      body: JSON.stringify({ fileName: activeSourceFile.name, fileHash: activeSourceFileHash, reportMonth: activeReportMonth, selectedSheets: STATISTICAL_REPORT_SHEETS, decisions }),
     })
     const data = await response.json() as { success?: boolean; existing?: boolean; batch?: ImportBatchSummary; error?: string }
     if (!response.ok || !data.success || !data.batch) throw new Error(data.error ?? 'Không tạo được phiên lịch sử import.')
@@ -426,24 +447,32 @@ export default function ProductionImportWorkspace() {
     return restored
   }
 
-  async function confirmWorkbook() {
-    if (!canConfirm) return
-    const oversizedSheet = previews.find(preview => new TextEncoder().encode(JSON.stringify(preview.rows)).length > 3_800_000)
+  async function confirmWorkbook(context?: ImportExecutionContext) {
+    const activePreviews = context?.previews ?? previews
+    const activePreviewBySheet = new Map(activePreviews.map(preview => [preview.sheet, preview]))
+    const activeFile = context?.file ?? file
+    const activeReportMonth = context?.reportMonth ?? reportMonth
+    const activeResolutions = context?.resolutions ?? resolutions
+    const activeRemarkDecisions = context?.remarkDecisions ?? remarkDecisions
+    const contextReady = Boolean(context && activeFile && activePreviews.length === STATISTICAL_REPORT_SHEETS.length && activePreviews.some(preview => !preview.error) && !activePreviews.some(preview => summarizeImportRows(preview.rows, activeReportMonth).outOfPeriodDates.length))
+    if (context ? !contextReady : !canConfirm) return
+    const oversizedSheet = activePreviews.find(preview => new TextEncoder().encode(JSON.stringify(preview.rows)).length > 3_800_000)
     if (oversizedSheet) { setError(`Snapshot ${oversizedSheet.sheet} vượt giới hạn lịch sử phiên bản; chưa ghi dữ liệu công đoạn.`); return }
-    setBusy(true); setError(''); setMessage('')
+    setBusy(true); setError(''); setMessage('Đang đối chiếu file và cập nhật sản lượng…')
     try {
-      const { batch, existing } = await createImportBatch()
+      const { batch, existing } = await createImportBatch(context)
       setActiveBatchId(batch.id)
       const priorOutcomes = restoreBatchOutcomes(batch.sheetResults)
       setOutcomes(priorOutcomes)
       if (existing && batch.status === 'CONFIRMED') {
-        setMessage('Workbook này đã được nhập trước đó; dữ liệu không bị cộng trùng. Có thể mở phiên bản trong Lịch sử import.')
+        setMessage('File này đã được nhập; không có dữ liệu trùng được tạo thêm.')
         await reloadBatchHistory()
         return
       }
       if (existing && batch.decisions && stableJson(batch.decisions) !== stableJson({
-        materials: Object.fromEntries(Object.entries(resolutions).sort(([a], [b]) => a.localeCompare(b))),
-        knittingRemarks: Object.fromEntries(Object.entries(remarkDecisions).sort(([a], [b]) => a.localeCompare(b))),
+        materials: Object.fromEntries(Object.entries(activeResolutions).sort(([a], [b]) => a.localeCompare(b))),
+        knittingRemarks: Object.fromEntries(Object.entries(activeRemarkDecisions).sort(([a], [b]) => a.localeCompare(b))),
+        defaults: { unknownMaterial: 'skip', unknownKnittingRemark: 'NOTE' },
       })) {
         const saved = batch.decisions as { materials?: Record<string, Resolution>; knittingRemarks?: Record<string, 'MESH' | 'NOTE'> }
         setResolutions(saved.materials ?? {})
@@ -460,14 +489,15 @@ export default function ProductionImportWorkspace() {
       // history version remains complete even if the browser closes mid-import.
       for (const sheet of STATISTICAL_REPORT_SHEETS) {
         const priorStatus = batch.sheetResults[sheet]?.status
-        if (priorStatus && priorStatus !== 'PENDING') continue
-        const preview = previewBySheet.get(sheet)
+        if (priorStatus === 'CONFIRMED' || priorStatus === 'PROCESSING' || priorStatus === 'UNCERTAIN') continue
+        const preview = activePreviewBySheet.get(sheet)
         if (!preview) { setError(`Thiếu preview của sheet ${sheet}.`); return }
         await updateBatchSheet(batch.id, sheet, 'PREPARED', preview.rows)
       }
       const pending = STATISTICAL_REPORT_SHEETS.filter(sheet => priorOutcomes[sheet]?.state !== 'done')
+      const workbookOutcomes: ImportOutcome[] = []
       for (const sheet of pending) {
-        const preview = previewBySheet.get(sheet)
+        const preview = activePreviewBySheet.get(sheet)
         if (!preview) { setError(`Thiếu preview của sheet ${sheet}.`); return }
         let outcome: ImportOutcome
         let attemptToken: string | undefined
@@ -484,8 +514,11 @@ export default function ProductionImportWorkspace() {
           setError(outcome.message)
           return
         }
-        try { outcome = await confirmSheet(sheet, batch.id, attemptToken) }
-        catch { outcome = { state: 'uncertain', message: `Mất kết nối trong lúc import ${sheet}; chưa thể xác định dữ liệu đã được ghi hay chưa.` } }
+        if (preview.error) outcome = { state: 'failed', message: `Bỏ qua sheet ${sheet}: ${preview.error}` }
+        else {
+          try { outcome = await confirmSheet(sheet, batch.id, attemptToken, context) }
+          catch { outcome = { state: 'uncertain', message: `Mất kết nối trong lúc import ${sheet}; chưa thể xác định dữ liệu đã được ghi hay chưa.` } }
+        }
         try {
           const finalized = await updateBatchSheet(batch.id, sheet, outcome.state === 'done' ? 'CONFIRMED' : outcome.state === 'uncertain' ? 'UNCERTAIN' : 'FAILED', undefined, { message: outcome.message, count: outcome.count ?? null }, attemptToken)
           if (outcome.state === 'uncertain' && finalized.sheetStatus === 'CONFIRMED') outcome = { state: 'done', message: 'Dữ liệu đã được ghi; trạng thái được khôi phục từ receipt của transaction.' }
@@ -493,44 +526,27 @@ export default function ProductionImportWorkspace() {
           outcome = { state: 'uncertain', message: `Kết quả ${sheet} chưa được ghi vào lịch sử; cần đối soát trước khi chạy lại.`, needsPreviewRefresh: true }
           setError(historyError instanceof Error ? `${outcome.message} ${historyError.message}` : outcome.message)
         }
+        workbookOutcomes.push(outcome)
         setOutcomes(currentOutcomes => ({ ...currentOutcomes, [sheet]: outcome }))
-        if (outcome.state !== 'done') {
+        if (outcome.state === 'uncertain') {
           if (outcome.needsPreviewRefresh) setPreviewNeedsRefresh(true)
-          setError(currentError => currentError || (outcome.state === 'uncertain'
-            ? `Đã dừng tại sheet ${sheet}; trạng thái ghi chưa xác định nên hệ thống chặn chạy lặp.`
-            : `Đã dừng tại sheet ${sheet}. Các sheet đã hoàn tất được giữ nguyên; xem lỗi ở dòng sheet, sửa dữ liệu rồi thử lại phần còn lại.`))
+          setError(currentError => currentError || `Đã dừng tại sheet ${sheet}; trạng thái ghi chưa xác định nên hệ thống chặn chạy lặp.`)
           await reloadBatchHistory()
           return
         }
+        if (outcome.state === 'failed') setMessage(current => current ? `${current} · ${outcome.message}` : outcome.message)
       }
+      const totals = workbookOutcomes.reduce((sum, outcome) => ({
+        added: sum.added + (outcome.added ?? 0), updated: sum.updated + (outcome.updated ?? 0),
+        unchanged: sum.unchanged + (outcome.unchanged ?? 0), skipped: sum.skipped + (outcome.skipped ?? 0),
+      }), { added: 0, updated: 0, unchanged: 0, skipped: 0 })
+      const priorCount = STATISTICAL_REPORT_SHEETS.filter(sheet => priorOutcomes[sheet]?.state === 'done').length
+      const completedCount = priorCount + workbookOutcomes.filter(outcome => outcome.state === 'done').length
+      setMessage(`${completedCount}/5 sheet xử lý · thêm ${totals.added} · cập nhật ${totals.updated} · không đổi ${totals.unchanged} · bỏ qua ${totals.skipped}${completedCount < 5 ? ' · một số sheet cần xử lý lại' : ''}`)
       await reloadBatchHistory()
     } catch (problem) {
       setError(problem instanceof Error ? problem.message : 'Không thể tạo hoặc cập nhật lịch sử phiên import; chưa thể xác nhận workbook. Hãy thử lại.')
     } finally { setBusy(false) }
-  }
-
-  function updateResolution(key: string, value: string) {
-    let resolution: Resolution
-    if (value.startsWith('map:')) resolution = { action: 'map', materialId: value.slice(4) }
-    else resolution = { action: value === 'create' ? 'create' : 'skip' }
-    setResolutions(currentResolutions => ({ ...currentResolutions, [key]: resolution }))
-    setPreviewNeedsRefresh(true)
-    setOutcomes(currentOutcomes => {
-      const next = { ...currentOutcomes }
-      delete next.HDPE
-      return next
-    })
-  }
-
-  function updateRemarkDecision(value: string, target: 'MESH' | 'NOTE') {
-    const key = remarkKey(value)
-    setRemarkDecisions(currentDecisions => ({ ...currentDecisions, [key]: target }))
-    setOutcomes(currentOutcomes => {
-      const next = { ...currentOutcomes }
-      delete next.KNITTING
-      return next
-    })
-    setMessage('')
   }
 
   if (category === 'order') {
@@ -543,7 +559,7 @@ export default function ProductionImportWorkspace() {
 
   const control = inputClass
   return <section className="space-y-5 px-4 py-6 md:px-8">
-    <header><h2 className="text-xl font-semibold text-primary">Import báo cáo nhà xưởng</h2><p className="mt-1 text-sm text-secondary">Đọc 5 sheet đã thống nhất; dữ liệu chưa được lưu cho tới khi xác nhận import.</p></header>
+    <header><h2 className="text-xl font-semibold text-primary">Import báo cáo nhà xưởng</h2><p className="mt-1 text-sm text-secondary">Thả file để tự đối chiếu và nhập dòng mới/đã sửa. Dòng lỗi được bỏ qua riêng; dòng cũ không tự xóa.</p></header>
     <div className="grid gap-3 md:grid-cols-2">
       <label className="text-sm">Loại file
         <select disabled={busy} className={`${control} mt-1`} value={category} onChange={event => setCategory(event.target.value as 'order' | 'statistical')}>
@@ -553,10 +569,10 @@ export default function ProductionImportWorkspace() {
       <div className="text-sm"><span className="font-medium">Sheet sẽ đọc</span><div className="mt-2 flex flex-wrap gap-2">{STATISTICAL_REPORT_SHEETS.map(sheet => <span key={sheet} className="rounded border border-outline-variant bg-surface-container px-2 py-1">{sheet}</span>)}</div></div>
     </div>
     {error && <p role="alert" className="rounded border border-error/40 bg-error-container/30 p-3 text-sm text-error">{error}</p>}
-    {message && <p role="status" className="rounded border border-primary/30 bg-primary/5 p-3 text-sm text-primary">{message}</p>}
+    {message && !Object.keys(outcomes).length && <p role="status" className="rounded border border-primary/30 bg-primary/5 p-3 text-sm text-primary">{message}</p>}
     <div className="grid gap-3 sm:grid-cols-2">
-      <label className="text-sm">Tháng báo cáo<select disabled={busy} className={`${control} mt-1`} value={month} onChange={event => { setMonth(event.target.value); setPreviews([]); setOutcomes({}); setAcknowledgeRollingLoss(false) }}><option value="">Chọn tháng</option>{Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={String(index + 1)}>{index + 1}</option>)}</select></label>
-      <label className="text-sm">Năm báo cáo<input disabled={busy} className={`${control} mt-1`} type="number" min="2000" max="2100" value={year} onChange={event => { setYear(event.target.value); setPreviews([]); setOutcomes({}); setAcknowledgeRollingLoss(false) }} placeholder="2026" /></label>
+      <label className="text-sm">Tháng báo cáo<select disabled={busy} className={`${control} mt-1`} value={month} onChange={event => { setMonth(event.target.value); setPreviews([]); setOutcomes({}) }}><option value="">Chọn tháng</option>{Array.from({ length: 12 }, (_, index) => <option key={index + 1} value={String(index + 1)}>{index + 1}</option>)}</select></label>
+      <label className="text-sm">Năm báo cáo<input disabled={busy} className={`${control} mt-1`} type="number" min="2000" max="2100" value={year} onChange={event => { setYear(event.target.value); setPreviews([]); setOutcomes({}) }} placeholder="2026" /></label>
     </div>
     <div
       className={`rounded border-2 border-dashed p-6 text-center transition-colors ${dragging ? 'border-primary bg-primary/5' : 'border-outline-variant'}`}
@@ -568,15 +584,18 @@ export default function ProductionImportWorkspace() {
       <label htmlFor="production-report-file" className="cursor-pointer">
         <span aria-hidden="true" className="material-symbols-outlined text-3xl text-primary">upload_file</span>
         <span className="mt-2 block text-sm font-medium">{file ? file.name : 'Kéo thả file .xlsx vào đây hoặc bấm để chọn'}</span>
-        <span className="mt-1 block text-xs text-secondary">Tối đa 10 MB · Kỳ ngày trong sheet được giữ nguyên</span>
+        <span className="mt-1 block text-xs text-secondary">Tối đa 10 MB · Tên file có tháng/năm sẽ tự nhập ngay sau khi phân tích</span>
       </label>
     </div>
     <div className="flex flex-wrap gap-2">
-      <button type="button" className="rounded bg-primary px-4 py-2 text-sm text-white disabled:opacity-50" disabled={busy || !file || !month || !year} onClick={() => { void previewWorkbook() }}>{busy ? 'Đang phân tích…' : previews.length ? 'Phân tích lại workbook' : 'Phân tích và xem trước'}</button>
-      {previews.length > 0 && <button type="button" className={buttonClass} disabled={!canConfirm} onClick={() => { void confirmWorkbook() }}>{busy ? 'Đang nhập…' : allDone ? 'Đã import đủ 5 sheet' : hasPartialOutcome ? 'Thử lại các sheet còn lại' : 'Xác nhận import 5 sheet'}</button>}
+      <button type="button" className="rounded bg-primary px-4 py-2 text-sm text-white disabled:opacity-50" disabled={busy || !file || !month || !year} onClick={() => { void previewWorkbook(undefined, undefined, true) }}>{busy ? 'Đang phân tích và nhập…' : previews.length ? 'Phân tích và nhập lại file' : 'Nhập file'}</button>
+      {previews.length > 0 && hasPartialOutcome && <button type="button" className={buttonClass} disabled={!canConfirm} onClick={() => { void confirmWorkbook() }}>{busy ? 'Đang nhập…' : 'Thử lại sheet chưa hoàn tất'}</button>}
     </div>
 
     {previews.length > 0 && <>
+      {Object.keys(outcomes).length > 0 && <section aria-label="Kết quả nhập theo sheet" className="rounded border border-outline-variant bg-surface-container-low p-4"><h3 className="font-semibold text-primary">Kết quả nhập</h3><p className="mt-1 text-sm">{message}</p><ul className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{STATISTICAL_REPORT_SHEETS.filter(sheet => outcomes[sheet]).map(sheet => <li key={sheet} className="rounded border border-outline-variant bg-surface-container-lowest p-3 text-sm"><span className="font-medium">{LABELS[sheet]}</span><span className="mt-1 block text-secondary">{outcomes[sheet]?.message}</span></li>)}</ul></section>}
+      <details open={hasUncertainOutcome} className="rounded border border-outline-variant bg-surface-container-low p-3">
+      <summary className="cursor-pointer font-medium text-primary">Xem chi tiết các sheet, dòng bị bỏ qua và dữ liệu nguồn</summary>
       <nav role="tablist" aria-label="Sheet xem trước" className="flex gap-2 overflow-x-auto border-b border-outline-variant">
         {STATISTICAL_REPORT_SHEETS.map(sheet => {
           const item = previewBySheet.get(sheet)
@@ -592,20 +611,18 @@ export default function ProductionImportWorkspace() {
       </section>
 
       <section aria-labelledby="review-import-title" className="space-y-3 rounded border border-outline-variant bg-surface-container-low p-4">
-        <div><h3 id="review-import-title" className="font-semibold text-primary">Review trước khi nhập</h3><p className="text-xs text-secondary">Kỳ chọn {reportMonth}. Dữ liệu ngoài kỳ không tự đổi ngày và sẽ chặn xác nhận.</p></div>
+        <div><h3 id="review-import-title" className="font-semibold text-primary">Đối chiếu file đã nhập</h3><p className="text-xs text-secondary">Kỳ {reportMonth}. Dòng hợp lệ trong kỳ được nhập tự động; ngoài kỳ không tự đổi ngày.</p></div>
         <div className="overflow-x-auto rounded border border-outline-variant"><table className="w-full text-sm"><thead className="bg-surface-container"><tr>{['Sheet', 'Đưa vào', 'Dòng', 'Tổng xem trước', 'Lỗi', 'PI nguồn', 'Chưa gắn item', 'PI sẽ đối chiếu', 'Ngoài kỳ', 'Kết quả'].map(label => <th key={label} className="whitespace-nowrap p-2 text-left">{label}</th>)}</tr></thead><tbody>{STATISTICAL_REPORT_SHEETS.map(sheet => {
           const item = previewBySheet.get(sheet)
           const review = summarizeImportRows(item?.rows ?? [], reportMonth)
           const outcome = outcomes[sheet]
-          return <tr key={sheet} className="border-t border-outline-variant"><td className="p-2">{sheet}</td><td className="p-2">{DESTINATION_LABELS[sheet]}</td><td className="p-2">{review.totalRows}</td><td className="max-w-[320px] p-2">{sheetTotals(sheet, item?.rows ?? [])}</td><td className="p-2">{review.invalidRows}</td><td className="p-2">{review.sourceRowsWithPI}</td><td className="p-2">{review.rowsNotLinkedToItem}</td><td className="p-2">{review.rowsPendingItemResolution}</td><td className="p-2">{review.outOfPeriodDates.length ? review.outOfPeriodDates.map(displayDate).join(', ') : 0}</td><td className="p-2">{outcome?.message ?? item?.error ?? (item ? previewOutcome(sheet, item.payload) : 'Chưa phân tích')}{outcome?.state === 'uncertain' && activeBatchId && <div className="mt-2 flex flex-wrap gap-1"><button type="button" className={buttonClass} disabled={busy} onClick={() => { void reconcileUncertainSheet(sheet, true) }}>Đã đối chiếu: đã ghi</button><button type="button" className={buttonClass} disabled={busy} onClick={() => { void reconcileUncertainSheet(sheet, false) }}>Đã đối chiếu: chưa ghi</button></div>}</td></tr>
+          const skippedErrors = sheet === 'ROLLING' ? rollingInvalidMetricCount + skippedRollingDateBlocks.filter(block => block.blocked || block.hasData).length : review.invalidRows
+          return <tr key={sheet} className="border-t border-outline-variant"><td className="p-2">{sheet}</td><td className="p-2">{DESTINATION_LABELS[sheet]}</td><td className="p-2">{review.totalRows}</td><td className="max-w-[320px] p-2">{sheetTotals(sheet, item?.rows ?? [])}</td><td className="p-2">{skippedErrors}</td><td className="p-2">{review.sourceRowsWithPI}</td><td className="p-2">{review.rowsNotLinkedToItem}</td><td className="p-2">{review.rowsPendingItemResolution}</td><td className="p-2">{review.outOfPeriodDates.length ? review.outOfPeriodDates.map(displayDate).join(', ') : 0}</td><td className="p-2">{outcome?.message ?? item?.error ?? (item ? previewOutcome(sheet, item.payload) : 'Chưa phân tích')}{outcome?.state === 'uncertain' && activeBatchId && <div className="mt-2 flex flex-wrap gap-1"><button type="button" className={buttonClass} disabled={busy} onClick={() => { void reconcileUncertainSheet(sheet, true) }}>Đã đối chiếu: đã ghi</button><button type="button" className={buttonClass} disabled={busy} onClick={() => { void reconcileUncertainSheet(sheet, false) }}>Đã đối chiếu: chưa ghi</button></div>}</td></tr>
         })}</tbody></table></div>
         {hasPeriodConflict && <p role="alert" className="text-sm text-error">Có ngày nằm ngoài tháng đã chọn. Hãy kiểm tra kỳ báo cáo hoặc file rồi phân tích lại.</p>}
-        {skippedRollingDateBlocks.length > 0 && <details className="rounded border border-outline-variant bg-surface-container-lowest p-3 text-sm"><summary className="cursor-pointer font-medium">Khối ngày ROLLING không đưa vào dữ liệu · {skippedRollingDateBlocks.length}</summary><ul className="mt-2 list-disc space-y-1 pl-5">{skippedRollingDateBlocks.map((block, index) => <li key={`${block.dateLabelRaw}:${index}`} className={block.blocked || block.hasData ? 'text-error' : 'text-secondary'}>{block.dateLabelRaw}: {block.note ?? 'Ngày không hợp lệ'}{block.hasData ? ' · Có số liệu, cần sửa ngày trước khi nhập.' : ' · Khối rỗng, không nhập.'}</li>)}</ul></details>}
-        <p className="text-xs text-secondary">HDPE đối chiếu theo vật tư/kỳ; EXTRUDER, WARPING và KNITTING thay dữ liệu theo máy/ngày; ROLLING thay dữ liệu của các ngày trong file và kiểm tra mã PI bị thiếu trước khi cho xác nhận.</p>
-      {unknownMaterials.length > 0 && <div className="space-y-2"><p className="text-sm font-medium">Vật tư chưa khớp trong hệ thống</p>{unknownMaterials.map(material => {
-          const selected = resolutions[material.materialKey]
-          return <label key={material.materialKey} className="grid gap-2 text-sm sm:grid-cols-[1fr_2fr] sm:items-center"><span>{material.name} · {material.group}</span><select disabled={busy} className={inputClass} value={selected?.action === 'map' ? `map:${selected.materialId}` : selected?.action ?? ''} onChange={event => updateResolution(material.materialKey, event.target.value)}><option value="">Chọn xử lý</option><option value="skip">Bỏ qua dòng chưa khớp</option><option value="create">Tạo vật tư mới</option>{materialCandidates.filter(candidate => candidate.group === material.group).map(candidate => <option key={candidate.id} value={`map:${candidate.id}`}>Ánh xạ: {candidate.name}</option>)}</select></label>
-        })}<p className="text-xs text-secondary">Thay đổi ánh xạ cần bấm “Phân tích lại” để làm mới review HDPE.</p></div>}
+        {skippedRollingDateBlocks.length > 0 && <details className="rounded border border-outline-variant bg-surface-container-lowest p-3 text-sm"><summary className="cursor-pointer font-medium">Khối ngày ROLLING được bỏ qua · {skippedRollingDateBlocks.length}</summary><ul className="mt-2 list-disc space-y-1 pl-5">{skippedRollingDateBlocks.map((block, index) => <li key={`${block.dateLabelRaw}:${index}`} className={block.blocked || block.hasData ? 'text-error' : 'text-secondary'}>{block.dateLabelRaw}: {block.note ?? 'Ngày không hợp lệ'}{block.hasData ? ' · Bỏ qua khối lỗi; dữ liệu đã có được giữ nguyên.' : ' · Khối rỗng, không nhập.'}</li>)}</ul></details>}
+        <p className="text-xs text-secondary">Dòng hợp lệ được tự thêm hoặc cập nhật; dòng không đổi được bỏ qua. Dòng lỗi, mã mơ hồ và dòng cũ vắng khỏi file được giữ lại, không tự xóa.</p>
+      {unknownMaterials.length > 0 && <details className="rounded border border-outline-variant bg-surface-container-lowest p-3 text-sm"><summary className="cursor-pointer font-medium">Vật tư chưa có trong danh mục — sẽ bỏ qua {unknownMaterials.length}</summary><ul className="mt-2 list-disc space-y-1 pl-5">{unknownMaterials.map(material => <li key={material.materialKey}>{material.name} · {material.group}{material.candidates.length ? ` · có thể gần với: ${material.candidates.map(candidate => candidate.name).join(', ')}` : ''}</li>)}</ul></details>}
         {hdpePreview && <div className="space-y-2 rounded border border-outline-variant bg-surface-container-lowest p-3 text-sm">
           <p className="font-medium">Tác động tồn kho HDPE: {hdpeStockUpdates.length} vật tư sẽ cập nhật · {hdpeStockKept.length} vật tư giữ nguyên.</p>
           {hdpeStockUpdates.slice(0, 5).map(item => <p key={item.materialId}>{item.name}: {item.from?.stock ?? 'mới'} → {item.to.stock.toLocaleString('vi-VN')} kg · {displayDate(item.to.date)}</p>)}
@@ -613,18 +630,19 @@ export default function ProductionImportWorkspace() {
           {hdpeStockKept.slice(0, 5).map(item => <p key={item.materialId} className="text-secondary">{item.name}: giữ tồn ({item.reason})</p>)}
         </div>}
         {hdpeSkippedRows.length > 0 && <details className="rounded border border-outline-variant bg-surface-container-lowest p-3 text-sm"><summary className="cursor-pointer font-medium">HDPE — dòng không ghi hoặc cần xử lý ({hdpeSkippedRows.length})</summary><div className="mt-2 max-h-64 overflow-auto"><table className="w-full min-w-[650px] text-sm"><thead className="sticky top-0 bg-surface-container"><tr>{['Ngày', 'Dòng Excel', 'Vật tư', 'Trạng thái', 'Lý do'].map(label => <th key={label} className="p-2 text-left">{label}</th>)}</tr></thead><tbody>{hdpeSkippedRows.map((row, index) => <tr key={`${row.reportDate}:${row.sourceRow}:${index}`} className="border-t border-outline-variant"><td className="p-2 whitespace-nowrap">{displayDate(row.reportDate)}</td><td className="p-2">{row.sourceRow}</td><td className="p-2">{row.materialName} · {row.group}</td><td className="p-2">{row.status}</td><td className="p-2">{row.reasons.join('; ')}{row.differences?.map(diff => <span key={diff.field} className="block">{diff.field}: đã lưu {displayValue(diff.field, diff.stored)}, file {displayValue(diff.field, diff.incoming)}</span>)}</td></tr>)}</tbody></table></div></details>}
-        {unknownRemarks.length > 0 && <div className="space-y-2"><p className="text-sm font-medium">REMARK mới trong KNITTING — chọn cách hiểu trước khi nhập</p>{unknownRemarks.map(value => <label key={remarkKey(value.value)} className="grid gap-2 text-sm sm:grid-cols-[1fr_1fr] sm:items-center"><span>{value.value} · {value.count} dòng</span><select disabled={busy} className={inputClass} value={remarkDecisions[remarkKey(value.value)] ?? ''} onChange={event => updateRemarkDecision(value.value, event.target.value as 'MESH' | 'NOTE')}><option value="">Chọn cách xử lý</option><option value="MESH">Loại lưới</option><option value="NOTE">Ghi chú</option></select></label>)}</div>}
-        {replacementDays.length > 0 && <details className="rounded border border-outline-variant bg-surface-container-lowest p-3 text-sm"><summary className="cursor-pointer font-medium">Phạm vi thay thế ROLLING · {replacementDays.length} ngày</summary><div className="mt-2 overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr><th className="p-2 text-left">Ngày</th><th className="p-2 text-right">Đang có</th><th className="p-2 text-right">Trong file</th><th className="p-2 text-left">PI sẽ mất nếu xác nhận</th></tr></thead><tbody>{replacementDays.map(day => <tr key={day.date} className="border-t border-outline-variant"><td className="p-2">{displayDate(day.date)}</td><td className="p-2 text-right">{day.currentCount}</td><td className="p-2 text-right">{day.incomingCount}</td><td className="p-2">{day.missingPIs.join(', ') || '—'}</td></tr>)}</tbody></table></div></details>}
-        {losses.length > 0 && <label className="flex items-start gap-2 text-sm"><input type="checkbox" disabled={busy} className="mt-1" checked={acknowledgeRollingLoss} onChange={event => setAcknowledgeRollingLoss(event.target.checked)} /><span>Đồng ý thay thế {losses.length.toLocaleString('vi-VN')} mã PI đang có trong các ngày Rolling được import nhưng không xuất hiện trong file này.</span></label>}
-        {invalidRowCount > 0 && <p role="alert" className="text-sm text-error">Có {invalidRowCount.toLocaleString('vi-VN')} dòng không hợp lệ; workbook chưa thể nhập vì các sheet thay thế theo phạm vi ngày/máy. Hãy sửa file nguồn rồi phân tích lại.</p>}
-        {unknownMaterials.length > 0 && !unknownMaterialsResolved && <p role="alert" className="text-sm text-error">Chọn tạo mới, ánh xạ hoặc bỏ qua cho từng vật tư chưa khớp trước khi xác nhận.</p>}
+        {unknownRemarks.length > 0 && <details className="rounded border border-outline-variant bg-surface-container-lowest p-3 text-sm"><summary className="cursor-pointer font-medium">REMARK KNITTING chưa nhận diện — giữ dạng ghi chú ({unknownRemarks.length})</summary><ul className="mt-2 list-disc space-y-1 pl-5">{unknownRemarks.map(value => <li key={remarkKey(value.value)}>{value.value} · {value.count} dòng</li>)}</ul></details>}
+        {replacementDays.length > 0 && <details className="rounded border border-outline-variant bg-surface-container-lowest p-3 text-sm"><summary className="cursor-pointer font-medium">Đối chiếu ROLLING · {replacementDays.length} ngày</summary><div className="mt-2 overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr><th className="p-2 text-left">Ngày</th><th className="p-2 text-right">Đang có</th><th className="p-2 text-right">Trong file</th><th className="p-2 text-left">PI vắng trong file (sẽ giữ)</th></tr></thead><tbody>{replacementDays.map(day => <tr key={day.date} className="border-t border-outline-variant"><td className="p-2">{displayDate(day.date)}</td><td className="p-2 text-right">{day.currentCount}</td><td className="p-2 text-right">{day.incomingCount}</td><td className="p-2">{day.missingPIs.join(', ') || '—'}</td></tr>)}</tbody></table></div></details>}
+        {missingRollingPiCount > 0 && <p role="status" className="text-sm text-secondary">Có {missingRollingPiCount.toLocaleString('vi-VN')} mã PI không thấy trong file mới; dữ liệu cũ sẽ được giữ nguyên.</p>}
+        {invalidRowCount > 0 && <p role="status" className="text-sm text-secondary">Có {invalidRowCount.toLocaleString('vi-VN')} dòng lỗi; các dòng này sẽ được bỏ qua, dữ liệu hiện có vẫn giữ nguyên.</p>}
+        {unknownMaterials.length > 0 && <p role="status" className="text-sm text-secondary">Vật tư chưa khớp sẽ được bỏ qua mặc định; chọn ánh xạ hoặc tạo mới chỉ khi cần.</p>}
         {previewNeedsRefresh && <p role="status" className="text-sm">Lựa chọn hoặc dữ liệu đã thay đổi; hãy phân tích lại workbook trước khi xác nhận.</p>}
         {Object.keys(outcomes).length > 0 && <p role="status" className="text-sm">Import được xử lý theo từng sheet. Sheet bị gián đoạn sẽ chờ đối soát snapshot trước khi cho phép chạy lại.</p>}
         {hasUncertainOutcome && <p role="alert" className="rounded border border-error/40 bg-error-container/30 p-3 text-sm text-error">Có sheet bị gián đoạn. Sau 15 phút, đối chiếu dữ liệu hiện hành với snapshot rồi chọn một trong hai kết quả để tránh ghi lặp hoặc ghi đè phiên mới hơn.</p>}
       </section>
+      </details>
     </>}
 
-    <section aria-labelledby="import-history-title" className="space-y-3 rounded border border-outline-variant bg-surface-container-low p-4">
+    <details className="rounded border border-outline-variant bg-surface-container-low p-4"><summary className="cursor-pointer font-semibold text-primary">Lịch sử phiên bản báo cáo</summary><section aria-labelledby="import-history-title" className="mt-3 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 id="import-history-title" className="font-semibold text-primary">Lịch sử phiên bản báo cáo</h3><p className="text-xs text-secondary">Mỗi workbook được giữ như một phiên bản; dữ liệu hiện hành vẫn theo chính sách thay thế của từng sheet.</p></div><button type="button" className={buttonClass} disabled={historyLoading || busy} onClick={() => { void reloadBatchHistory() }}>{historyLoading ? 'Đang tải…' : 'Tải lại'}</button></div>
       {historyError && <p role="alert" className="text-sm text-error">{historyError}</p>}
       {!historyView && historySheetError && <p role="alert" className="text-sm text-error">{historySheetError}</p>}
@@ -635,6 +653,6 @@ export default function ProductionImportWorkspace() {
         <nav role="tablist" aria-label="Sheet trong phiên bản lịch sử" className="flex gap-2 overflow-x-auto border-b border-outline-variant">{STATISTICAL_REPORT_SHEETS.map(sheet => <button key={sheet} type="button" role="tab" aria-selected={historySheet === sheet} disabled={historySheetLoading} className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${historySheet === sheet ? 'border-primary font-semibold text-primary' : 'border-transparent text-secondary'}`} onClick={() => { setHistorySheet(sheet); void openHistoricalSheet(historyView.id, sheet) }}>{LABELS[sheet]} · {historyView.sheetResults[sheet]?.status ?? 'PENDING'}</button>)}</nav>
         {historySheetError && <p role="alert" className="text-sm text-error">{historySheetError}</p>}
         {historySheetLoading ? <p role="status" className="text-sm">Đang tải snapshot…</p> : historicalRows.length === 0 ? <p role="status" className="text-sm text-secondary">Không có dòng được lưu cho sheet này.</p> : <><div className="max-h-80 overflow-auto rounded border border-outline-variant"><table className="w-full min-w-max text-sm"><thead className="sticky top-0 bg-surface-container"><tr>{historyColumns.map(column => <th key={column} className="whitespace-nowrap p-2 text-left">{FIELD_LABELS[column] ?? column}</th>)}</tr></thead><tbody>{visibleHistoryRows.map((row, index) => <tr key={`${historySheet}:${historyPage}:${index}`} className="border-t border-outline-variant">{historyColumns.map(column => <td key={column} className="max-w-[280px] whitespace-nowrap p-2">{displayValue(column, row[column])}</td>)}</tr>)}</tbody></table></div><div className="flex items-center gap-2 text-xs"><span>Trang {historyPage}/{historyPageCount}</span><button type="button" className={buttonClass} disabled={historyPage <= 1} onClick={() => setHistoryPage(value => Math.max(1, value - 1))}>Trước</button><button type="button" className={buttonClass} disabled={historyPage >= historyPageCount} onClick={() => setHistoryPage(value => Math.min(historyPageCount, value + 1))}>Sau</button></div></>}</div>}
-    </section>
+    </section></details>
   </section>
 }

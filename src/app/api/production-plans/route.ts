@@ -8,9 +8,18 @@ export async function GET(request: NextRequest) {
   if (denied) return denied
   const stage = request.nextUrl.searchParams.get('stage')
   const date = request.nextUrl.searchParams.get('date')
-  if (!stage || !productionStages.includes(stage as typeof productionStages[number]) || !date || !utcDay(date)) return NextResponse.json({ success: false, error: 'Công đoạn hoặc ngày không hợp lệ.' }, { status: 422 })
+  const from = request.nextUrl.searchParams.get('from')
+  const to = request.nextUrl.searchParams.get('to')
+  if (!stage || !productionStages.includes(stage as typeof productionStages[number])) return NextResponse.json({ success: false, error: 'Công đoạn không hợp lệ.' }, { status: 422 })
+  const day = date ? utcDay(date) : null
+  const fromDay = from ? utcDay(from) : null
+  const toDay = to ? utcDay(to) : null
+  if (date && (!day || from || to) || !date && (!fromDay || !toDay || fromDay > toDay || toDay.getTime() - fromDay.getTime() > 30 * 86_400_000)) {
+    return NextResponse.json({ success: false, error: 'Chọn một ngày hoặc khoảng tháng hợp lệ (tối đa 31 ngày).' }, { status: 422 })
+  }
+  const planDate = day ? { equals: day } : { gte: fromDay!, lt: new Date(toDay!.getTime() + 86_400_000) }
   try {
-    const plans = await prisma.productionOutputPlan.findMany({ where: { stage, planDate: utcDay(date)! }, orderBy: [{ machineId: 'asc' }, { createdAt: 'asc' }], take: 500 })
+    const plans = await prisma.productionOutputPlan.findMany({ where: { stage, planDate }, orderBy: [{ planDate: 'asc' }, { machineId: 'asc' }, { createdAt: 'asc' }], take: 10_000 })
     return NextResponse.json({ success: true, plans: plans.map(p => ({ ...p, planDate: p.planDate.toISOString(), plannedValue: p.plannedValue.toString() })) })
   } catch {
     return NextResponse.json({ success: false, error: 'Không tải được kế hoạch sản xuất.' }, { status: 500 })

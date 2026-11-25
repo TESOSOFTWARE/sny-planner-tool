@@ -28,6 +28,15 @@ test('review summarizes dates, invalid rows, and PI rows without inventing item 
   assert.equal(result.rowsLinkedToItem, 1)
   assert.equal(result.rowsNotLinkedToItem, 1)
   assert.equal(result.rowsPendingItemResolution, 1)
-  assert.deepEqual(result.dates, ['2026-10-31', '2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-12-01'])
-  assert.deepEqual(result.outOfPeriodDates, ['2026-10-31', '2026-12-01'])
+  assert.deepEqual(result.dates, ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-12-01'])
+  assert.deepEqual(result.outOfPeriodDates, ['2026-12-01'])
+})
+
+test('invalid rows outside selected period do not block valid rows in the same report', () => {
+  const result = summarizeImportRows([
+    { reportDate: '2026-10-31', isValid: false, validationErrors: ['bad weight'] },
+    { reportDate: '2026-11-01', isValid: true },
+  ], '2026-11')
+  assert.deepEqual(result.outOfPeriodDates, [])
+  assert.equal(result.invalidRows, 1)
 })

@@ -5,7 +5,7 @@ export function publicImportSheetResults(value: unknown): Record<string, { statu
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
     const item = raw as Record<string, unknown>
     const publicResult: Record<string, unknown> = {}
-    const allowedKeys = ['count', 'recordsInserted', 'recordsDeleted', 'datesScoped', 'created', 'materialsCreated', 'totalRows', ...(sheet === 'HDPE' ? [] : ['message'])]
+    const allowedKeys = ['count', 'recordsInserted', 'recordsDeleted', 'recordsAdded', 'recordsUpdated', 'recordsUnchanged', 'invalidSkipped', 'ambiguousSkipped', 'missingInSource', 'datesScoped', 'created', 'updated', 'materialsCreated', 'totalRows', ...(sheet === 'HDPE' ? [] : ['message'])]
     for (const key of allowedKeys) {
       const entry = item.result && typeof item.result === 'object' && !Array.isArray(item.result) ? (item.result as Record<string, unknown>)[key] : undefined
       if (typeof entry === 'string' || (typeof entry === 'number' && Number.isFinite(entry))) publicResult[key] = entry

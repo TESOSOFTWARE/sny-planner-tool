@@ -17,6 +17,38 @@ export class ProductionImportAttemptReplayError extends Error {
   }
 }
 
+export class ProductionImportSnapshotMismatchError extends Error {
+  constructor() {
+    super('Các dòng gửi lên khác snapshot đã review; hãy phân tích lại file trước khi xác nhận.')
+    this.name = 'ProductionImportSnapshotMismatchError'
+  }
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right))
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+/** Ensure client-submitted rows are exactly the parsed rows saved during review. */
+export async function assertProductionImportRowsMatchSnapshot(
+  tx: TransactionClient,
+  attempt: { batchId: string; sheet: StatisticalReportSheet; token: string } | undefined,
+  rows: unknown,
+) {
+  if (!attempt) return
+  const sheet = await tx.productionReportImportSheet.findUnique({
+    where: { batchId_sheetName: { batchId: attempt.batchId, sheetName: attempt.sheet } },
+    select: { sourceRows: true, status: true, attemptToken: true },
+  })
+  if (!sheet || sheet.status !== 'PROCESSING' || sheet.attemptToken !== attempt.token || stableJson(sheet.sourceRows) !== stableJson(rows)) {
+    throw new ProductionImportSnapshotMismatchError()
+  }
+}
+
 /** Fence a workbook writer against stale tabs in the same transaction as its data changes. */
 export async function assertProductionImportAttempt(
   tx: TransactionClient,

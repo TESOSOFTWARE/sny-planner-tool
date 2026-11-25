@@ -11,7 +11,7 @@ test('TC-01-01 seven outcomes follow priority and normalization',()=>{
  const materials=[material,...['AMB','AMB','FUTURE','SAME','DIFF'].map((name,i)=>({...material,id:String(i),name,stockReportDate:name==='FUTURE'?new Date('2026-04-01Z'):material.stockReportDate}))]
  const snapshots=[{materialId:'3',reportDate:new Date('2026-04-04Z'),payload:historyPayload({...row,materialName:'SAME'})},{materialId:'4',reportDate:new Date('2026-04-04Z'),payload:historyPayload({...row,materialName:'DIFF',lastStock:99})}]
  const plan=planHistoryImport(rows,materials,snapshots,file)
- assert.deepEqual(Object.values(plan.preview.counts),[1,1,1,1,1,2]);assert.equal(plan.writes.length,2)
+ assert.deepEqual(Object.values(plan.preview.counts),[1,1,1,1,1,0,2]);assert.equal(plan.writes.length,3)
 })
 test('TC-01-02 combined period and missing source cells remain intact',()=>{
  const merged={...row,sourceDateLabel:'04+05/04/2026',reportPeriodEnd:'2026-04-05',missingFields:['inQty']}
@@ -44,7 +44,7 @@ test('TC-01-12 changed period or tracked missing source cells preserve existing 
  assert.equal(untracked.preview.counts.identical,1)
  const trackedSnapshots=[{materialId:material.id,reportDate:new Date('2026-04-04Z'),payload:historyPayload({...row,missingFields:['outTape']})}]
  const tracked=planHistoryImport([{...row,missingFields:['inQty']}],[material],trackedSnapshots,file)
- assert.equal(tracked.preview.counts.conflict_existing,1);assert.equal(tracked.writes.length,0)
+ assert.equal(tracked.preview.counts.updated,1);assert.equal(tracked.writes.length,1);assert.equal(tracked.writes[0].version,2)
 })
 
 test('1910-02: snapshot without missingFields is identical to a historical row with source blanks',()=>{
@@ -52,23 +52,23 @@ test('1910-02: snapshot without missingFields is identical to a historical row w
  const plan=planHistoryImport([{...row,missingFields:['outTape','outReject']}],[material],snapshots,file)
  assert.equal(plan.preview.counts.identical,1);assert.equal(plan.preview.counts.conflict_existing,0)
 })
-test('1910-02: tracked missingFields remain a named conflict when they differ',()=>{
+test('1910-02: tracked missingFields are included in corrected snapshot diff',()=>{
  const stored={...historyPayload({...row,missingFields:['outTape']}),missingFields:['outTape']}
  const snapshots=[{materialId:material.id,reportDate:new Date('2026-04-04Z'),payload:stored}]
  const plan=planHistoryImport([{...row,missingFields:['outReject']}],[material],snapshots,file)
- assert.equal(plan.preview.counts.conflict_existing,1)
+ assert.equal(plan.preview.counts.updated,1)
  assert.deepEqual(plan.preview.skippedRows[0].differences,[{field:'missingFields',stored:['outTape'],incoming:['outReject']}])
 })
-test('1910-02: a changed stock value remains a named conflict',()=>{
+test('1910-02: a changed stock value is planned as a versioned update',()=>{
  const stored={...historyPayload({...row,missingFields:['outTape']}),missingFields:['outTape']}
  const snapshots=[{materialId:material.id,reportDate:new Date('2026-04-04Z'),payload:stored}]
  const plan=planHistoryImport([{...row,lastStock:109,missingFields:['outTape']}],[material],snapshots,file)
- assert.equal(plan.preview.counts.conflict_existing,1)
+ assert.equal(plan.preview.counts.updated,1);assert.equal(plan.writes[0].version,2)
  assert.deepEqual(plan.preview.skippedRows[0].differences,[{field:'lastStock',stored:110,incoming:109}])
 })
-test('1910-02 R-1: an untracked missingFields list is omitted from a numeric conflict',()=>{
+test('1910-02 R-1: an untracked missingFields list is omitted from a numeric update diff',()=>{
  const snapshots=[{materialId:material.id,reportDate:new Date('2026-04-04Z'),payload:historyPayload(row)}]
  const plan=planHistoryImport([{...row,lastStock:109,missingFields:['outTape']}],[material],snapshots,file)
- assert.equal(plan.preview.counts.conflict_existing,1)
+ assert.equal(plan.preview.counts.updated,1)
  assert.deepEqual(plan.preview.skippedRows[0].differences,[{field:'lastStock',stored:110,incoming:109}])
 })

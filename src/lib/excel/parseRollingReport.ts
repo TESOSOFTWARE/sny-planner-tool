@@ -17,6 +17,7 @@ export interface ParsedRollingMetric {
   weightKgsOrder: number | null
   metricLabel:    string   // e.g. "QUANTITY SMALL", "WEIGHT NIGHT"
   metricValue:    number   // strictly > 0
+  sourceRow:      number
   dataSource:     string
   cellRef:        string   // e.g. "Col H (row 6, col 7)" for verification audit trail
 }
@@ -239,6 +240,7 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
               weightKgsOrder: isNaN(Number(weightKgsOrder)) ? null : weightKgsOrder,
               metricLabel: rawHeader,
               metricValue: numVal,
+              sourceRow: r + 1,
               dataSource: fileName,
               cellRef: `Row ${r + 1}, Col ${colName} (idx ${c})`,
             })

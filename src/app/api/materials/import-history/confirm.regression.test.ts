@@ -28,6 +28,12 @@ const tx = {
   materialReportSnapshot: {
     findMany: async () => snapshots,
     createMany: async ({ data }: { data: Snapshot[] }) => { snapshots.push(...data); return { count: data.length } },
+    update: async ({ where, data }: { where: { materialId_reportDate: { materialId: string; reportDate: Date } }; data: Record<string, unknown> }) => {
+      const row = snapshots.find(snapshot => snapshot.materialId === where.materialId_reportDate.materialId && snapshot.reportDate.getTime() === where.materialId_reportDate.reportDate.getTime())
+      if (!row) throw new Error('snapshot missing')
+      Object.assign(row, data)
+      return row
+    },
   },
 }
 const fake = { ...tx, $transaction: async (fn: (client: typeof tx) => Promise<unknown>) => {
@@ -61,6 +67,27 @@ test('preview is read only; confirm writes snapshot and stock', async () => {
   assert.equal((await result.json()).created, 1)
   assert.equal(snapshots.length, 1)
   assert.equal(updates.length, 1)
+})
+test('corrected material/date payload updates one snapshot version instead of creating a duplicate', async () => {
+  const oldPayload = { materialName: 'MF', firstStock: 100, inQty: 20, outUsing: 10, outBroken: 0, outTape: 0, outReject: 0, lastStock: 110 }
+  snapshots = [{ materialId: 'm1', reportDate: new Date('2026-04-04Z'), payload: oldPayload, contentHash: 'old', version: 1 }]
+  const correctedRow = [[null, 'RAW MATERIAL STOCK LIST'], [null, null, null, null, null, null, null, null, null, 46116], [null, 'NO.', 'MAIN RAW MATERIAL', null, null, null, null, null, 'FISRT STOCK', 'IN', 'HDPE BROKEN', 'OUT TAPE', 'REJECT', 'OUT USEING', 'LAST STOCK'], [null, 1, 'MF', null, null, null, null, null, 100, 20, 0, 0, 0, 10, 125]]
+  const sheet = XLSX.utils.aoa_to_sheet(correctedRow)
+  sheet.J2.z = 'dd/mm/yyyy'
+  const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, 'HDPE')
+  const corrected = XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) as Buffer
+  const form = new FormData(); form.append('file', new Blob([new Uint8Array(corrected)]), 'report.xlsx'); form.append('month', '4'); form.append('year', '2026')
+  const pre = await preview(new NextRequest('http://qa.invalid/materials/import-history', { method: 'POST', body: form }))
+  const previewBody = await pre.json()
+  assert.equal(pre.status, 200)
+  assert.equal(previewBody.counts.updated, 1)
+  const resultForm = new FormData(); resultForm.append('file', new Blob([new Uint8Array(corrected)]), 'report.xlsx'); resultForm.append('expectedSnapshot', previewBody.expectedSnapshot); resultForm.append('month', '4'); resultForm.append('year', '2026')
+  const result = await confirm(new NextRequest('http://qa.invalid/materials/import-history/confirm', { method: 'POST', body: resultForm }))
+  assert.equal(result.status, 200, JSON.stringify(await result.clone().json()))
+  assert.equal((await result.json()).updated, 1)
+  assert.equal(snapshots.length, 1)
+  assert.equal(snapshots[0].version, 2)
+  assert.equal((snapshots[0].payload as Record<string, unknown>).lastStock, 125)
 })
 test('manual transaction created after preview rejects stale confirmation', async () => {
   const pre = await preview(request()), body = await pre.json()

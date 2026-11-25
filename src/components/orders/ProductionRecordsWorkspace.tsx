@@ -229,8 +229,8 @@ function EntryForm({ kind, stage, date, onSaved, editing, onCancel }: { kind: 'a
   </form>
 }
 
-function ProductionEntryWorkspace({ kind }: { kind: 'actual' | 'plan' }) {
-  const [stage, setStage] = useState<Stage>('extruder'), [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+function ProductionEntryWorkspace({ kind, selectedStage, selectedDate, onStageChange, onPlanSaved }: { kind: 'actual' | 'plan'; selectedStage?: Stage; selectedDate?: string; onStageChange?: (stage: Stage) => void; onPlanSaved?: () => void }) {
+  const [stage, setStage] = useState<Stage>(selectedStage ?? 'extruder'), [date, setDate] = useState(selectedDate ?? new Date().toISOString().slice(0, 10))
   const [rows, setRows] = useState<Entry[]>([]), [loading, setLoading] = useState(false), [error, setError] = useState(''), [editing, setEditing] = useState<Entry | null>(null)
   const [showPrint, setShowPrint] = useState(false)
   const endpoint = kind === 'plan' ? '/api/production-plans' : '/api/production-records/manual'
@@ -240,21 +240,27 @@ function ProductionEntryWorkspace({ kind }: { kind: 'actual' | 'plan' }) {
     catch (e) { setError(e instanceof Error ? e.message : 'Không tải được dữ liệu.') }
     finally { setLoading(false) }
   }
+  useEffect(() => { if (selectedStage) setStage(selectedStage) }, [selectedStage])
+  useEffect(() => { if (selectedDate) setDate(selectedDate) }, [selectedDate])
   useEffect(() => { void load() }, [stage, date])
   const control = 'rounded border border-outline px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary'
   return <section className="space-y-4">
     {kind === 'plan' && (stage === 'extruder' || stage === 'knitting') && <div>{showPrint
       ? <ProductionPlanPrint key={`${stage}-${date}`} stage={stage} date={date} onClose={() => setShowPrint(false)} />
       : <button type="button" onClick={() => setShowPrint(true)} className="no-print rounded border border-primary px-4 py-2 text-sm text-primary">Mở mẫu in</button>}</div>}
-    <div className="flex flex-wrap items-end gap-3"><label className="text-sm">Công đoạn<select className={control} value={stage} onChange={e => setStage(e.target.value as Stage)}>{stageOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm">Ngày<input type="date" className={control} value={date} onChange={e => setDate(e.target.value)} /></label></div>
-    <EntryForm key={`${kind}-${stage}-${date}-${editing?.id ?? 'new'}`} kind={kind} stage={stage} date={date} editing={editing} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); void load() }} />
+    <div className="flex flex-wrap items-end gap-3"><label className="text-sm">Công đoạn<select className={control} value={stage} onChange={e => { const value = e.target.value as Stage; setStage(value); onStageChange?.(value) }}>{stageOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm">Ngày<input type="date" className={control} value={date} onChange={e => setDate(e.target.value)} /></label></div>
+    <EntryForm key={`${kind}-${stage}-${date}-${editing?.id ?? 'new'}`} kind={kind} stage={stage} date={date} editing={editing} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); void load(); if (kind === 'plan') onPlanSaved?.() }} />
     {kind === 'actual' && <p className="text-sm text-secondary">Máy, PI, màu, chỉ tiêu và đơn vị có danh sách chọn từ dữ liệu sẵn có. Nếu giá trị chưa có, chọn mục “Nhập … khác”. Các file báo cáo Excel theo công đoạn được nhập ở <Link href="/reports" className="text-primary underline">Báo cáo thống kê</Link>. Dòng PI chưa xác minh được item được giữ nguyên và chưa gắn đơn.</p>}
     {error && <p role="alert" className="text-sm text-error">{error}</p>}{loading ? <p role="status">Đang tải…</p> : !rows.length ? <p role="status">Chưa có dữ liệu cho bộ lọc này.</p> : <div className="overflow-x-auto rounded border border-outline-variant"><table className="w-full text-sm"><thead className="bg-surface-container"><tr>{['Ngày', 'Công đoạn', 'Máy', 'PI nguồn', 'Chỉ tiêu', 'Số lượng', 'Đơn vị', 'Phiên bản', ''].map(x => <th key={x} className="p-3 text-left">{x}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.id} className="border-t border-outline-variant"><td className="p-3 whitespace-nowrap">{(row.planDate ?? row.reportDate ?? '').slice(0, 10).split('-').reverse().join('/')}</td><td className="p-3">{stageOptions.find(([v]) => v === row.stage)?.[1]}</td><td className="p-3">{row.machineId ?? '—'}</td><td className="p-3">{row.orderRef ?? '—'}{row.orderRef && <span className="ml-2 text-xs text-secondary">(chưa gắn item)</span>}</td><td className="p-3">{row.metricLabel}</td><td className="p-3 tabular-nums">{Number(row.plannedValue ?? row.metricValue).toLocaleString('vi-VN', { maximumFractionDigits: 2 })}</td><td className="p-3">{row.unit}</td><td className="p-3">{kind === 'plan' ? `v${row.revision}` : 'Nhập tay'}</td><td className="p-3">{kind === 'plan' && <button className="text-primary underline" onClick={() => setEditing(row)}>Sửa</button>}</td></tr>)}</tbody></table></div>}
   </section>
 }
 
+export function ProductionPlanEntryWorkspace({ selectedStage, selectedDate, onStageChange, onPlanSaved }: { selectedStage?: Stage; selectedDate?: string; onStageChange?: (stage: Stage) => void; onPlanSaved?: () => void }) {
+  return <ProductionEntryWorkspace kind="plan" selectedStage={selectedStage} selectedDate={selectedDate} onStageChange={onStageChange} onPlanSaved={onPlanSaved} />
+}
+
 export default function ProductionRecordsWorkspace({ embedded = false }: { embedded?: boolean }) {
-  const [tab, setTab] = useState<'imported' | 'progress' | 'import' | 'manual' | 'plans'>('imported')
-  const tabs = [['imported', 'Tra cứu theo mã PI'], ['progress', 'Tiến độ theo PI'], ['import', 'Import dữ liệu'], ['plans', 'Kế hoạch sản xuất']] as const
-  return <div className="space-y-4"><div role="tablist" aria-label="Sản lượng và kế hoạch" className="flex gap-2 overflow-x-auto border-b border-outline-variant px-4 pt-4 md:px-8">{tabs.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === id ? 'border-primary font-semibold text-primary' : 'border-transparent text-secondary'}`}>{label}</button>)}</div>{tab === 'imported' ? <ProductionRecordsTable embedded={embedded} /> : tab === 'progress' ? <ProductionProgressWorkspace /> : tab === 'import' ? <ProductionImportWorkspace /> : <div className="px-4 pb-6 md:px-8"><ProductionEntryWorkspace key={tab} kind={tab === 'plans' ? 'plan' : 'actual'} /></div>}</div>
+  const [tab, setTab] = useState<'imported' | 'progress' | 'import'>('imported')
+  const tabs = [['imported', 'Tra cứu theo mã PI'], ['progress', 'Tiến độ theo PI'], ['import', 'Import dữ liệu']] as const
+  return <div className="space-y-4"><div role="tablist" aria-label="Sản lượng" className="flex gap-2 overflow-x-auto border-b border-outline-variant px-4 pt-4 md:px-8">{tabs.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === id ? 'border-primary font-semibold text-primary' : 'border-transparent text-secondary'}`}>{label}</button>)}</div>{tab === 'imported' ? <ProductionRecordsTable embedded={embedded} /> : tab === 'progress' ? <ProductionProgressWorkspace /> : <ProductionImportWorkspace />}</div>
 }

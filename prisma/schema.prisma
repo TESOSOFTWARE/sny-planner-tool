@@ -412,6 +412,7 @@ model ExtruderDailyOutput {
   orderId    String?  // Link chính xác tới ProductionOrder (nếu PI duy nhất 1 sub-line)
   order      ProductionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
+  sourceKey  String?  @unique(map: "extruder_daily_output_sourceKey_key") @db.VarChar(64) // Khóa dòng từ workbook; null với dữ liệu legacy chưa ghép được
   dataSource String   @default("import")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -551,6 +552,7 @@ model WarpingDailyOutput {
   orderId           String?  // Link chính xác tới ProductionOrder (nếu PI duy nhất 1 sub-line)
   order             ProductionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
+  sourceKey         String?  @unique(map: "warping_daily_output_sourceKey_key") @db.VarChar(64) // Khóa dòng từ workbook; null với dữ liệu legacy chưa ghép được
   dataSource        String   @default("import")
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -594,6 +596,7 @@ model KnittingDailyDetail {
   operatingGrade String?                      // Operating grade (vd "A", "B")
   totalPct       Decimal? @db.Decimal(5, 2)  // Total % (vd 98.5)
 
+  sourceKey      String?  @unique(map: "knitting_daily_detail_sourceKey_key") @db.VarChar(64) // Khóa dòng từ workbook; null với dữ liệu legacy chưa ghép được
   dataSource     String   @default("import")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -659,6 +662,7 @@ model RollingDailyMetric {
   weightKgsOrder Decimal?
   metricLabel    String           // e.g. "QUANTITY SMALL", "WEIGHT NIGHT" — ONLY the 6 primary shift/size labels
   metricValue    Decimal?
+  sourceKey      String?          @unique(map: "rolling_daily_metrics_sourceKey_key") @db.VarChar(64) // Khóa metric từ workbook; null với dữ liệu legacy chưa ghép được
   dataSource     String
   createdAt      DateTime         @default(now())
 

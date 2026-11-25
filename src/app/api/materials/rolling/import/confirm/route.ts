@@ -3,13 +3,14 @@ import { authError } from '@/lib/auth/session'
 // POST /api/materials/rolling/import/confirm — Saves parsed RollingDailyMetric records to DB with Scoped Replacement.
 
 import { NextRequest, NextResponse } from 'next/server'
+import type { Prisma } from '@prisma/client'
 import { parseRollingReport, RollingDateConflictError } from '@/lib/excel/parseRollingReport'
 import { prisma } from '@/lib/db'
 import { rollingPeriodFromFileName, validateRollingPeriod } from '@/lib/materials/rollingPeriod'
 import { rollingImportSnapshot } from '@/lib/materials/rollingImportSnapshot'
-import { acknowledgesRollingLosses, compareRollingDays, rollingLosses } from '@/lib/materials/rollingImportSafety'
 import { assertHandoffsCoveredAfterImport, HandoffImportConflict } from '@/lib/production/handoffs'
 import { assertProductionImportAttempt, markProductionImportAttemptCommitted, ProductionImportAttemptError, ProductionImportAttemptReplayError } from '@/lib/production/importAttempt'
+import { diffProductionReportRows, legacySourceKeyAdoptions, priorConfirmedReportRows, productionReportIdentityKey, productionReportMonthRange, productionReportSourceKey } from '@/lib/production/reportRowDiff'
 
 // In-memory Mutex to prevent overlapping concurrent rolling imports
 let isRollingImportInProgress = false
@@ -42,14 +43,14 @@ export async function POST(req: NextRequest) {
     const hasSelectedPeriod = formData.has('month') || formData.has('year')
     const period = hasSelectedPeriod ? validateRollingPeriod(formData.get('month'), formData.get('year')) : rollingPeriodFromFileName(file.name)
     if (!hasSelectedPeriod || !period) return NextResponse.json({ success: false, periodRequired: true, error: 'Vui lòng chọn tháng và năm hợp lệ rồi xem trước lại.' }, { status: 400 })
+    const reportMonth = `${period.year}-${String(period.month).padStart(2, '0')}`
+    const monthRange = productionReportMonthRange(reportMonth)
 
     const bytes = await file.arrayBuffer()
     const buffer = Buffer.from(bytes)
 
     const parseResult = parseRollingReport(buffer, file.name, period)
     const invalidPopulatedBlocks = parseResult.dateBlockMappings.filter(block => !block.isoDate && block.hasData)
-    if (invalidPopulatedBlocks.length) return NextResponse.json({ success: false, error: 'Có khối Rolling chứa số liệu nhưng ngày không hợp lệ; chưa nhập dữ liệu.', skippedDateBlocks: invalidPopulatedBlocks }, { status: 422 })
-    if (parseResult.invalidMetrics.length) return NextResponse.json({ success: false, error: `Có ${parseResult.invalidMetrics.length} ô sản lượng âm hoặc không phải số; chưa nhập dữ liệu.`, invalidMetrics: parseResult.invalidMetrics }, { status: 422 })
 
     const expectedSnapshot = rollingImportSnapshot(buffer, period)
     if (formData.get('expectedSnapshot') !== expectedSnapshot) return NextResponse.json({ success: false, error: 'File hoặc kỳ đã thay đổi. Vui lòng xem trước lại.' }, { status: 409 })
@@ -81,21 +82,15 @@ export async function POST(req: NextRequest) {
         weightKgsOrder: m.weightKgsOrder,
         metricLabel: m.metricLabel,
         metricValue: m.metricValue,
+        sourceKey: productionReportSourceKey('ROLLING', reportMonth, m.sourceRow, `${m.cellRef}|${m.metricLabel}`),
         dataSource: file.name,
       }
     })
-
-    if (rollingData.length === 0) {
-      return NextResponse.json({
-        success: true,
-        recordsInserted: 0,
-        recordsDeleted: 0,
-        datesScoped: 0,
-        ambiguousOrderCount,
-        fileName: file.name,
-        message: 'File không có bản ghi sản lượng Rolling hợp lệ để nạp.',
-      })
-    }
+    const protectedSourceKeys = new Set(parseResult.invalidMetrics.flatMap(metric => {
+      const sourceKey = productionReportSourceKey('ROLLING', reportMonth, metric.sourceRow, `${metric.cellRef}|${metric.metricLabel}`)
+      return sourceKey ? [sourceKey] : []
+    }))
+    const validSourceDates = new Set(parseResult.dateBlockMappings.flatMap(block => block.isoDate ? [block.isoDate] : []))
 
     // Scoped Replacement: identify distinct dates strictly present in this payload
     const targetDates = Array.from(new Set(rollingData.map((m) => m.date.getTime()))).map((t) => new Date(t))
@@ -105,48 +100,64 @@ export async function POST(req: NextRequest) {
       await assertProductionImportAttempt(tx, importAttempt)
       await tx.$executeRaw`SET LOCAL lock_timeout = '5s'`
       await tx.$executeRaw`LOCK TABLE "rolling_daily_metrics" IN SHARE ROW EXCLUSIVE MODE`
-      const existing = await tx.rollingDailyMetric.findMany({
-        where: { date: { in: targetDates } }, select: { date: true, orderRef: true, orderId: true, metricLabel: true, metricValue: true },
+      const existing = await tx.rollingDailyMetric.findMany({ where: { date: monthRange } })
+      const prior = await priorConfirmedReportRows(tx, importAttempt?.batchId, 'ROLLING')
+      const priorRows = (prior?.rows ?? []).flatMap((value) => {
+        if (!value || typeof value !== 'object') return []
+        const row = value as Record<string, unknown>
+        const sourceRow = typeof row.sourceRow === 'number' ? row.sourceRow : typeof row.cellRef === 'string' ? Number(row.cellRef.match(/Row (\d+)/)?.[1]) : undefined
+        if (!sourceRow || typeof row.metricLabel !== 'string' || typeof row.date !== 'string') return []
+        const sourceKey = prior ? productionReportSourceKey('ROLLING', prior.reportMonth, sourceRow, `${row.cellRef ?? `Row ${sourceRow}`}|${row.metricLabel}`) : null
+        if (!sourceKey) return []
+        return [{ sourceKey, data: {
+          date: new Date(row.date), orderRef: row.orderRef, orderId: null, color: row.color,
+          widthM: row.widthM, lengthM: row.lengthM, weightKgsOrder: row.weightKgsOrder,
+          metricLabel: row.metricLabel, metricValue: row.metricValue, dataSource: 'import',
+        } }]
       })
-      const replacementDays = compareRollingDays(existing, rollingData)
-      const losses = rollingLosses(replacementDays)
-      let acknowledged: unknown = null
-      try { acknowledged = JSON.parse(String(formData.get('acknowledgedLosses') ?? 'null')) } catch { /* Invalid acknowledgement never authorizes deletion. */ }
-      if (losses.length && (formData.get('acknowledgeLoss') !== 'true' || !acknowledgesRollingLosses(losses, acknowledged))) {
-        return { blocked: true as const, replacementDays }
+      const existingById = new Map(existing.map(row => [row.id, row]))
+      const adoptions = legacySourceKeyAdoptions(existing, priorRows)
+      for (const adoption of adoptions) {
+        await tx.rollingDailyMetric.update({ where: { id: adoption.id }, data: { sourceKey: adoption.sourceKey } })
+        const row = existingById.get(adoption.id)
+        if (row) row.sourceKey = adoption.sourceKey
       }
-      await assertHandoffsCoveredAfterImport(tx, 'rolling', existing, rollingData)
-      const deleteRes = await tx.rollingDailyMetric.deleteMany({
-        where: {
-          date: { in: targetDates },
-        },
+      const diff = diffProductionReportRows(rollingData.map(({ sourceKey, ...data }) => ({ sourceKey, data })), existing, {
+        identityKey: row => productionReportIdentityKey([row.date, row.orderRef, row.metricLabel, row.color, row.widthM, row.lengthM, row.weightKgsOrder]),
+        legacyCandidateKey: row => productionReportIdentityKey([row.date, row.orderRef, row.metricLabel, row.color, row.widthM, row.lengthM, row.weightKgsOrder]),
+        protectedSourceKeys,
+        countsScope: row => validSourceDates.has(new Date(row.date as Date | string).toISOString().slice(0, 10)),
       })
+      for (const adoption of diff.adoptions) {
+        await tx.rollingDailyMetric.update({ where: { id: adoption.id }, data: { sourceKey: adoption.sourceKey } })
+        const row = existingById.get(adoption.id)
+        if (row) row.sourceKey = adoption.sourceKey
+      }
+      await assertHandoffsCoveredAfterImport(tx, 'rolling', diff.updates.map(row => existingById.get(row.id)!).filter(Boolean), [...diff.creates, ...diff.updates].map(row => ({ ...row.data, orderId: row.data.orderId as string | null })))
 
+      for (const row of diff.updates) await tx.rollingDailyMetric.update({ where: { id: row.id }, data: { ...row.data, sourceKey: row.sourceKey } })
       let count = 0
       const batchSize = 500
-      for (let i = 0; i < rollingData.length; i += batchSize) {
-        const batch = rollingData.slice(i, i + batchSize)
-        const res = await tx.rollingDailyMetric.createMany({
-          data: batch,
-        })
+      for (let i = 0; i < diff.creates.length; i += batchSize) {
+        const batch = diff.creates.slice(i, i + batchSize)
+        const res = await tx.rollingDailyMetric.createMany({ data: batch.map(row => ({ ...row.data, sourceKey: row.sourceKey }) as Prisma.RollingDailyMetricCreateManyInput) })
         count += res.count
       }
-
-      const receipt = {
-        blocked: false as const,
-        deletedCount: deleteRes.count,
-        insertedCount: count,
-      }
-      await markProductionImportAttemptCommitted(tx, importAttempt, { recordsDeleted: receipt.deletedCount, recordsInserted: receipt.insertedCount, datesScoped: targetDates.length })
+      const receipt = { addedCount: count, updatedCount: diff.updates.length, unchangedCount: diff.unchanged, missingInSource: diff.missingInSource, ambiguousSkipped: diff.ambiguous, invalidMetricSkipped: parseResult.invalidMetrics.length, invalidDateBlockSkipped: invalidPopulatedBlocks.length }
+      await markProductionImportAttemptCommitted(tx, importAttempt, receipt)
       return receipt
     }, { timeout: 60_000, maxWait: 5_000 })
 
-    if (result.blocked) return NextResponse.json({ success: false, error: 'Có mã ORDER sẽ mất dữ liệu Rolling hoặc danh sách đã thay đổi. Vui lòng kiểm tra và xác nhận lại.', replacementDays: result.replacementDays }, { status: 409 })
-
     return NextResponse.json({
       success: true,
-      recordsInserted: result.insertedCount,
-      recordsDeleted: result.deletedCount,
+      recordsInserted: result.addedCount,
+      recordsDeleted: 0,
+      recordsAdded: result.addedCount,
+      recordsUpdated: result.updatedCount,
+      recordsUnchanged: result.unchangedCount,
+      invalidSkipped: result.invalidMetricSkipped + result.invalidDateBlockSkipped,
+      ambiguousSkipped: result.ambiguousSkipped,
+      missingInSource: result.missingInSource,
       datesScoped: targetDates.length,
       ambiguousOrderCount,
       fileName: file.name,

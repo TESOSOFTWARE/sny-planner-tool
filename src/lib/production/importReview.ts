@@ -32,7 +32,7 @@ function isInvalid(row: ImportReviewRow): boolean {
 }
 
 export function summarizeImportRows(rows: ImportReviewRow[], reportMonth: string): ImportSheetReview {
-  const rowDates = rows.flatMap(row => [sourceDate(row), typeof row.reportPeriodEnd === 'string' ? row.reportPeriodEnd.slice(0, 10) : null])
+  const rowDates = rows.filter(row => !isInvalid(row)).flatMap(row => [sourceDate(row), typeof row.reportPeriodEnd === 'string' ? row.reportPeriodEnd.slice(0, 10) : null])
   const dates = Array.from(new Set(rowDates.filter((date): date is string => date !== null))).sort()
   const sourceRowsWithPI = rows.filter(hasPI).length
   const piRows = rows.filter(hasPI)

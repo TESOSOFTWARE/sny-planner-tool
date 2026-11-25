@@ -54,7 +54,7 @@ test('1810-07 populated 31+1 cross-month block is rejected instead of assigned o
 let reads = 0, writes = 0
 const metric = {
   findMany: async () => { reads++; return [] },
-  deleteMany: async () => { writes++; return { count: 0 } },
+  update: async () => { writes++; return { count: 1 } },
   createMany: async ({ data }: { data: unknown[] }) => { writes++; return { count: data.length } },
 }
 const fake = { productionOrder: { findMany: async () => { reads++; return [] } }, rollingDailyMetric: metric, $transaction: async (run: (tx: { rollingDailyMetric: typeof metric; $executeRaw: () => Promise<number> }) => unknown) => run({ rollingDailyMetric: metric, $executeRaw: async () => 0 }) }
@@ -70,7 +70,7 @@ function request(buffer: Buffer, selectedPeriod = period) {
   form.append('expectedSnapshot', rollingImportSnapshot(buffer, selectedPeriod))
   return new NextRequest('http://qa.invalid/rolling/import', { method: 'POST', body: form })
 }
-test('1810-07 populated invalid date block is listed in preview and blocks confirmation', async () => {
+test('1810-07 populated invalid date block is skipped while valid rows in the report can proceed', async () => {
   const invalidPeriod = { month: 4, year: 2026 }
   const buffer = workbook(['31th'], [10])
   reads = 0; writes = 0
@@ -81,10 +81,11 @@ test('1810-07 populated invalid date block is listed in preview and blocks confi
   assert.equal(previewBody.skippedDateBlocks[0].blocked, true)
   reads = 0; writes = 0
   const saved = await confirm(request(buffer, invalidPeriod))
-  assert.equal(saved.status, 422)
-  assert.equal(reads, 0); assert.equal(writes, 0)
+  assert.equal(saved.status, 200)
+  assert.equal((await saved.json()).invalidSkipped, 1)
+  assert.ok(reads > 0); assert.equal(writes, 0)
 })
-test('1810-07 invalid numeric values are listed and block scoped replacement', async () => {
+test('1810-07 invalid numeric values are skipped without replacing existing data', async () => {
   const buffer = workbook(['13th'], [-2])
   reads = 0; writes = 0
   const pre = await preview(request(buffer))
@@ -94,8 +95,9 @@ test('1810-07 invalid numeric values are listed and block scoped replacement', a
   assert.equal(previewBody.rows.at(-1).isValid, false)
   reads = 0; writes = 0
   const saved = await confirm(request(buffer))
-  assert.equal(saved.status, 422)
-  assert.equal(reads, 0); assert.equal(writes, 0)
+  assert.equal(saved.status, 200)
+  assert.equal((await saved.json()).invalidSkipped, 1)
+  assert.ok(reads > 0); assert.equal(writes, 0)
 })
 for (const labels of [['13th', '13th'], ['11+12th', '12th']]) {
   test(`1810-07 preview and direct confirm reject ${labels.join('/')} before any DB call`, async () => {
@@ -122,5 +124,5 @@ test('1810-07 valid preview and confirm still work after rejected confirms relea
   const saved = await confirm(request(workbook(['13th', '14th'], [10, 20])))
   assert.equal(saved.status, 200)
   assert.equal((await saved.json()).recordsInserted, 2)
-  assert.equal(writes, 2) // fake delete/create only; no database connection exists.
+  assert.equal(writes, 1) // Only new rows are inserted; no database connection exists.
 })

@@ -19,6 +19,8 @@ import BulkEditModal from '@/components/schedule/BulkEditModal'
 import AssignmentListView, { SelectionCheckbox } from '@/components/schedule/AssignmentListView'
 import { canBulkEditAssignment, selectAssignments, selectionState } from '@/lib/schedule/assignmentSelection'
 import { assignmentGroups, expandToGroups } from '@/lib/schedule/specGroup'
+import ProductionPlanCalendar from '@/components/schedule/ProductionPlanCalendar'
+import { ProductionPlanEntryWorkspace } from '@/components/orders/ProductionRecordsWorkspace'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -45,6 +47,8 @@ export default function SchedulePage() {
     const now = new Date()
     return new Date(now.getFullYear(), now.getMonth(), 1)
   })
+  const [planStage, setPlanStage] = useState<'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing'>('extruder')
+  const [planRefreshToken, setPlanRefreshToken] = useState(0)
 
   const [assignments, setAssignments] = useState<(AssignmentDetail & { updatedAt: string })[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -428,6 +432,22 @@ export default function SchedulePage() {
         </div>
       </div>
 
+      <section aria-label="Kế hoạch sản xuất theo công đoạn" className="mb-md space-y-3">
+        <details className="rounded-lg border border-outline-variant bg-surface-container-lowest p-3 shadow-sm">
+          <summary className="cursor-pointer text-sm font-semibold text-primary">Nhập kế hoạch thủ công cho {formatMonthLabel(viewDate)}</summary>
+          <div className="mt-3 border-t border-outline-variant pt-3">
+            <ProductionPlanEntryWorkspace
+              selectedStage={planStage}
+              selectedDate={`${yearMonth}-01`}
+              onStageChange={setPlanStage}
+              onPlanSaved={() => setPlanRefreshToken(value => value + 1)}
+            />
+          </div>
+        </details>
+        <ProductionPlanCalendar yearMonth={yearMonth} stage={planStage} onStageChange={setPlanStage} refreshToken={planRefreshToken} />
+      </section>
+
+      <h2 className="mb-sm text-base font-semibold text-primary">Lịch phân công máy dệt</h2>
       {viewMode === 'list' && hasSelection && selectionToolbar}
       {viewMode !== 'list' && <div aria-label="Chú giải lịch máy" className="mb-sm flex flex-wrap items-center gap-md text-xs text-on-surface-variant">
         <span className="inline-flex items-center gap-1"><span className="h-3 w-3 border border-outline-variant bg-white" />Ngày làm</span>
