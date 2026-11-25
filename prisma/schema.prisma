@@ -740,6 +740,46 @@ model FactoryCalendarException {
   @@map("factory_calendar_exceptions")
 }
 
+// [MoM 30/10 §4; FB 19/11/2026] Preserve each confirmed Statistical Report version.
+model ProductionReportImportBatch {
+  id            String   @id @default(cuid())
+  fileName      String
+  fileHash      String   @db.VarChar(64)
+  decisionHash  String   @db.VarChar(64)
+  reportMonth   String   @db.VarChar(7)
+  selectedSheets Json
+  decisions     Json     @default("{}")
+  sheetResults  Json     @default("{}")
+  status        String   @default("PREPARED") // PREPARED | PROCESSING | PARTIAL | CONFIRMED
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  completedAt   DateTime?
+  sheets        ProductionReportImportSheet[]
+
+  @@unique([fileHash, reportMonth], map: "production_report_import_batches_fileHash_reportMonth_key")
+  @@index([reportMonth, createdAt])
+  @@index([status, createdAt])
+  @@map("production_report_import_batches")
+}
+
+model ProductionReportImportSheet {
+  id          String   @id @default(cuid())
+  batchId     String
+  sheetName   String
+  sourceRows  Json
+  attemptToken String? @db.VarChar(64)
+  attemptCommittedAt DateTime?
+  status      String   @default("PREPARED") // PREPARED | PROCESSING | FAILED | UNCERTAIN | CONFIRMED
+  result      Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  batch       ProductionReportImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, sheetName])
+  @@index([sheetName, createdAt])
+  @@map("production_report_import_sheets")
+}
+
 enum CalendarExceptionKind {
   HOLIDAY // lễ VN — grid tô đậm
   CLOSURE // nghỉ vì lý do khác (bảo trì, sự kiện) — grid tô màu ngày nghỉ

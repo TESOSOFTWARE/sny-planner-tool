@@ -8,9 +8,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { preserveOrderLinks, OutputLinkConflict } from '@/lib/excel/preserveOrderLinks'
 import { assertHandoffsCoveredAfterImport, HandoffImportConflict } from '@/lib/production/handoffs'
+import { invalidReportOutputRows } from '@/lib/production/reportRowValidation'
 import { z } from 'zod'
 import { productionPiResolver } from '@/lib/excel/productionPi'
 import { applyRemarkDecisions, knownMeshKeys, remarkKey, RemarkDecisionRequired } from '@/lib/excel/knittingRemark'
+import { assertProductionImportAttempt, markProductionImportAttemptCommitted, ProductionImportAttemptError, ProductionImportAttemptReplayError } from '@/lib/production/importAttempt'
 
 export const maxDuration = 60  // Matches the 60s transaction timeout below
 
@@ -19,14 +21,18 @@ const knittingDetailRowSchema = z.object({
   reportDate:     z.string(),
   shift:          z.enum(['D', 'N']),
   width:          z.number().nullable(),
-  color:          z.string().min(1),
+  color:          z.string(),
   weightSpec:     z.number().nullable(),
   lengthM:        z.number().nullable(),
   tapeRoll:       z.number().nullable(),
   mValue:         z.number().nullable(),
   avgPerRoll:     z.number().nullable(),
   quantity:       z.number().nullable(),
-  weightKgs:      z.number().min(0),
+  weightKgs:      z.number(),
+  sourceWeight:   z.string().optional(),
+  sourceRow:       z.number().int().positive().optional(),
+  isValid:         z.boolean().optional(),
+  validationErrors: z.array(z.string()).optional(),
   orderRef:       z.string().nullable(),
   sourceOrderRefs: z.array(z.string()).max(2).optional(),
   machineNote:    z.string().nullable(),
@@ -39,9 +45,11 @@ const knittingDetailRowSchema = z.object({
 
 const confirmBodySchema = z.object({
   rows: z.array(knittingDetailRowSchema).min(1, 'Cần ít nhất 1 dòng dữ liệu.'),
+  sourceFileName: z.string().trim().min(1).max(255).optional(),
   remarkDecisions: z.array(z.object({
     value: z.string().trim().min(1).max(1000), target: z.enum(['MESH', 'NOTE']),
   }).strict()).max(200).default([]),
+  importAttempt: z.object({ batchId: z.string().min(1), token: z.string().min(1).max(64) }).optional(),
 }).refine(body => new Set(body.remarkDecisions.map(row => remarkKey(row.value))).size === body.remarkDecisions.length, {
   message: 'Mỗi giá trị REMARK chỉ được chọn một cột.',
 })
@@ -64,6 +72,8 @@ export async function POST(req: NextRequest) {
   }
 
   const { rows, remarkDecisions } = parsed.data
+  const invalidRows = invalidReportOutputRows(rows)
+  if (invalidRows.length) return NextResponse.json({ success: false, error: 'Có dòng Knitting không hợp lệ; chưa thay dữ liệu cũ.', invalidRows }, { status: 422 })
 
 
   const groupKeys = new Set<string>()
@@ -74,6 +84,8 @@ export async function POST(req: NextRequest) {
   let insertedCount = 0
   try {
     await prisma.$transaction(async (tx) => {
+      const attempt = parsed.data.importAttempt ? { ...parsed.data.importAttempt, sheet: 'KNITTING' as const } : undefined
+      await assertProductionImportAttempt(tx, attempt)
       await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
       await tx.$executeRawUnsafe('LOCK TABLE "knitting_daily_detail" IN SHARE ROW EXCLUSIVE MODE')
       const groups = { OR: Array.from(groupKeys).map(key => {
@@ -116,13 +128,16 @@ export async function POST(req: NextRequest) {
         operatingGrade: row.operatingGrade,
         totalPct:       row.totalPct !== null ? row.totalPct : undefined,
         orderId: row.orderId,
-        dataSource:     'import' as const,
+        dataSource:     parsed.data.sourceFileName ?? 'import',
       }))
 
       await tx.knittingDailyDetail.createMany({ data })
       insertedCount = data.length
+      await markProductionImportAttemptCommitted(tx, attempt, { recordsDeleted: groupKeys.size, recordsInserted: insertedCount })
     }, { timeout: 60_000, maxWait: 5_000 })
   } catch (err) {
+    if (err instanceof ProductionImportAttemptReplayError) return NextResponse.json({ success: true, ...err.receipt, replayed: true })
+    if (err instanceof ProductionImportAttemptError) return NextResponse.json({ success: false, code: 'IMPORT_ATTEMPT_EXPIRED', error: err.message }, { status: 409 })
     if (err instanceof HandoffImportConflict) return NextResponse.json({ success: false, code: 'HANDOFF_ACTUAL_CONFLICT', error: err.message }, { status: 409 })
     if (err instanceof RemarkDecisionRequired) return NextResponse.json({ success: false, code: 'REMARK_DECISION_REQUIRED', values: err.values, error: err.message }, { status: 409 })
     if (err instanceof OutputLinkConflict) {

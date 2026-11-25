@@ -30,7 +30,9 @@ export async function readHistoryFile(req: Request) {
   if (!name.toLowerCase().endsWith('.xlsx')) throw new Error('Chỉ chấp nhận file .xlsx.')
   if (file.size > 10 * 1024 * 1024) throw new Error('File phải nhỏ hơn hoặc bằng 10 MB.')
   const rows = parseMaterialReportHistory(Buffer.from(await file.arrayBuffer()), 'HDPE')
-  return { rows, file: { name, size: file.size }, expectedSnapshot: String(form.get('expectedSnapshot') ?? ''), resolutions: parseResolutions(form.get('resolutions')) }
+  const batchId = String(form.get('importBatchId') ?? ''), token = String(form.get('importAttemptToken') ?? '')
+  if (Boolean(batchId) !== Boolean(token)) throw new Error('Thông tin phiên import không đầy đủ.')
+  return { rows, file: { name, size: file.size }, expectedSnapshot: String(form.get('expectedSnapshot') ?? ''), resolutions: parseResolutions(form.get('resolutions')), importAttempt: batchId ? { batchId, token } : undefined }
 }
 
 export type HistoryRowStatus = 'invalid' | 'unknown_material' | 'ambiguous' | 'identical' | 'conflict_existing' | 'new'

@@ -8,6 +8,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { preserveOrderLinks, OutputLinkConflict } from '@/lib/excel/preserveOrderLinks'
 import { assertHandoffsCoveredAfterImport, HandoffImportConflict } from '@/lib/production/handoffs'
+import { invalidReportOutputRows } from '@/lib/production/reportRowValidation'
+import { assertProductionImportAttempt, markProductionImportAttemptCommitted, ProductionImportAttemptError, ProductionImportAttemptReplayError } from '@/lib/production/importAttempt'
 import { z } from 'zod'
 
 export const maxDuration = 60  // Matches the 60s transaction timeout below
@@ -18,9 +20,13 @@ const extruderRowSchema = z.object({
   machineId:  z.string().min(1),
   reportDate: z.string(), // ISO string từ JSON
   shift:      z.enum(['D', 'N']),
-  color:      z.string().min(1),
+  color:      z.string(),
   denier:     z.number().nullable(),
-  weightKgs:  z.number().min(0),
+  weightKgs:  z.number(),
+  sourceWeight: z.string().optional(),
+  sourceRow: z.number().int().positive().optional(),
+  isValid: z.boolean().optional(),
+  validationErrors: z.array(z.string()).optional(),
   beamNote:   z.string().nullable(),
   orderRef:   z.string().nullable(),
   sourceOrderRefs: z.array(z.string()).max(2).optional(),
@@ -28,6 +34,8 @@ const extruderRowSchema = z.object({
 
 const confirmBodySchema = z.object({
   rows: z.array(extruderRowSchema).min(1, 'Cần ít nhất 1 dòng dữ liệu.'),
+  sourceFileName: z.string().trim().min(1).max(255).optional(),
+  importAttempt: z.object({ batchId: z.string().min(1), token: z.string().min(1).max(64) }).optional(),
 })
 
 export async function POST(req: NextRequest) {
@@ -49,6 +57,8 @@ export async function POST(req: NextRequest) {
   }
 
   const { rows } = parsed.data
+  const invalidRows = invalidReportOutputRows(rows)
+  if (invalidRows.length) return NextResponse.json({ success: false, error: 'Có dòng Extruder không hợp lệ; chưa thay dữ liệu cũ.', invalidRows }, { status: 422 })
 
 
   // ── 2. Group rows by [machineId, reportDate] for idempotent delete ─────────
@@ -61,6 +71,8 @@ export async function POST(req: NextRequest) {
   let insertedCount = 0
   try {
     await prisma.$transaction(async (tx) => {
+      const attempt = parsed.data.importAttempt ? { ...parsed.data.importAttempt, sheet: 'EXTRUDER' as const } : undefined
+      await assertProductionImportAttempt(tx, attempt)
       await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
       await tx.$executeRawUnsafe('LOCK TABLE "extruder_daily_output" IN SHARE ROW EXCLUSIVE MODE')
       const groups = { OR: Array.from(groupKeys).map(key => {
@@ -86,13 +98,16 @@ export async function POST(req: NextRequest) {
         beamNote:   row.beamNote,
         orderRef:   row.orderRef,
         orderId: row.orderId,
-        dataSource: 'import' as const,
+        dataSource: parsed.data.sourceFileName ?? 'import',
       }))
 
       await tx.extruderDailyOutput.createMany({ data })
       insertedCount = data.length
+      await markProductionImportAttemptCommitted(tx, attempt, { recordsDeleted: groupKeys.size, recordsInserted: insertedCount })
     }, { timeout: 60_000, maxWait: 5_000 })
   } catch (err) {
+    if (err instanceof ProductionImportAttemptReplayError) return NextResponse.json({ success: true, ...err.receipt, replayed: true })
+    if (err instanceof ProductionImportAttemptError) return NextResponse.json({ success: false, code: 'IMPORT_ATTEMPT_EXPIRED', error: err.message }, { status: 409 })
     if (err instanceof HandoffImportConflict) return NextResponse.json({ success: false, code: 'HANDOFF_ACTUAL_CONFLICT', error: err.message }, { status: 409 })
     if (err instanceof OutputLinkConflict) {
       return NextResponse.json({ success: false, code: 'OUTPUT_LINK_CONFLICT', error: err.message }, { status: 409 })

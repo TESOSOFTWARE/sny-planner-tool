@@ -2,7 +2,7 @@
 export type ReportSheetKind = 'EXTRUDER' | 'WARPING' | 'KNITTING' | 'HDPE' | 'MB' | 'KOREA' | 'ROLLING' | 'PACKING'
 
 export function reportSheetMatches(name: string, kind: ReportSheetKind): boolean {
-  if (kind === 'ROLLING') return name.toUpperCase().includes('ROLLING')
+  if (kind === 'ROLLING') return name.trim().toUpperCase() === 'ROLLING'
   if (kind === 'PACKING') {
     const upper = name.toUpperCase()
     return upper.includes('ĐÓNG GÓI') || upper.includes('PACKING')

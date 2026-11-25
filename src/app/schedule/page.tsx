@@ -149,7 +149,7 @@ export default function SchedulePage() {
   const month = viewDate.getMonth()
   const totalDays = daysInMonth(year, month)
   const days = Array.from({ length: totalDays }, (_, i) => i + 1)
-  const monthDays = useMemo(() => Array.from({length:totalDays},(_,i)=>new Date(year,month,i+1)),[year,month,totalDays])
+  const monthDays = useMemo(() => Array.from({ length: totalDays }, (_, i) => new Date(year, month, i + 1)), [year, month, totalDays])
   // [FB 22/10 ý 3] Lịch cùng máy + quy cách + ngày bắt đầu/kết thúc gộp 1 thanh; lưới chỉ vẽ dòng đại diện (members[0]).
   const assignmentGroupList = useMemo(() => assignmentGroups(assignments, scheduleDay), [assignments])
   const groupOf = useMemo(() => {
@@ -162,11 +162,11 @@ export default function SchedulePage() {
     const cells = new Map<string, AssignmentDetail[]>()
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}-`
     for (const assignment of representatives) {
-      const from=scheduleDay(assignment.startDate),to=scheduleDay(assignment.endDate)
-      for(let day=1;day<=totalDays;day++){const label=prefix+String(day).padStart(2,'0');if(label>=from&&label<=to){const key=`${assignment.machineId}|${day}`;const rows=cells.get(key)??[];rows.push(assignment);cells.set(key,rows)}}
+      const from = scheduleDay(assignment.startDate), to = scheduleDay(assignment.endDate)
+      for (let day = 1; day <= totalDays; day++) { const label = prefix + String(day).padStart(2, '0'); if (label >= from && label <= to) { const key = `${assignment.machineId}|${day}`; const rows = cells.get(key) ?? []; rows.push(assignment); cells.set(key, rows) } }
     }
     return cells
-  },[representatives,year,month,totalDays])
+  }, [representatives, year, month, totalDays])
   const lanesByMachine = useMemo(() => {
     const result = new Map<string, { assignment: AssignmentDetail; from: number; to: number; lane: number }[]>()
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}-`
@@ -374,11 +374,11 @@ export default function SchedulePage() {
     <div className="px-container-margin py-xl">
       <div className="mb-lg">
         <h1 className="text-display font-inter font-semibold text-primary tracking-tight">
-          Lịch máy dệt
+          Kế hoạch sản xuất
         </h1>
-        <p className="text-body-md font-noto text-secondary mt-xs">
+        {/* <p className="text-body-md font-noto text-secondary mt-xs">
           Kế hoạch phân công đơn hàng theo máy và ngày
-        </p>
+        </p> */}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-md mb-md">
@@ -452,7 +452,7 @@ export default function SchedulePage() {
                 const weekend = isRestDay(day)
                 const exception = exceptionFor(day)
                 const isHoliday = exception?.kind === 'HOLIDAY'
-                const dow = monthDays[day-1].getDay()
+                const dow = monthDays[day - 1].getDay()
                 const title = exception
                   ? `${KIND_LABEL[exception.kind]}${exception.note ? ` — ${exception.note}` : ''}`
                   : weekend ? 'Ngày nghỉ theo lịch tuần' : 'Ngày làm việc'
@@ -460,9 +460,8 @@ export default function SchedulePage() {
                   <th
                     key={day}
                     style={{ width: dayWidth }}
-                    className={`sticky top-0 py-1.5 text-center font-medium border-r-[0.5px] border-outline-variant/60 last:border-r-0 ${
-                      isHoliday ? 'bg-amber-200 text-on-surface' : weekend ? 'bg-amber-100 text-on-surface' : 'bg-surface-container text-on-surface-variant'
-                    }`}
+                    className={`sticky top-0 py-1.5 text-center font-medium border-r-[0.5px] border-outline-variant/60 last:border-r-0 ${isHoliday ? 'bg-amber-200 text-on-surface' : weekend ? 'bg-amber-100 text-on-surface' : 'bg-surface-container text-on-surface-variant'
+                      }`}
                   >
                     <button
                       ref={editingDay === day ? dayTriggerRef : undefined}
@@ -553,28 +552,28 @@ export default function SchedulePage() {
                             <label title={`Chọn lịch ${pi}`} onClick={event => event.stopPropagation()} className="selection-control bar-checkbox absolute left-1 top-2 z-10 inline-flex h-6 w-6 cursor-pointer items-center justify-center"><input type="checkbox" aria-label={isGroupBar ? `Chọn nhóm ${members.length} dòng ${pi} máy ${machine}` : `Chọn lịch ${pi} máy ${machine}`} checked={chosen} onChange={() => { setTooltip(null); toggleSelection(assignment.id) }} className="h-4 w-4 cursor-pointer accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" /></label>
                             <button data-assignment={assignment.id} type="button" role="gridcell" aria-label={`${machine} — ${pi} — ${scheduleDay(assignment.startDate).split('-').reverse().join('/')} đến ${scheduleDay(assignment.endDate).split('-').reverse().join('/')}`} aria-describedby={tooltip?.assignment.id === assignment.id ? 'assignment-tooltip' : undefined}
                               style={{ width: `min(${span * dayWidth - (placeholder ? 8 : 6)}px, 320px, calc(100cqw - ${MACHINE_COL_WIDTH}px))` }} className="bar-body block min-h-10 px-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary">
-                            <span aria-hidden="true" className="checkbox-space float-left mr-1 h-6 w-6" />
-                            <span data-pi-label className={`block text-xs font-semibold ${viewMode === 'detail' && span >= 2 ? 'whitespace-normal break-words [overflow-wrap:anywhere]' : 'truncate'}`}>
-                              <span>{placeholder ? draft ? 'NHÁP' : 'GIỮ CHỖ' : fullLabel}</span>
-                            </span>
-                            <span className={`bar-extra mt-1 block text-[11px] ${placeholder && viewMode === 'detail' && span >= 2 ? 'break-words [overflow-wrap:anywhere]' : 'truncate'}`}>
-                              {placeholder ? pi : `${spec ? `${spec} · ` : ''}Phân công: ${allocation}`}
-                            </span>
+                              <span aria-hidden="true" className="checkbox-space float-left mr-1 h-6 w-6" />
+                              <span data-pi-label className={`block text-xs font-semibold ${viewMode === 'detail' && span >= 2 ? 'whitespace-normal break-words [overflow-wrap:anywhere]' : 'truncate'}`}>
+                                <span>{placeholder ? draft ? 'NHÁP' : 'GIỮ CHỖ' : fullLabel}</span>
+                              </span>
+                              <span className={`bar-extra mt-1 block text-[11px] ${placeholder && viewMode === 'detail' && span >= 2 ? 'break-words [overflow-wrap:anywhere]' : 'truncate'}`}>
+                                {placeholder ? pi : `${spec ? `${spec} · ` : ''}Phân công: ${allocation}`}
+                              </span>
                             </button>
                           </div>
                         </div>
-                        {tooltip?.assignment.id === assignment.id && <div data-assignment-tooltip onMouseEnter={keepTooltip} onMouseLeave={hideTooltip} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setTooltip(null) }} onKeyDown={event => { if (event.key === 'Escape') { document.querySelector<HTMLButtonElement>(`[data-assignment="${assignment.id}"]`)?.focus(); setTooltip(null) } }} className="fixed z-40 max-w-[350px] overflow-auto rounded border border-outline-variant bg-white p-3 text-xs text-on-surface shadow-lg" style={{ left: tooltip.left, top: tooltip.top, transform: tooltip.above ? 'translateY(-100%)' : undefined, maxHeight: tooltip.above ? `${Math.max(0, tooltip.top - 8)}px` : `calc(100vh - ${tooltip.top + 8}px)` }}>
-                          <div id="assignment-tooltip" role="tooltip">
-                          <p className="break-words font-semibold">{pi} · Dòng {lineLabel(assignment.order)}{assignment.order.meshType ? ` · ${assignment.order.meshType}` : ''}</p>
-                          <p className="mt-1">{assignment.order.customer}</p>
-                          <p className="mt-1">Loại lưới: {assignment.order.meshType?.trim() || '—'}</p>
-                          <p className="mt-1">Tên sản phẩm: {assignment.order.description?.trim() || '—'}</p>
-                          <p className="mt-1">{formatLineSpec(assignment.order) || 'Quy cách chưa có dữ liệu'}</p>
-                          <p className="mt-1">Tổng dòng: {formatOrderTotalMeters(assignment.order)} · Phân công: {allocation}</p>
-                          <p className="mt-1">{machine} · {scheduleDay(assignment.startDate).split('-').reverse().join('/')} → {scheduleDay(assignment.endDate).split('-').reverse().join('/')}</p>
-                          </div>
-                          <button type="button" onClick={() => { document.querySelector<HTMLButtonElement>(`[data-assignment="${assignment.id}"]`)?.focus(); setTooltip(null); setSelectedPi(pi) }} className="mt-2 text-primary underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Xem toàn bộ PI</button>
-                        </div>}
+                          {tooltip?.assignment.id === assignment.id && <div data-assignment-tooltip onMouseEnter={keepTooltip} onMouseLeave={hideTooltip} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setTooltip(null) }} onKeyDown={event => { if (event.key === 'Escape') { document.querySelector<HTMLButtonElement>(`[data-assignment="${assignment.id}"]`)?.focus(); setTooltip(null) } }} className="fixed z-40 max-w-[350px] overflow-auto rounded border border-outline-variant bg-white p-3 text-xs text-on-surface shadow-lg" style={{ left: tooltip.left, top: tooltip.top, transform: tooltip.above ? 'translateY(-100%)' : undefined, maxHeight: tooltip.above ? `${Math.max(0, tooltip.top - 8)}px` : `calc(100vh - ${tooltip.top + 8}px)` }}>
+                            <div id="assignment-tooltip" role="tooltip">
+                              <p className="break-words font-semibold">{pi} · Dòng {lineLabel(assignment.order)}{assignment.order.meshType ? ` · ${assignment.order.meshType}` : ''}</p>
+                              <p className="mt-1">{assignment.order.customer}</p>
+                              <p className="mt-1">Loại lưới: {assignment.order.meshType?.trim() || '—'}</p>
+                              <p className="mt-1">Tên sản phẩm: {assignment.order.description?.trim() || '—'}</p>
+                              <p className="mt-1">{formatLineSpec(assignment.order) || 'Quy cách chưa có dữ liệu'}</p>
+                              <p className="mt-1">Tổng dòng: {formatOrderTotalMeters(assignment.order)} · Phân công: {allocation}</p>
+                              <p className="mt-1">{machine} · {scheduleDay(assignment.startDate).split('-').reverse().join('/')} → {scheduleDay(assignment.endDate).split('-').reverse().join('/')}</p>
+                            </div>
+                            <button type="button" onClick={() => { document.querySelector<HTMLButtonElement>(`[data-assignment="${assignment.id}"]`)?.focus(); setTooltip(null); setSelectedPi(pi) }} className="mt-2 text-primary underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Xem toàn bộ PI</button>
+                          </div>}
                         </Fragment>
                       })}
                       {!isLoading && days.map(day => {
@@ -622,13 +621,13 @@ export default function SchedulePage() {
           </div>
         </div>
       </div>}
-      {selectedPi&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closePi}><div ref={piModalRef} role="dialog" aria-modal="true" aria-label={`PI ${selectedPi}`} onClick={event=>event.stopPropagation()} className="max-h-[90vh] w-full max-w-5xl overflow-auto rounded-xl border border-outline-variant bg-white p-4"><button type="button" onClick={closePi} className="rounded border border-outline-variant px-3 py-2 text-xs">Đóng</button><PiOrderPanel piNumber={selectedPi}/></div></div>}
+      {selectedPi && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closePi}><div ref={piModalRef} role="dialog" aria-modal="true" aria-label={`PI ${selectedPi}`} onClick={event => event.stopPropagation()} className="max-h-[90vh] w-full max-w-5xl overflow-auto rounded-xl border border-outline-variant bg-white p-4"><button type="button" onClick={closePi} className="rounded border border-outline-variant px-3 py-2 text-xs">Đóng</button><PiOrderPanel piNumber={selectedPi} /></div></div>}
 
       {editSnapshot && <BulkEditModal selected={editSnapshot} initialCommand={editCommand} onClose={closeBulkEdit} onStale={() => { setEditSnapshot(null); setSelectedIds(new Set()); toast.error('Lịch đã thay đổi, tải lại và chọn lại'); void fetchAssignments() }} onSuccess={updated => { setEditSnapshot(null); setSelectedIds(new Set()); toast.success(`Đã sửa ${updated.toLocaleString('vi-VN')} lịch`); void fetchAssignments() }} />}
 
-      <AssignModal 
-        isOpen={isAssignOpen} 
-        onClose={() => setIsAssignOpen(false)} 
+      <AssignModal
+        isOpen={isAssignOpen}
+        onClose={() => setIsAssignOpen(false)}
         machineId={selectedMachine}
         startDate={selectedDate}
         onSuccess={fetchAssignments}

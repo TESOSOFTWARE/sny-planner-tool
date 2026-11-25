@@ -59,8 +59,8 @@ export async function compressStoredZip(bytes: ArrayBuffer): Promise<ArrayBuffer
 }
 
 /** No formulas are evaluated: cached values and the selected sheet objects are retained. */
-export async function uploadTrim(file: File, keepSheet: (name: string) => boolean): Promise<File> {
-  if (file.size <= TRIM_THRESHOLD_BYTES) return file
+export async function uploadTrim(file: File, keepSheet: (name: string) => boolean, force = false): Promise<File> {
+  if (!force && file.size <= TRIM_THRESHOLD_BYTES) return file
   const XLSX = await import('xlsx')
   const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellNF: true, cellDates: false })
   const names = workbook.SheetNames.filter(keepSheet)
@@ -89,6 +89,21 @@ export async function prepareReportUpload(file: File, kind: ReportSheetKind): Pr
   if (upload.size > MAX_REPORT_UPLOAD_BYTES) {
     const sheet = kind === 'PACKING' ? 'ĐÓNG GÓI' : kind
     throw new ReportUploadError(`File quá lớn để tải lên (${(upload.size / 1_000_000).toFixed(2)} MB). Hãy lưu file chỉ giữ sheet ${sheet} rồi thử lại.`)
+  }
+  return upload
+}
+
+/** Retain only the five manager-selected Statistical Report sheets before upload. */
+export async function prepareStatisticalReportUpload(file: File): Promise<File> {
+  const selected: ReportSheetKind[] = ['HDPE', 'EXTRUDER', 'WARPING', 'KNITTING', 'ROLLING']
+  let upload: File
+  try {
+    upload = await uploadTrim(file, name => selected.some(kind => reportSheetMatches(name, kind)), true)
+  } catch {
+    throw new ReportUploadError('Không thể đọc file Excel. Vui lòng kiểm tra file rồi thử lại.')
+  }
+  if (upload.size > MAX_REPORT_UPLOAD_BYTES) {
+    throw new ReportUploadError(`File sau khi giữ 5 sheet báo cáo vẫn vượt giới hạn ${(MAX_REPORT_UPLOAD_BYTES / 1_000_000).toFixed(2)} MB. Hãy giảm ảnh/dữ liệu phụ trong file rồi thử lại.`)
   }
   return upload
 }

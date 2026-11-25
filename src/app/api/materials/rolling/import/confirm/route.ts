@@ -9,6 +9,7 @@ import { rollingPeriodFromFileName, validateRollingPeriod } from '@/lib/material
 import { rollingImportSnapshot } from '@/lib/materials/rollingImportSnapshot'
 import { acknowledgesRollingLosses, compareRollingDays, rollingLosses } from '@/lib/materials/rollingImportSafety'
 import { assertHandoffsCoveredAfterImport, HandoffImportConflict } from '@/lib/production/handoffs'
+import { assertProductionImportAttempt, markProductionImportAttemptCommitted, ProductionImportAttemptError, ProductionImportAttemptReplayError } from '@/lib/production/importAttempt'
 
 // In-memory Mutex to prevent overlapping concurrent rolling imports
 let isRollingImportInProgress = false
@@ -28,6 +29,10 @@ export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData()
     const file = formData.get('file') as File | null
+    const importBatchId = String(formData.get('importBatchId') ?? '')
+    const importAttemptToken = String(formData.get('importAttemptToken') ?? '')
+    if (Boolean(importBatchId) !== Boolean(importAttemptToken)) return NextResponse.json({ success: false, error: 'Thông tin phiên import không đầy đủ.' }, { status: 422 })
+    const importAttempt = importBatchId ? { batchId: importBatchId, token: importAttemptToken, sheet: 'ROLLING' as const } : undefined
 
     if (!(file instanceof Blob) || typeof file.name !== 'string') {
       return NextResponse.json({ success: false, error: 'Vui lòng đính kèm file Excel để xác nhận import.' }, { status: 400 })
@@ -42,6 +47,9 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(bytes)
 
     const parseResult = parseRollingReport(buffer, file.name, period)
+    const invalidPopulatedBlocks = parseResult.dateBlockMappings.filter(block => !block.isoDate && block.hasData)
+    if (invalidPopulatedBlocks.length) return NextResponse.json({ success: false, error: 'Có khối Rolling chứa số liệu nhưng ngày không hợp lệ; chưa nhập dữ liệu.', skippedDateBlocks: invalidPopulatedBlocks }, { status: 422 })
+    if (parseResult.invalidMetrics.length) return NextResponse.json({ success: false, error: `Có ${parseResult.invalidMetrics.length} ô sản lượng âm hoặc không phải số; chưa nhập dữ liệu.`, invalidMetrics: parseResult.invalidMetrics }, { status: 422 })
 
     const expectedSnapshot = rollingImportSnapshot(buffer, period)
     if (formData.get('expectedSnapshot') !== expectedSnapshot) return NextResponse.json({ success: false, error: 'File hoặc kỳ đã thay đổi. Vui lòng xem trước lại.' }, { status: 409 })
@@ -94,6 +102,7 @@ export async function POST(req: NextRequest) {
 
     // Execute deletion of exact scope and batch insertion atomically inside transaction
     const result = await prisma.$transaction(async (tx) => {
+      await assertProductionImportAttempt(tx, importAttempt)
       await tx.$executeRaw`SET LOCAL lock_timeout = '5s'`
       await tx.$executeRaw`LOCK TABLE "rolling_daily_metrics" IN SHARE ROW EXCLUSIVE MODE`
       const existing = await tx.rollingDailyMetric.findMany({
@@ -123,11 +132,13 @@ export async function POST(req: NextRequest) {
         count += res.count
       }
 
-      return {
+      const receipt = {
         blocked: false as const,
         deletedCount: deleteRes.count,
         insertedCount: count,
       }
+      await markProductionImportAttemptCommitted(tx, importAttempt, { recordsDeleted: receipt.deletedCount, recordsInserted: receipt.insertedCount, datesScoped: targetDates.length })
+      return receipt
     }, { timeout: 60_000, maxWait: 5_000 })
 
     if (result.blocked) return NextResponse.json({ success: false, error: 'Có mã ORDER sẽ mất dữ liệu Rolling hoặc danh sách đã thay đổi. Vui lòng kiểm tra và xác nhận lại.', replacementDays: result.replacementDays }, { status: 409 })
@@ -141,6 +152,8 @@ export async function POST(req: NextRequest) {
       fileName: file.name,
     })
   } catch (error: any) {
+    if (error instanceof ProductionImportAttemptReplayError) return NextResponse.json({ success: true, ...error.receipt, replayed: true })
+    if (error instanceof ProductionImportAttemptError) return NextResponse.json({ success: false, code: 'IMPORT_ATTEMPT_EXPIRED', error: error.message }, { status: 409 })
     if (error instanceof RollingDateConflictError) return NextResponse.json({ success: false, error: error.message }, { status: 422 })
     if (error instanceof HandoffImportConflict) return NextResponse.json({ success: false, code: 'HANDOFF_ACTUAL_CONFLICT', error: error.message }, { status: 409 })
     console.error('Error confirming rolling import:', error)

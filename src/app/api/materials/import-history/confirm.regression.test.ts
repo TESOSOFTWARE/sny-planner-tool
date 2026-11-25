@@ -52,6 +52,8 @@ test('preview is read only; confirm writes snapshot and stock', async () => {
   assert.equal(pre.status, 200)
   const body = await pre.json()
   assert.equal(body.counts.new, 1)
+  assert.equal(body.rows.length, 1)
+  assert.equal(body.rows[0].sourceRow, 4)
   assert.equal(snapshots.length, 0)
   assert.equal(updates.length, 0)
   const result = await confirm(request(body.expectedSnapshot))

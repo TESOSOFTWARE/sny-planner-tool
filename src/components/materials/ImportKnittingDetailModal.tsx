@@ -26,6 +26,10 @@ interface PreviewRow {
   avgPerRoll:     number | null
   quantity:       number | null
   weightKgs:      number
+  sourceWeight?:  string
+  sourceRow?:     number
+  isValid?:       boolean
+  validationErrors?: string[]
   orderRef:       string | null
   sourceOrderRefs?: string[]
   machineNote:    string | null
@@ -70,7 +74,9 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
   const [successMsg, setSuccessMsg] = useState('')
   const [remarkValues, setRemarkValues] = useState<RemarkValue[]>([])
   const [decisions, setDecisions] = useState<Record<string, RemarkDecision['target']>>({})
-  const unknownValues = remarkValues.filter(value => value.status === 'UNKNOWN')
+  const invalidRows = preview?.rows.filter(row => row.isValid === false || Boolean(row.validationErrors?.length)) ?? []
+  const validRemarkKeys = new Set((preview?.rows ?? []).filter(row => row.isValid !== false && !row.validationErrors?.length).flatMap(row => row.sourceOrderRefs ?? []).map(remarkKey))
+  const unknownValues = remarkValues.filter(value => value.status === 'UNKNOWN' && validRemarkKeys.has(remarkKey(value.value)))
   const choicesComplete = unknownValues.length <= 200 && unknownValues.every(value => decisions[remarkKey(value.value)])
 
   const handlePreview = async () => {
@@ -99,7 +105,7 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
   }
 
   const handleConfirm = async () => {
-    if (!preview || !choicesComplete || isLoading) return
+    if (!preview || !choicesComplete || isLoading || invalidRows.length > 0) return
     setError(null)
     setIsLoading(true)
 
@@ -214,6 +220,7 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
                   </label>)}</div>
                 </fieldset>)}
               </section>}
+              {invalidRows.length > 0 && <div role="alert" className="rounded-lg border border-error/40 bg-error-container/30 p-3 text-sm text-error"><p className="font-medium">Có {invalidRows.length} dòng lỗi; chưa thể thay dữ liệu cũ.</p><ul className="mt-2 list-disc pl-5">{invalidRows.map((row, index) => <li key={`${row.sourceRow ?? index}:${index}`}>Dòng Excel {row.sourceRow ?? '—'}: {row.validationErrors?.join('; ') || 'Dữ liệu không hợp lệ'} · WEIGHT nguồn: {row.sourceWeight ?? '—'}</li>)}</ul></div>}
               <div className="grid grid-cols-4 gap-3">
                 <div className="bg-surface-container rounded-lg p-3 text-center">
                   <p className="text-2xl font-semibold text-primary tabular-nums">{preview.totalRecords}</p>
@@ -321,7 +328,7 @@ export default function ImportKnittingDetailModal({ onImported, onClose }: Props
                   </button>
                   <button
                     onClick={handleConfirm}
-                    disabled={isLoading || !choicesComplete}
+                    disabled={isLoading || !choicesComplete || invalidRows.length > 0}
                     className="px-5 py-2 bg-primary text-on-primary rounded-md text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
                   >
                     {isLoading && (

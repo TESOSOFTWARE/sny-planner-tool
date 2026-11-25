@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import * as XLSX from 'xlsx'
 import { parseWarpingReport } from './parseWarpingReport'
 
-type Block = { date?: number; company?: string; color?: string; weight?: number }
+type Block = { date?: number; company?: string; color?: string; weight?: number | string }
 function fixture(blocks: Block[]): Buffer {
   const rows: unknown[][] = []
   for (const block of blocks) {
@@ -42,4 +42,11 @@ test('preserves legacy company-header workbook', () => {
   const rows = parseWarpingReport(fixture([{ date: 46146, color: 'BLACK', weight: 4 }]))
   assert.equal(rows.length, 1)
   assert.equal(rows[0].weightKgs, 4)
+})
+test('invalid Warping output keeps its Excel row and validation errors', () => {
+  const rows = parseWarpingReport(fixture([{ date: 46310, color: '', weight: 'not-a-number' }]))
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].sourceRow, 7)
+  assert.equal(rows[0].isValid, false)
+  assert.deepEqual(rows[0].validationErrors, ['Thiếu COLOR', 'WEIGHT thiếu hoặc không phải số'])
 })

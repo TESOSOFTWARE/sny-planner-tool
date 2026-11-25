@@ -31,7 +31,9 @@ export function productionPi(value: unknown, knownPis?: readonly string[]): stri
   const text = textOf(value), core = withoutAnnotation(text)
   // Keep unlinked references for preview, including 25KGI201, KSSNY19AR1,
   // GST 26-2 and OVS26-1(PO# NY3543). Confirm resolves against known PIs.
-  const code = /^[A-Z0-9]+(?:[-./][A-Z0-9]+)*$/i.test(core)
-    || /^[A-Z][A-Z0-9]*\s+\d+(?:[-./][A-Z0-9]+)*$/i.test(core)
+  // Keep composite source references such as `ALROBOO26-8+9` intact. A `+`
+  // is part of the literal source code here; it is never split into two PIs.
+  const code = /^[A-Z0-9]+(?:[-./+][A-Z0-9]+)*$/i.test(core)
+    || /^[A-Z][A-Z0-9]*\s+\d+(?:[-./+][A-Z0-9]+)*$/i.test(core)
   return code && /[A-Z]/i.test(core) && /\d/.test(core) ? text : null
 }
