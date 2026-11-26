@@ -15,10 +15,9 @@ type PlanRow = { key: string; orderRef: string | null; orderId: string | null; c
 const normalize = (value: string | null) => value?.trim().toUpperCase().replace(/\s+/g, ' ') ?? ''
 const format = (value: number) => value.toLocaleString('vi-VN', { maximumFractionDigits: 2 })
 
-export default function ProductionPlanCalendar({ yearMonth, stage, onStageChange, refreshToken = 0 }: {
+export default function ProductionPlanCalendar({ yearMonth, stage, refreshToken = 0 }: {
   yearMonth: string
   stage: PlanStage
-  onStageChange: (stage: PlanStage) => void
   refreshToken?: number
 }) {
   const [plans, setPlans] = useState<Plan[]>([])
@@ -64,15 +63,12 @@ export default function ProductionPlanCalendar({ yearMonth, stage, onStageChange
 
   return <section aria-labelledby="stage-plan-calendar-title" className="mb-5 rounded-lg border border-outline-variant bg-surface-container-lowest p-3 shadow-sm md:p-4">
     <div className="flex flex-wrap items-end gap-3">
-      <div className="mr-auto"><h2 id="stage-plan-calendar-title" className="text-base font-semibold text-primary">Kế hoạch theo PI · {yearMonth.split('-').reverse().join('/')}</h2><p className="mt-1 text-xs text-secondary">Các dòng kế hoạch cùng PI được gom theo màu, chỉ tiêu và đơn vị; máy/ca hiển thị trong từng ngày.</p></div>
-      <label className="text-sm">Công đoạn<select className="ml-2 rounded border border-outline px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" value={stage} onChange={event => onStageChange(event.target.value as PlanStage)}>
-        <option value="extruder">Kéo sợi</option><option value="warping">Quấn chỉ / Mắc sợi</option><option value="knitting">Dệt</option><option value="rolling">Đóng gói cuộn</option><option value="packing">Đóng gói</option>
-      </select></label>
+      <div className="mr-auto"><h2 id="stage-plan-calendar-title" className="text-base font-semibold text-primary">Kế hoạch nhập trực tiếp trên web · {yearMonth.split('-').reverse().join('/')}</h2><p className="mt-1 text-xs text-secondary">Kế hoạch Excel được hiển thị riêng ở khung phía trên theo đúng cấu trúc từng công đoạn.</p></div>
       <button type="button" className="rounded border border-outline px-3 py-2 text-sm disabled:opacity-50" disabled={loading} onClick={() => setReload(value => value + 1)}>{loading ? 'Đang tải…' : 'Tải lại kế hoạch'}</button>
     </div>
     {error ? <p role="alert" className="mt-3 text-sm text-error">{error}<button type="button" className="ml-3 underline" onClick={() => setReload(value => value + 1)}>Thử lại</button></p>
       : loading ? <p role="status" className="mt-3 text-sm">Đang tải kế hoạch…</p>
-        : !rows.length ? <p role="status" className="mt-3 text-sm text-secondary">Chưa có kế hoạch đã lưu cho công đoạn này trong tháng.</p>
+        : !rows.length ? <p role="status" className="mt-3 text-sm text-secondary">Chưa có kế hoạch nhập trực tiếp trên web cho công đoạn này trong tháng.</p>
           : <div data-plan-calendar-scroll className="mt-3 max-h-[48vh] overflow-auto rounded border border-outline-variant"><table className="w-full min-w-max border-separate border-spacing-0 text-xs"><thead className="sticky top-0 z-10 bg-surface-container"><tr>
             <th scope="col" className="sticky left-0 z-20 min-w-40 border-b border-r border-outline-variant bg-surface-container p-2 text-left">PI / dòng hàng</th>
             <th scope="col" className="min-w-28 border-b border-outline-variant p-2 text-left">Màu</th>

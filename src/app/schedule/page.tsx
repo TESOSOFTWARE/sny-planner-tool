@@ -20,6 +20,7 @@ import AssignmentListView, { SelectionCheckbox } from '@/components/schedule/Ass
 import { canBulkEditAssignment, selectAssignments, selectionState } from '@/lib/schedule/assignmentSelection'
 import { assignmentGroups, expandToGroups } from '@/lib/schedule/specGroup'
 import ProductionPlanCalendar from '@/components/schedule/ProductionPlanCalendar'
+import StagePlanImportWorkspace from '@/components/schedule/StagePlanImportWorkspace'
 import { ProductionPlanEntryWorkspace } from '@/components/orders/ProductionRecordsWorkspace'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -206,6 +207,11 @@ export default function SchedulePage() {
   useDismissable(editingDay !== null, closeDayMenu, dayMenuRef, dayTriggerRef)
   const [calendarRuleSaved, setCalendarRuleSaved] = useState(false)
   const yearMonth = `${year}-${String(month + 1).padStart(2, '0')}`
+  const handlePlanScopeDetected = useCallback((scopeKey: string) => {
+    const match = scopeKey.match(/^(20\d{2})-(0[1-9]|1[0-2])$/)
+    if (!match) return
+    setViewDate(current => current.getFullYear() === Number(match[1]) && current.getMonth() === Number(match[2]) - 1 ? current : new Date(Number(match[1]), Number(match[2]) - 1, 1))
+  }, [])
   assignmentPeriod.current = yearMonth
   useEffect(() => { setSelectedIds(new Set()); setRemovalSnapshot(null); setEditSnapshot(null); setDeleteOrders(null) }, [yearMonth])
   useEffect(() => {
@@ -413,19 +419,19 @@ export default function SchedulePage() {
           <div role="group" aria-label="Chế độ xem lịch" className="flex rounded border border-outline-variant">
             {(['detail', 'overview', 'list'] as const).map(mode => <button key={mode} type="button" aria-pressed={viewMode === mode} onClick={() => changeView(mode)} className={`px-3 py-1.5 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${viewMode === mode ? 'bg-primary text-white' : 'bg-white text-primary'}`}>{mode === 'detail' ? 'Chi tiết' : mode === 'list' ? 'Danh sách' : 'Tổng quan'}</button>)}
           </div>
-          {viewMode !== 'list' && <details className="selection-menu relative" onKeyDown={event => { if (event.key === 'Escape' && event.currentTarget.open) { event.nativeEvent.stopImmediatePropagation(); event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus() } }}>
+          {planStage === 'knitting' && viewMode !== 'list' && <details className="selection-menu relative" onKeyDown={event => { if (event.key === 'Escape' && event.currentTarget.open) { event.nativeEvent.stopImmediatePropagation(); event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus() } }}>
             <summary aria-label="Chọn lịch" className="flex cursor-pointer items-center gap-2 rounded-md border border-primary px-3 py-2 text-sm text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Chọn lịch<span aria-hidden="true" className="h-1.5 w-1.5 rotate-45 border-b border-r border-current" /></summary>
             <div className="absolute right-0 z-50 mt-1 w-72 rounded border border-outline-variant bg-white p-1 shadow-lg">
               <button type="button" disabled={isLoading || !!assignmentError} onClick={event => { selectMonth(true); event.currentTarget.closest('details')?.removeAttribute('open'); event.currentTarget.closest('details')?.querySelector('summary')?.focus() }} className="block w-full rounded px-3 py-2 text-left text-sm hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50">Chọn tất cả lịch trong tháng</button>
             </div>
           </details>}
-          <button
+          {planStage === 'knitting' && <button
             onClick={() => setIsImportOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-container border border-outline-variant hover:bg-surface-container-high text-xs font-medium text-on-surface transition-colors"
           >
             <span className="material-symbols-outlined text-[16px] text-primary">upload_file</span>
             Nhập lịch tháng
-          </button>
+          </button>}
           <p className="text-label-sm font-inter text-secondary">
             {totalDays} ngày · {MACHINES.length} máy
           </p>
@@ -433,21 +439,37 @@ export default function SchedulePage() {
       </div>
 
       <section aria-label="Kế hoạch sản xuất theo công đoạn" className="mb-md space-y-3">
+        <label className="inline-flex items-center gap-2 text-sm font-medium">Công đoạn
+          <select className="rounded border border-outline px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" value={planStage} onChange={event => setPlanStage(event.target.value as typeof planStage)}>
+            <option value="extruder">Kéo sợi</option><option value="warping">Mắc sợi</option><option value="knitting">Dệt</option><option value="rolling">Cuộn</option><option value="packing">Đóng gói</option>
+          </select>
+        </label>
+        <StagePlanImportWorkspace
+          selectedStage={planStage}
+          yearMonth={yearMonth}
+          refreshToken={planRefreshToken}
+          onImportSaved={(scopeKey) => {
+            setPlanRefreshToken(value => value + 1)
+            handlePlanScopeDetected(scopeKey)
+          }}
+          onScopeDetected={handlePlanScopeDetected}
+        />
         <details className="rounded-lg border border-outline-variant bg-surface-container-lowest p-3 shadow-sm">
-          <summary className="cursor-pointer text-sm font-semibold text-primary">Nhập kế hoạch thủ công cho {formatMonthLabel(viewDate)}</summary>
-          <div className="mt-3 border-t border-outline-variant pt-3">
+          <summary className="cursor-pointer text-sm font-semibold text-primary">Tùy chọn nâng cao: nhập kế hoạch trực tiếp trên web</summary>
+          <div className="mt-3 space-y-3 border-t border-outline-variant pt-3">
             <ProductionPlanEntryWorkspace
               selectedStage={planStage}
               selectedDate={`${yearMonth}-01`}
               onStageChange={setPlanStage}
               onPlanSaved={() => setPlanRefreshToken(value => value + 1)}
+              hideStageSelector
             />
+            <ProductionPlanCalendar yearMonth={yearMonth} stage={planStage} refreshToken={planRefreshToken} />
           </div>
         </details>
-        <ProductionPlanCalendar yearMonth={yearMonth} stage={planStage} onStageChange={setPlanStage} refreshToken={planRefreshToken} />
       </section>
 
-      <h2 className="mb-sm text-base font-semibold text-primary">Lịch phân công máy dệt</h2>
+      <h2 className="mb-sm text-base font-semibold text-primary">Lịch phân công máy dệt (Dệt)</h2>
       {viewMode === 'list' && hasSelection && selectionToolbar}
       {viewMode !== 'list' && <div aria-label="Chú giải lịch máy" className="mb-sm flex flex-wrap items-center gap-md text-xs text-on-surface-variant">
         <span className="inline-flex items-center gap-1"><span className="h-3 w-3 border border-outline-variant bg-white" />Ngày làm</span>

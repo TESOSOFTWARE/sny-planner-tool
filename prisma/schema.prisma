@@ -462,6 +462,45 @@ model ProductionPlanRevision {
   @@map("production_plan_revisions")
 }
 
+// Stage-specific source snapshots; raw values are kept when no numeric/unit mapping is confirmed.
+model ProductionStagePlanImportBatch {
+  id         String   @id @default(cuid())
+  stage      String
+  profile    String
+  scopeKey   String
+  fileName   String
+  fileHash   String   @db.VarChar(64)
+  status     String   @default("CONFIRMED")
+  summary    Json     @default("{}")
+  createdAt  DateTime @default(now())
+  confirmedAt DateTime @default(now())
+  rows       ProductionStagePlanImportRow[]
+
+  @@unique([fileHash, profile, scopeKey], map: "production_stage_plan_import_batches_file_profile_scope_key")
+  @@index([stage, profile, scopeKey, confirmedAt], map: "prod_stage_plan_batch_scope_confirmed_idx")
+  @@map("production_stage_plan_import_batches")
+}
+
+model ProductionStagePlanImportRow {
+  id          String   @id @default(cuid())
+  batchId     String
+  batch       ProductionStagePlanImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  sourceKey   String   @db.VarChar(64)
+  sourceSheet String
+  sourceRow   Int
+  planDate    DateTime? @db.Date
+  machineLabel String?
+  orderRef    String?
+  displayData Json
+  warnings    Json     @default("[]")
+  createdAt   DateTime @default(now())
+
+  @@unique([batchId, sourceKey], map: "production_stage_plan_import_rows_batch_source_key")
+  @@index([batchId, planDate])
+  @@index([sourceSheet, sourceRow])
+  @@map("production_stage_plan_import_rows")
+}
+
 model ProductionOrderAttachment {
   id        String   @id @default(cuid())
   orderId   String
