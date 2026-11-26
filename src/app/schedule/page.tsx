@@ -19,6 +19,9 @@ import BulkEditModal from '@/components/schedule/BulkEditModal'
 import AssignmentListView, { SelectionCheckbox } from '@/components/schedule/AssignmentListView'
 import { canBulkEditAssignment, selectAssignments, selectionState } from '@/lib/schedule/assignmentSelection'
 import { assignmentGroups, expandToGroups } from '@/lib/schedule/specGroup'
+import ProductionPlanCalendar from '@/components/schedule/ProductionPlanCalendar'
+import StagePlanImportWorkspace from '@/components/schedule/StagePlanImportWorkspace'
+import { ProductionPlanEntryWorkspace } from '@/components/orders/ProductionRecordsWorkspace'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -45,6 +48,8 @@ export default function SchedulePage() {
     const now = new Date()
     return new Date(now.getFullYear(), now.getMonth(), 1)
   })
+  const [planStage, setPlanStage] = useState<'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing'>('extruder')
+  const [planRefreshToken, setPlanRefreshToken] = useState(0)
 
   const [assignments, setAssignments] = useState<(AssignmentDetail & { updatedAt: string })[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -149,7 +154,7 @@ export default function SchedulePage() {
   const month = viewDate.getMonth()
   const totalDays = daysInMonth(year, month)
   const days = Array.from({ length: totalDays }, (_, i) => i + 1)
-  const monthDays = useMemo(() => Array.from({length:totalDays},(_,i)=>new Date(year,month,i+1)),[year,month,totalDays])
+  const monthDays = useMemo(() => Array.from({ length: totalDays }, (_, i) => new Date(year, month, i + 1)), [year, month, totalDays])
   // [FB 22/10 ý 3] Lịch cùng máy + quy cách + ngày bắt đầu/kết thúc gộp 1 thanh; lưới chỉ vẽ dòng đại diện (members[0]).
   const assignmentGroupList = useMemo(() => assignmentGroups(assignments, scheduleDay), [assignments])
   const groupOf = useMemo(() => {
@@ -162,11 +167,11 @@ export default function SchedulePage() {
     const cells = new Map<string, AssignmentDetail[]>()
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}-`
     for (const assignment of representatives) {
-      const from=scheduleDay(assignment.startDate),to=scheduleDay(assignment.endDate)
-      for(let day=1;day<=totalDays;day++){const label=prefix+String(day).padStart(2,'0');if(label>=from&&label<=to){const key=`${assignment.machineId}|${day}`;const rows=cells.get(key)??[];rows.push(assignment);cells.set(key,rows)}}
+      const from = scheduleDay(assignment.startDate), to = scheduleDay(assignment.endDate)
+      for (let day = 1; day <= totalDays; day++) { const label = prefix + String(day).padStart(2, '0'); if (label >= from && label <= to) { const key = `${assignment.machineId}|${day}`; const rows = cells.get(key) ?? []; rows.push(assignment); cells.set(key, rows) } }
     }
     return cells
-  },[representatives,year,month,totalDays])
+  }, [representatives, year, month, totalDays])
   const lanesByMachine = useMemo(() => {
     const result = new Map<string, { assignment: AssignmentDetail; from: number; to: number; lane: number }[]>()
     const prefix = `${year}-${String(month + 1).padStart(2, '0')}-`
@@ -202,6 +207,11 @@ export default function SchedulePage() {
   useDismissable(editingDay !== null, closeDayMenu, dayMenuRef, dayTriggerRef)
   const [calendarRuleSaved, setCalendarRuleSaved] = useState(false)
   const yearMonth = `${year}-${String(month + 1).padStart(2, '0')}`
+  const handlePlanScopeDetected = useCallback((scopeKey: string) => {
+    const match = scopeKey.match(/^(20\d{2})-(0[1-9]|1[0-2])$/)
+    if (!match) return
+    setViewDate(current => current.getFullYear() === Number(match[1]) && current.getMonth() === Number(match[2]) - 1 ? current : new Date(Number(match[1]), Number(match[2]) - 1, 1))
+  }, [])
   assignmentPeriod.current = yearMonth
   useEffect(() => { setSelectedIds(new Set()); setRemovalSnapshot(null); setEditSnapshot(null); setDeleteOrders(null) }, [yearMonth])
   useEffect(() => {
@@ -374,11 +384,11 @@ export default function SchedulePage() {
     <div className="px-container-margin py-xl">
       <div className="mb-lg">
         <h1 className="text-display font-inter font-semibold text-primary tracking-tight">
-          Lịch máy dệt
+          Kế hoạch sản xuất
         </h1>
-        <p className="text-body-md font-noto text-secondary mt-xs">
+        {/* <p className="text-body-md font-noto text-secondary mt-xs">
           Kế hoạch phân công đơn hàng theo máy và ngày
-        </p>
+        </p> */}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-md mb-md">
@@ -409,25 +419,57 @@ export default function SchedulePage() {
           <div role="group" aria-label="Chế độ xem lịch" className="flex rounded border border-outline-variant">
             {(['detail', 'overview', 'list'] as const).map(mode => <button key={mode} type="button" aria-pressed={viewMode === mode} onClick={() => changeView(mode)} className={`px-3 py-1.5 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${viewMode === mode ? 'bg-primary text-white' : 'bg-white text-primary'}`}>{mode === 'detail' ? 'Chi tiết' : mode === 'list' ? 'Danh sách' : 'Tổng quan'}</button>)}
           </div>
-          {viewMode !== 'list' && <details className="selection-menu relative" onKeyDown={event => { if (event.key === 'Escape' && event.currentTarget.open) { event.nativeEvent.stopImmediatePropagation(); event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus() } }}>
+          {planStage === 'knitting' && viewMode !== 'list' && <details className="selection-menu relative" onKeyDown={event => { if (event.key === 'Escape' && event.currentTarget.open) { event.nativeEvent.stopImmediatePropagation(); event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus() } }}>
             <summary aria-label="Chọn lịch" className="flex cursor-pointer items-center gap-2 rounded-md border border-primary px-3 py-2 text-sm text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Chọn lịch<span aria-hidden="true" className="h-1.5 w-1.5 rotate-45 border-b border-r border-current" /></summary>
             <div className="absolute right-0 z-50 mt-1 w-72 rounded border border-outline-variant bg-white p-1 shadow-lg">
               <button type="button" disabled={isLoading || !!assignmentError} onClick={event => { selectMonth(true); event.currentTarget.closest('details')?.removeAttribute('open'); event.currentTarget.closest('details')?.querySelector('summary')?.focus() }} className="block w-full rounded px-3 py-2 text-left text-sm hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50">Chọn tất cả lịch trong tháng</button>
             </div>
           </details>}
-          <button
+          {planStage === 'knitting' && <button
             onClick={() => setIsImportOpen(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-container border border-outline-variant hover:bg-surface-container-high text-xs font-medium text-on-surface transition-colors"
           >
             <span className="material-symbols-outlined text-[16px] text-primary">upload_file</span>
             Nhập lịch tháng
-          </button>
+          </button>}
           <p className="text-label-sm font-inter text-secondary">
             {totalDays} ngày · {MACHINES.length} máy
           </p>
         </div>
       </div>
 
+      <section aria-label="Kế hoạch sản xuất theo công đoạn" className="mb-md space-y-3">
+        <label className="inline-flex items-center gap-2 text-sm font-medium">Công đoạn
+          <select className="rounded border border-outline px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" value={planStage} onChange={event => setPlanStage(event.target.value as typeof planStage)}>
+            <option value="extruder">Kéo sợi</option><option value="warping">Mắc sợi</option><option value="knitting">Dệt</option><option value="rolling">Cuộn</option><option value="packing">Đóng gói</option>
+          </select>
+        </label>
+        <StagePlanImportWorkspace
+          selectedStage={planStage}
+          yearMonth={yearMonth}
+          refreshToken={planRefreshToken}
+          onImportSaved={(scopeKey) => {
+            setPlanRefreshToken(value => value + 1)
+            handlePlanScopeDetected(scopeKey)
+          }}
+          onScopeDetected={handlePlanScopeDetected}
+        />
+        <details className="rounded-lg border border-outline-variant bg-surface-container-lowest p-3 shadow-sm">
+          <summary className="cursor-pointer text-sm font-semibold text-primary">Tùy chọn nâng cao: nhập kế hoạch trực tiếp trên web</summary>
+          <div className="mt-3 space-y-3 border-t border-outline-variant pt-3">
+            <ProductionPlanEntryWorkspace
+              selectedStage={planStage}
+              selectedDate={`${yearMonth}-01`}
+              onStageChange={setPlanStage}
+              onPlanSaved={() => setPlanRefreshToken(value => value + 1)}
+              hideStageSelector
+            />
+            <ProductionPlanCalendar yearMonth={yearMonth} stage={planStage} refreshToken={planRefreshToken} />
+          </div>
+        </details>
+      </section>
+
+      <h2 className="mb-sm text-base font-semibold text-primary">Lịch phân công máy dệt (Dệt)</h2>
       {viewMode === 'list' && hasSelection && selectionToolbar}
       {viewMode !== 'list' && <div aria-label="Chú giải lịch máy" className="mb-sm flex flex-wrap items-center gap-md text-xs text-on-surface-variant">
         <span className="inline-flex items-center gap-1"><span className="h-3 w-3 border border-outline-variant bg-white" />Ngày làm</span>
@@ -452,7 +494,7 @@ export default function SchedulePage() {
                 const weekend = isRestDay(day)
                 const exception = exceptionFor(day)
                 const isHoliday = exception?.kind === 'HOLIDAY'
-                const dow = monthDays[day-1].getDay()
+                const dow = monthDays[day - 1].getDay()
                 const title = exception
                   ? `${KIND_LABEL[exception.kind]}${exception.note ? ` — ${exception.note}` : ''}`
                   : weekend ? 'Ngày nghỉ theo lịch tuần' : 'Ngày làm việc'
@@ -460,9 +502,8 @@ export default function SchedulePage() {
                   <th
                     key={day}
                     style={{ width: dayWidth }}
-                    className={`sticky top-0 py-1.5 text-center font-medium border-r-[0.5px] border-outline-variant/60 last:border-r-0 ${
-                      isHoliday ? 'bg-amber-200 text-on-surface' : weekend ? 'bg-amber-100 text-on-surface' : 'bg-surface-container text-on-surface-variant'
-                    }`}
+                    className={`sticky top-0 py-1.5 text-center font-medium border-r-[0.5px] border-outline-variant/60 last:border-r-0 ${isHoliday ? 'bg-amber-200 text-on-surface' : weekend ? 'bg-amber-100 text-on-surface' : 'bg-surface-container text-on-surface-variant'
+                      }`}
                   >
                     <button
                       ref={editingDay === day ? dayTriggerRef : undefined}
@@ -553,28 +594,28 @@ export default function SchedulePage() {
                             <label title={`Chọn lịch ${pi}`} onClick={event => event.stopPropagation()} className="selection-control bar-checkbox absolute left-1 top-2 z-10 inline-flex h-6 w-6 cursor-pointer items-center justify-center"><input type="checkbox" aria-label={isGroupBar ? `Chọn nhóm ${members.length} dòng ${pi} máy ${machine}` : `Chọn lịch ${pi} máy ${machine}`} checked={chosen} onChange={() => { setTooltip(null); toggleSelection(assignment.id) }} className="h-4 w-4 cursor-pointer accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" /></label>
                             <button data-assignment={assignment.id} type="button" role="gridcell" aria-label={`${machine} — ${pi} — ${scheduleDay(assignment.startDate).split('-').reverse().join('/')} đến ${scheduleDay(assignment.endDate).split('-').reverse().join('/')}`} aria-describedby={tooltip?.assignment.id === assignment.id ? 'assignment-tooltip' : undefined}
                               style={{ width: `min(${span * dayWidth - (placeholder ? 8 : 6)}px, 320px, calc(100cqw - ${MACHINE_COL_WIDTH}px))` }} className="bar-body block min-h-10 px-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary">
-                            <span aria-hidden="true" className="checkbox-space float-left mr-1 h-6 w-6" />
-                            <span data-pi-label className={`block text-xs font-semibold ${viewMode === 'detail' && span >= 2 ? 'whitespace-normal break-words [overflow-wrap:anywhere]' : 'truncate'}`}>
-                              <span>{placeholder ? draft ? 'NHÁP' : 'GIỮ CHỖ' : fullLabel}</span>
-                            </span>
-                            <span className={`bar-extra mt-1 block text-[11px] ${placeholder && viewMode === 'detail' && span >= 2 ? 'break-words [overflow-wrap:anywhere]' : 'truncate'}`}>
-                              {placeholder ? pi : `${spec ? `${spec} · ` : ''}Phân công: ${allocation}`}
-                            </span>
+                              <span aria-hidden="true" className="checkbox-space float-left mr-1 h-6 w-6" />
+                              <span data-pi-label className={`block text-xs font-semibold ${viewMode === 'detail' && span >= 2 ? 'whitespace-normal break-words [overflow-wrap:anywhere]' : 'truncate'}`}>
+                                <span>{placeholder ? draft ? 'NHÁP' : 'GIỮ CHỖ' : fullLabel}</span>
+                              </span>
+                              <span className={`bar-extra mt-1 block text-[11px] ${placeholder && viewMode === 'detail' && span >= 2 ? 'break-words [overflow-wrap:anywhere]' : 'truncate'}`}>
+                                {placeholder ? pi : `${spec ? `${spec} · ` : ''}Phân công: ${allocation}`}
+                              </span>
                             </button>
                           </div>
                         </div>
-                        {tooltip?.assignment.id === assignment.id && <div data-assignment-tooltip onMouseEnter={keepTooltip} onMouseLeave={hideTooltip} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setTooltip(null) }} onKeyDown={event => { if (event.key === 'Escape') { document.querySelector<HTMLButtonElement>(`[data-assignment="${assignment.id}"]`)?.focus(); setTooltip(null) } }} className="fixed z-40 max-w-[350px] overflow-auto rounded border border-outline-variant bg-white p-3 text-xs text-on-surface shadow-lg" style={{ left: tooltip.left, top: tooltip.top, transform: tooltip.above ? 'translateY(-100%)' : undefined, maxHeight: tooltip.above ? `${Math.max(0, tooltip.top - 8)}px` : `calc(100vh - ${tooltip.top + 8}px)` }}>
-                          <div id="assignment-tooltip" role="tooltip">
-                          <p className="break-words font-semibold">{pi} · Dòng {lineLabel(assignment.order)}{assignment.order.meshType ? ` · ${assignment.order.meshType}` : ''}</p>
-                          <p className="mt-1">{assignment.order.customer}</p>
-                          <p className="mt-1">Loại lưới: {assignment.order.meshType?.trim() || '—'}</p>
-                          <p className="mt-1">Tên sản phẩm: {assignment.order.description?.trim() || '—'}</p>
-                          <p className="mt-1">{formatLineSpec(assignment.order) || 'Quy cách chưa có dữ liệu'}</p>
-                          <p className="mt-1">Tổng dòng: {formatOrderTotalMeters(assignment.order)} · Phân công: {allocation}</p>
-                          <p className="mt-1">{machine} · {scheduleDay(assignment.startDate).split('-').reverse().join('/')} → {scheduleDay(assignment.endDate).split('-').reverse().join('/')}</p>
-                          </div>
-                          <button type="button" onClick={() => { document.querySelector<HTMLButtonElement>(`[data-assignment="${assignment.id}"]`)?.focus(); setTooltip(null); setSelectedPi(pi) }} className="mt-2 text-primary underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Xem toàn bộ PI</button>
-                        </div>}
+                          {tooltip?.assignment.id === assignment.id && <div data-assignment-tooltip onMouseEnter={keepTooltip} onMouseLeave={hideTooltip} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setTooltip(null) }} onKeyDown={event => { if (event.key === 'Escape') { document.querySelector<HTMLButtonElement>(`[data-assignment="${assignment.id}"]`)?.focus(); setTooltip(null) } }} className="fixed z-40 max-w-[350px] overflow-auto rounded border border-outline-variant bg-white p-3 text-xs text-on-surface shadow-lg" style={{ left: tooltip.left, top: tooltip.top, transform: tooltip.above ? 'translateY(-100%)' : undefined, maxHeight: tooltip.above ? `${Math.max(0, tooltip.top - 8)}px` : `calc(100vh - ${tooltip.top + 8}px)` }}>
+                            <div id="assignment-tooltip" role="tooltip">
+                              <p className="break-words font-semibold">{pi} · Dòng {lineLabel(assignment.order)}{assignment.order.meshType ? ` · ${assignment.order.meshType}` : ''}</p>
+                              <p className="mt-1">{assignment.order.customer}</p>
+                              <p className="mt-1">Loại lưới: {assignment.order.meshType?.trim() || '—'}</p>
+                              <p className="mt-1">Tên sản phẩm: {assignment.order.description?.trim() || '—'}</p>
+                              <p className="mt-1">{formatLineSpec(assignment.order) || 'Quy cách chưa có dữ liệu'}</p>
+                              <p className="mt-1">Tổng dòng: {formatOrderTotalMeters(assignment.order)} · Phân công: {allocation}</p>
+                              <p className="mt-1">{machine} · {scheduleDay(assignment.startDate).split('-').reverse().join('/')} → {scheduleDay(assignment.endDate).split('-').reverse().join('/')}</p>
+                            </div>
+                            <button type="button" onClick={() => { document.querySelector<HTMLButtonElement>(`[data-assignment="${assignment.id}"]`)?.focus(); setTooltip(null); setSelectedPi(pi) }} className="mt-2 text-primary underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">Xem toàn bộ PI</button>
+                          </div>}
                         </Fragment>
                       })}
                       {!isLoading && days.map(day => {
@@ -622,13 +663,13 @@ export default function SchedulePage() {
           </div>
         </div>
       </div>}
-      {selectedPi&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closePi}><div ref={piModalRef} role="dialog" aria-modal="true" aria-label={`PI ${selectedPi}`} onClick={event=>event.stopPropagation()} className="max-h-[90vh] w-full max-w-5xl overflow-auto rounded-xl border border-outline-variant bg-white p-4"><button type="button" onClick={closePi} className="rounded border border-outline-variant px-3 py-2 text-xs">Đóng</button><PiOrderPanel piNumber={selectedPi}/></div></div>}
+      {selectedPi && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closePi}><div ref={piModalRef} role="dialog" aria-modal="true" aria-label={`PI ${selectedPi}`} onClick={event => event.stopPropagation()} className="max-h-[90vh] w-full max-w-5xl overflow-auto rounded-xl border border-outline-variant bg-white p-4"><button type="button" onClick={closePi} className="rounded border border-outline-variant px-3 py-2 text-xs">Đóng</button><PiOrderPanel piNumber={selectedPi} /></div></div>}
 
       {editSnapshot && <BulkEditModal selected={editSnapshot} initialCommand={editCommand} onClose={closeBulkEdit} onStale={() => { setEditSnapshot(null); setSelectedIds(new Set()); toast.error('Lịch đã thay đổi, tải lại và chọn lại'); void fetchAssignments() }} onSuccess={updated => { setEditSnapshot(null); setSelectedIds(new Set()); toast.success(`Đã sửa ${updated.toLocaleString('vi-VN')} lịch`); void fetchAssignments() }} />}
 
-      <AssignModal 
-        isOpen={isAssignOpen} 
-        onClose={() => setIsAssignOpen(false)} 
+      <AssignModal
+        isOpen={isAssignOpen}
+        onClose={() => setIsAssignOpen(false)}
         machineId={selectedMachine}
         startDate={selectedDate}
         onSuccess={fetchAssignments}

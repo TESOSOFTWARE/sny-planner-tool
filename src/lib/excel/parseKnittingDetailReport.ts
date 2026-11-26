@@ -49,6 +49,10 @@ export interface KnittingDetailRow {
   avgPerRoll:     number | null
   quantity:       number | null
   weightKgs:      number
+  sourceWeight:   string
+  sourceRow:      number
+  isValid:        boolean
+  validationErrors: string[]
 
   orderRef:       string | null // PI code
   sourceOrderRefs?: string[]
@@ -97,6 +101,12 @@ function toNum(v: unknown): number | null {
 
 function toStr(v: unknown): string {
   return String(v ?? '').trim()
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+  if (value == null || String(value).trim() === '') return false
+  const numeric = Number(value)
+  return !(Number.isFinite(numeric) && numeric === 0)
 }
 
 /**
@@ -178,6 +188,7 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
   }
 
   const ws = workbook.Sheets[sheetName]
+  const firstSheetRow = XLSX.utils.decode_range(ws['!ref'] ?? 'A1').s.r + 1
   const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, {
     header: 1,
     defval: null,
@@ -334,11 +345,16 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
 
     const color = toStr(row[colColor])
     const rawWeightKg = toNum(row[colWeightKg])
-    const weightKgs = rawWeightKg != null ? Math.max(0, rawWeightKg) : 0
+    const weightKgs = rawWeightKg ?? 0
 
     // FILTERING RULE: Save row if color is non-empty OR weightKgs > 0.
     // Skip row ONLY if BOTH color is empty AND weightKgs <= 0 (empty template row).
-    if (!color && weightKgs <= 0) continue
+    const hasRowData = [colWidth, colColor, colWeight, colLength, colTape, colM, colAvg, colQty, colWeightKg, colRemark].some(column => hasMeaningfulValue(row[column]))
+    if (!color && weightKgs <= 0 && !hasRowData) continue
+    const validationErrors: string[] = []
+    if (!color) validationErrors.push('Thiếu COLOR')
+    if (rawWeightKg == null) validationErrors.push('WEIGHT(KG) thiếu hoặc không phải số')
+    else if (rawWeightKg < 0) validationErrors.push('WEIGHT(KG) không được âm')
 
     const width      = toNum(row[colWidth])
     const weightSpec = toNum(row[colWeight])
@@ -347,6 +363,15 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
     const mValue     = toNum(row[colM])
     const avgPerRoll = toNum(row[colAvg])
     const quantity   = toNum(row[colQty])
+    const numericFields: Array<[string, number, number | null]> = [
+      ['WIDTH', colWidth, width], ['WEIGHT', colWeight, weightSpec], ['LENGTH', colLength, lengthM],
+      ['TAPE', colTape, tapeRoll], ['M', colM, mValue], ['AVERAGE/ROLL', colAvg, avgPerRoll], ['QUANTITY', colQty, quantity],
+    ]
+    for (const [label, column, value] of numericFields) {
+      if (row[column] == null || row[column] === '') continue
+      if (value == null) validationErrors.push(`${label} không phải số`)
+      else if (value < 0) validationErrors.push(`${label} không được âm`)
+    }
 
     const remarkText = toStr(row[colRemark])
 
@@ -368,6 +393,10 @@ export function parseKnittingDetailReport(buffer: Buffer): KnittingDetailRow[] {
       avgPerRoll,
       quantity,
       weightKgs,
+      sourceWeight: toStr(row[colWeightKg]),
+      sourceRow: firstSheetRow + r,
+      isValid: validationErrors.length === 0,
+      validationErrors,
       orderRef,
       sourceOrderRefs: remarkText ? [remarkText] : [],
       machineNote,

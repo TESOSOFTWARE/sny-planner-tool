@@ -8,7 +8,7 @@ export async function loadMonthlyHistoryState(client: Prisma.TransactionClient) 
   const ids = materials.map(material => material.id)
   const snapshots = await client.materialReportSnapshot.findMany({
     where: { materialId: { in: ids } },
-    select: { materialId: true, reportDate: true, payload: true },
+    select: { materialId: true, reportDate: true, payload: true, version: true },
   })
   const manualTransactions = await client.materialTransaction.findMany({
     where: { materialId: { in: ids }, reportSnapshotId: null },

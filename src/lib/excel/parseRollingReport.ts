@@ -17,6 +17,7 @@ export interface ParsedRollingMetric {
   weightKgsOrder: number | null
   metricLabel:    string   // e.g. "QUANTITY SMALL", "WEIGHT NIGHT"
   metricValue:    number   // strictly > 0
+  sourceRow:      number
   dataSource:     string
   cellRef:        string   // e.g. "Col H (row 6, col 7)" for verification audit trail
 }
@@ -28,10 +29,12 @@ export interface DateBlockMapping {
   spanCols:     number
   isoDate:      string | null
   note:         string | null
+  hasData:      boolean
 }
 
 export interface ParseRollingResult {
   metrics:          ParsedRollingMetric[]
+  invalidMetrics:   Array<{ sourceRow: number; orderRef: string; metricLabel: string; sourceValue: string; cellRef: string; validationErrors: string[] }>
   dateBlockMappings: DateBlockMapping[]
   totalOrderRows:   number
   nonZeroCount:     number
@@ -77,8 +80,10 @@ export function parseDateLabelToISO(label: string, month: number, year: number):
   const clean = label.replace(/[^\d+]/g, '').trim()
   const days = clean.split('+').map(value => value ? Number(value) : NaN)
   const lastDay = period ? new Date(Date.UTC(year, month, 0)).getUTCDate() : 0
-  if (!period || days.some(day => !Number.isInteger(day) || day < 1 || day > lastDay)) {
-    return { isoDate: null, note: `Bỏ khối "${label}": ngày không hợp lệ trong kỳ ${String(month).padStart(2, '0')}/${year}.` }
+  const crossesMonth = days.some((day, index) => index > 0 && day < days[index - 1])
+  if (!period || days.some(day => !Number.isInteger(day) || day < 1 || day > lastDay) || crossesMonth) {
+    const reason = crossesMonth ? 'nhãn gộp đi qua tháng kế tiếp, cần tách ngày trong file nguồn' : `ngày không hợp lệ trong kỳ ${String(month).padStart(2, '0')}/${year}`
+    return { isoDate: null, note: `Bỏ khối "${label}": ${reason}.` }
   }
   return {
     isoDate: `${year}-${String(month).padStart(2, '0')}-${String(days[0]).padStart(2, '0')}`,
@@ -102,7 +107,7 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
   const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: null })
 
   const period = selectedPeriod ? validateRollingPeriod(selectedPeriod.month, selectedPeriod.year) : rollingPeriodFromFileName(fileName)
-  if (!period) return { metrics: [], dateBlockMappings: [], totalOrderRows: 0, nonZeroCount: 0, summarySkipped: 0, availableSheets, fileName, period: null, periodRequired: true }
+  if (!period) return { metrics: [], invalidMetrics: [], dateBlockMappings: [], totalOrderRows: 0, nonZeroCount: 0, summarySkipped: 0, availableSheets, fileName, period: null, periodRequired: true }
   const { month, year } = period
   const populatedDateBlocks = new Set<number>()
 
@@ -127,6 +132,7 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
             spanCols: m.e.c - m.s.c + 1,
             isoDate,
             note,
+            hasData: false,
           })
         }
       }
@@ -136,6 +142,7 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
   dateBlockMappings.sort((a, b) => a.startCol - b.startCol)
 
   const metrics: ParsedRollingMetric[] = []
+  const invalidMetrics: ParseRollingResult['invalidMetrics'] = []
   let totalOrderRows = 0
   let nonZeroCount = 0
   let summarySkipped = 0
@@ -192,7 +199,13 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
     const weightKgsOrder = row[5] != null ? Number(row[5]) : null
 
     for (const block of dateBlockMappings) {
-      if (!block.isoDate) continue
+      if (!block.isoDate) {
+        for (let c = block.startCol; c <= Math.min(block.endCol, block.startCol + 5); c++) {
+          const raw = row[c]
+          if (raw != null && String(raw).trim() !== '') { block.hasData = true; break }
+        }
+        continue
+      }
       // Each block spans columns from block.startCol to block.endCol
       // Offset 0..5 = 6 Primary Shift Metrics (QUANTITY/TOTAL(M)/WEIGHT x DAY-NIGHT/SMALL-BIG)
       // Offset 6..7 = 2 Summary Columns (QUANTITY & WEIGHT total) -> EXPLICITLY SKIPPED
@@ -203,7 +216,14 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
         if (offset < 6) {
           // Primary shift metric
           const numVal = Number(val)
-          if (!isNaN(numVal) && numVal > 0) {
+          if (val != null && String(val).trim() !== '' && (!Number.isFinite(numVal) || numVal < 0)) {
+            const rawHeader = String(rowMetric[c] ?? '').replace(/\r?\n/g, ' ').trim()
+            invalidMetrics.push({
+              sourceRow: r + 1, orderRef, metricLabel: rawHeader,
+              sourceValue: String(val), cellRef: `Row ${r + 1}, Col ${XLSX.utils.encode_col(c)} (idx ${c})`,
+              validationErrors: [Number.isFinite(numVal) ? 'Giá trị sản lượng không được âm' : 'Giá trị sản lượng không phải số'],
+            })
+          } else if (Number.isFinite(numVal) && numVal > 0) {
             populatedDateBlocks.add(block.startCol)
             const rawHeader = String(rowMetric[c] ?? '').replace(/\r?\n/g, ' ').trim()
             nonZeroCount++
@@ -220,6 +240,7 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
               weightKgsOrder: isNaN(Number(weightKgsOrder)) ? null : weightKgsOrder,
               metricLabel: rawHeader,
               metricValue: numVal,
+              sourceRow: r + 1,
               dataSource: fileName,
               cellRef: `Row ${r + 1}, Col ${colName} (idx ${c})`,
             })
@@ -239,6 +260,7 @@ export function parseRollingReport(buffer: Buffer, fileName: string, selectedPer
 
   return {
     metrics,
+    invalidMetrics,
     dateBlockMappings,
     totalOrderRows,
     nonZeroCount,

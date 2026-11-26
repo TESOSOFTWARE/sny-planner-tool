@@ -8,7 +8,7 @@ import { parseRollingReport, RollingDateConflictError } from '@/lib/excel/parseR
 import { rollingImportSnapshot } from '@/lib/materials/rollingImportSnapshot'
 
 const fileName = 'QA ROLLING 05-2026.xlsx', period = { month: 5, year: 2026 }
-function workbook(labels: string[], values: (number | null)[], extraRow?: (number | null)[]) {
+function workbook(labels: string[], values: unknown[], extraRow?: unknown[]) {
   const rows: unknown[][] = [['QA report'], [], [], [], [], [1, 'QA-CUSTOMER', 'BLUE', 2, 100, 50]]
   labels.forEach((label, index) => {
     const col = 6 + index * 8
@@ -44,31 +44,61 @@ test('1810-07 non-overlapping combined blocks retain raw labels and the existing
   const result = parseRollingReport(workbook(['9+10th', '11+12th'], [10, 20]), fileName)
   assert.deepEqual(result.metrics.map(row => [row.date, row.dateLabelRaw, row.metricValue]), [['2026-05-09', '9+10th', 10], ['2026-05-11', '11+12th', 20]])
 })
-test('1810-07 explicit 31+1 does not falsely overlap the first day of the source month', () => {
+test('1810-07 populated 31+1 cross-month block is rejected instead of assigned only to day 31', () => {
   const result = parseRollingReport(workbook(['1st', '31th+1th'], [10, 20]), fileName)
-  assert.equal(result.metrics.length, 2)
-  assert.deepEqual(result.metrics.map(row => row.date), ['2026-05-01', '2026-05-31'])
+  assert.equal(result.metrics.length, 1)
+  assert.equal(result.dateBlockMappings[1].isoDate, null)
+  assert.equal(result.dateBlockMappings[1].hasData, true)
 })
 
 let reads = 0, writes = 0
 const metric = {
   findMany: async () => { reads++; return [] },
-  deleteMany: async () => { writes++; return { count: 0 } },
+  update: async () => { writes++; return { count: 1 } },
   createMany: async ({ data }: { data: unknown[] }) => { writes++; return { count: data.length } },
 }
-const fake = { productionOrder: { findMany: async () => { reads++; return [] } }, rollingDailyMetric: metric, $transaction: async (run: (tx: { rollingDailyMetric: typeof metric }) => unknown) => run({ rollingDailyMetric: metric }) }
+const fake = { productionOrder: { findMany: async () => { reads++; return [] } }, rollingDailyMetric: metric, $transaction: async (run: (tx: { rollingDailyMetric: typeof metric; $executeRaw: () => Promise<number> }) => unknown) => run({ rollingDailyMetric: metric, $executeRaw: async () => 0 }) }
 const singleton = globalThis as unknown as { prisma: unknown }, previous = singleton.prisma
 let preview: typeof import('./import/route').POST, confirm: typeof import('./import/confirm/route').POST
 before(async () => { singleton.prisma = fake; preview = withTestSession((await import('./import/route')).POST, singleton.prisma); confirm = withTestSession((await import('./import/confirm/route')).POST, singleton.prisma) })
 after(() => { singleton.prisma = previous })
-function request(buffer: Buffer) {
+function request(buffer: Buffer, selectedPeriod = period) {
   const form = new FormData()
   form.append('file', new Blob([Uint8Array.from(buffer).buffer]), fileName)
-  form.append('month', '5'); form.append('year', '2026')
+  form.append('month', String(selectedPeriod.month)); form.append('year', String(selectedPeriod.year))
   // A valid snapshot must not authorize a file with overlapping populated blocks.
-  form.append('expectedSnapshot', rollingImportSnapshot(buffer, period))
+  form.append('expectedSnapshot', rollingImportSnapshot(buffer, selectedPeriod))
   return new NextRequest('http://qa.invalid/rolling/import', { method: 'POST', body: form })
 }
+test('1810-07 populated invalid date block is skipped while valid rows in the report can proceed', async () => {
+  const invalidPeriod = { month: 4, year: 2026 }
+  const buffer = workbook(['31th'], [10])
+  reads = 0; writes = 0
+  const pre = await preview(request(buffer, invalidPeriod))
+  assert.equal(pre.status, 200)
+  const previewBody = await pre.json()
+  assert.equal(previewBody.skippedDateBlocks[0].hasData, true)
+  assert.equal(previewBody.skippedDateBlocks[0].blocked, true)
+  reads = 0; writes = 0
+  const saved = await confirm(request(buffer, invalidPeriod))
+  assert.equal(saved.status, 200)
+  assert.equal((await saved.json()).invalidSkipped, 1)
+  assert.ok(reads > 0); assert.equal(writes, 0)
+})
+test('1810-07 invalid numeric values are skipped without replacing existing data', async () => {
+  const buffer = workbook(['13th'], [-2])
+  reads = 0; writes = 0
+  const pre = await preview(request(buffer))
+  assert.equal(pre.status, 200)
+  const previewBody = await pre.json()
+  assert.equal(previewBody.invalidMetricCount, 1)
+  assert.equal(previewBody.rows.at(-1).isValid, false)
+  reads = 0; writes = 0
+  const saved = await confirm(request(buffer))
+  assert.equal(saved.status, 200)
+  assert.equal((await saved.json()).invalidSkipped, 1)
+  assert.ok(reads > 0); assert.equal(writes, 0)
+})
 for (const labels of [['13th', '13th'], ['11+12th', '12th']]) {
   test(`1810-07 preview and direct confirm reject ${labels.join('/')} before any DB call`, async () => {
     reads = 0; writes = 0
@@ -85,10 +115,14 @@ test('1810-07 valid preview and confirm still work after rejected confirms relea
   reads = 0; writes = 0
   const response = await preview(request(workbook(['13th', '14th'], [10, 20])))
   assert.equal(response.status, 200)
-  assert.equal((await response.json()).totalMetrics, 2)
+  const previewBody = await response.json()
+  assert.equal(previewBody.totalMetrics, 2)
+  assert.equal(previewBody.rows.length, 2)
+  assert.deepEqual(previewBody.rows.map((row: { metricValue: number }) => row.metricValue), [10, 20])
+  assert.equal(previewBody.sampleRows.length, 2)
   assert.ok(reads > 0); assert.equal(writes, 0)
   const saved = await confirm(request(workbook(['13th', '14th'], [10, 20])))
   assert.equal(saved.status, 200)
   assert.equal((await saved.json()).recordsInserted, 2)
-  assert.equal(writes, 2) // fake delete/create only; no database connection exists.
+  assert.equal(writes, 1) // Only new rows are inserted; no database connection exists.
 })

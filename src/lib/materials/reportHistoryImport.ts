@@ -30,13 +30,15 @@ export async function readHistoryFile(req: Request) {
   if (!name.toLowerCase().endsWith('.xlsx')) throw new Error('Chỉ chấp nhận file .xlsx.')
   if (file.size > 10 * 1024 * 1024) throw new Error('File phải nhỏ hơn hoặc bằng 10 MB.')
   const rows = parseMaterialReportHistory(Buffer.from(await file.arrayBuffer()), 'HDPE')
-  return { rows, file: { name, size: file.size }, expectedSnapshot: String(form.get('expectedSnapshot') ?? ''), resolutions: parseResolutions(form.get('resolutions')) }
+  const batchId = String(form.get('importBatchId') ?? ''), token = String(form.get('importAttemptToken') ?? '')
+  if (Boolean(batchId) !== Boolean(token)) throw new Error('Thông tin phiên import không đầy đủ.')
+  return { rows, file: { name, size: file.size }, expectedSnapshot: String(form.get('expectedSnapshot') ?? ''), resolutions: parseResolutions(form.get('resolutions')), importAttempt: batchId ? { batchId, token } : undefined }
 }
 
-export type HistoryRowStatus = 'invalid' | 'unknown_material' | 'ambiguous' | 'identical' | 'conflict_existing' | 'new'
+export type HistoryRowStatus = 'invalid' | 'unknown_material' | 'ambiguous' | 'identical' | 'updated' | 'conflict_existing' | 'new'
 export type HistoryCounts = Record<HistoryRowStatus, number>
 export interface HistoryMaterial { id: string; name: string; group: string; stockReportDate: Date | null }
-export interface HistorySnapshot { materialId: string; reportDate: Date; payload: unknown }
+export interface HistorySnapshot { materialId: string; reportDate: Date; payload: unknown; version?: number }
 export interface HistorySkippedRow {
   rowIndex: number; sourceRow: number; materialName: string; group: MaterialGroupInput
   reportDate: string; reportPeriodEnd?: string; sourceDateLabel?: string
@@ -52,7 +54,7 @@ export interface HistoryImportPreview {
   stockKept: StockKept[]
   materials: Array<{ id: string; name: string; group: string }>
 }
-export function historyCounts(): HistoryCounts { return { invalid: 0, unknown_material: 0, ambiguous: 0, identical: 0, conflict_existing: 0, new: 0 } }
+export function historyCounts(): HistoryCounts { return { invalid: 0, unknown_material: 0, ambiguous: 0, identical: 0, updated: 0, conflict_existing: 0, new: 0 } }
 export function historyPayload(row: ParsedMaterialReportDay) {
   return { ...materialReportPayload(row), ...(row.missingFields?.length ? { missingFields: row.missingFields } : {}), ...(row.sourceDateLabel ? { sourceDateLabel: row.sourceDateLabel } : {}), ...(row.reportPeriodEnd ? { reportPeriodEnd: row.reportPeriodEnd } : {}) }
 }
@@ -62,7 +64,7 @@ export interface MonthlyHistoryMaterial extends HistoryMaterial {
   stockReportDirty?: boolean
 }
 export interface ManualHistoryTransaction { materialId: string; txDate: Date; id: string }
-type PlannedWrite = { materialId: string; reportDate: Date; payload: ReturnType<typeof historyPayload>; contentHash: string; version: number }
+type PlannedWrite = { materialId: string; reportDate: Date; payload: ReturnType<typeof historyPayload>; contentHash: string; version: number; updateExisting: boolean }
 type StockChange = { materialId: string; name: string; from: { stock: string; date: string | null } | null; to: { stock: number; date: string } }
 type StockKept = { materialId: string; name: string; reason: string; reportEnd: string; lastManualTx?: string }
 const iso = (date: Date) => date.toISOString().slice(0, 10)
@@ -162,9 +164,9 @@ export function planHistoryImport(rows: ParsedMaterialReportDay[], materials: Mo
     else if (snapshot) {
       const payload = snapshot.payload && typeof snapshot.payload === 'object' ? snapshot.payload as Record<string, unknown> : {}
       const missingMatches = !Object.prototype.hasOwnProperty.call(payload, 'missingFields') || JSON.stringify(Array.isArray(payload.missingFields) ? [...payload.missingFields].sort() : []) === JSON.stringify([...(row.missingFields ?? [])].sort())
-      status = sameMaterialReport(payload, row) && (payload.reportPeriodEnd ?? null) === (row.reportPeriodEnd ?? null) && missingMatches ? 'identical' : 'conflict_existing'
-      if (status === 'conflict_existing') {
-        reasons = ['Giữ báo cáo đã có; dùng import một ngày nếu cần sửa.']
+      status = sameMaterialReport(payload, row) && (payload.reportPeriodEnd ?? null) === (row.reportPeriodEnd ?? null) && missingMatches ? 'identical' : 'updated'
+      if (status === 'updated') {
+        reasons = ['Dữ liệu khác snapshot hiện tại; sẽ cập nhật snapshot và giữ bản import cũ trong lịch sử workbook.']
         const incoming = historyPayload(row)
         const tracksMissing = Object.prototype.hasOwnProperty.call(payload, 'missingFields')
         differences = ['firstStock', 'lastStock', 'inQty', 'outUsing', 'outBroken', 'outTape', 'outReject', 'reportPeriodEnd', ...(tracksMissing ? ['missingFields'] : []), 'color', 'colorName', 'brand', 'itemCode', 'lightFastness', 'subGroup'].flatMap(field => {
@@ -180,8 +182,11 @@ export function planHistoryImport(rows: ParsedMaterialReportDay[], materials: Mo
     let period = periods.get(periodKey)
     if (!period) { period = { reportDate: row.reportDate, ...(row.reportPeriodEnd ? { reportPeriodEnd: row.reportPeriodEnd } : {}), ...(row.sourceDateLabel ? { sourceDateLabel: row.sourceDateLabel } : {}), totalRows: 0, counts: historyCounts() }; periods.set(periodKey, period) }
     period.totalRows++; period.counts[status]++
-    if (status === 'new') { const payload = historyPayload(row); writes.push({ materialId: resolvedRow.id, reportDate: new Date(`${row.reportDate}T00:00:00.000Z`), payload, contentHash: historyHash(payload), version: 1 }) }
-    else skippedRows.push({ rowIndex: i, sourceRow: row.sourceRow, materialName: row.materialName, group: row.group, reportDate: row.reportDate, ...(row.reportPeriodEnd ? { reportPeriodEnd: row.reportPeriodEnd } : {}), ...(row.sourceDateLabel ? { sourceDateLabel: row.sourceDateLabel } : {}), status, reasons, ...(differences ? { differences } : {}) })
+    if (status === 'new' || status === 'updated') {
+      const payload = historyPayload(row)
+      writes.push({ materialId: resolvedRow.id, reportDate: new Date(`${row.reportDate}T00:00:00.000Z`), payload, contentHash: historyHash(payload), version: status === 'updated' ? (snapshot?.version ?? 1) + 1 : 1, updateExisting: status === 'updated' })
+      if (status === 'updated') skippedRows.push({ rowIndex: i, sourceRow: row.sourceRow, materialName: row.materialName, group: row.group, reportDate: row.reportDate, ...(row.reportPeriodEnd ? { reportPeriodEnd: row.reportPeriodEnd } : {}), ...(row.sourceDateLabel ? { sourceDateLabel: row.sourceDateLabel } : {}), status, reasons, ...(differences ? { differences } : {}) })
+    } else skippedRows.push({ rowIndex: i, sourceRow: row.sourceRow, materialName: row.materialName, group: row.group, reportDate: row.reportDate, ...(row.reportPeriodEnd ? { reportPeriodEnd: row.reportPeriodEnd } : {}), ...(row.sourceDateLabel ? { sourceDateLabel: row.sourceDateLabel } : {}), status, reasons, ...(differences ? { differences } : {}) })
   })
   const stockUpdates: StockChange[] = [], stockKept: StockKept[] = []
   for (const id of Array.from(new Set(writes.map(w => w.materialId)))) {
@@ -189,7 +194,8 @@ export function planHistoryImport(rows: ParsedMaterialReportDay[], materials: Mo
       stockKept.push({ materialId: id, name: byId.get(id)?.name ?? creations.get(id.slice(4))?.materialName ?? '', reason: 'overlapping_period', reportEnd: '' })
       continue
     }
-    const candidates = [...snapshots.filter(s => s.materialId === id), ...writes.filter(w => w.materialId === id)]
+    const updatedKeys = new Set(writes.filter(write => write.materialId === id && write.updateExisting).map(write => iso(write.reportDate)))
+    const candidates = [...snapshots.filter(s => s.materialId === id && !updatedKeys.has(iso(s.reportDate))), ...writes.filter(w => w.materialId === id)]
     candidates.sort((a, b) => endOf(iso(b.reportDate), b.payload).localeCompare(endOf(iso(a.reportDate), a.payload)) || iso(b.reportDate).localeCompare(iso(a.reportDate)))
     const latest = candidates[0]
     if (!latest) continue
@@ -206,7 +212,7 @@ export function planHistoryImport(rows: ParsedMaterialReportDay[], materials: Mo
     if (baseline && end < baseline) { stockKept.push({ materialId: id, name, reason: 'newer_stock_baseline', reportEnd: end }); continue }
     stockUpdates.push({ materialId: id, name, from: material ? { stock: String(material.currentStock ?? ''), date: baseline } : null, to: { stock, date: end } })
   }
-  const snapshotState = [...snapshots].map(s => ({ materialId: s.materialId, date: iso(s.reportDate), payload: s.payload })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+  const snapshotState = [...snapshots].map(s => ({ materialId: s.materialId, date: iso(s.reportDate), version: s.version ?? 1, payload: s.payload })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
   const materialState = [...materials].map(m => ({ id: m.id, name: m.name, group: m.group, stock: String(m.currentStock ?? ''), date: m.stockReportDate ? iso(m.stockReportDate) : null, dirty: m.stockReportDirty ?? false })).sort((a, b) => a.id.localeCompare(b.id))
   const txState = [...manualTransactions].map(t => ({ id: t.id, materialId: t.materialId, date: iso(t.txDate) })).sort((a, b) => a.id.localeCompare(b.id))
   const preview = { success: true as const, expectedSnapshot: historyHash({ file, rows, resolutions: Object.fromEntries(Object.entries(resolutions).sort(([a], [b]) => a.localeCompare(b))), snapshotState, materialState, txState }), totalRows: rows.length, counts, periods: Array.from(periods.values()).sort((a, b) => a.reportDate.localeCompare(b.reportDate)), skippedRows, unknownMaterials: Array.from(unknownMaterials.values()), stockUpdates, stockKept, materials: materials.map(m => ({ id: m.id, name: m.name, group: m.group })) }

@@ -3,10 +3,10 @@ import test from 'node:test'
 import * as XLSX from 'xlsx'
 import { parseKnittingDetailReport } from './parseKnittingDetailReport'
 
-function report(secondMachineTotal: number) {
+function report(secondMachineTotal: number, dataColor = 'BLUE', dataWeight: unknown = 12.5) {
   const machine: unknown[] = []; machine[1] = 6.8; machine[2] = 'MACHINE 2'
   const header: unknown[] = []; header[2] = 'NO.'; header[4] = 'COLOR'; header[11] = 'WEIGHT(KG)'; header[12] = 'TOTAL(KG)'
-  const data: unknown[] = []; data[2] = 'D'; data[4] = 'BLUE'; data[11] = 12.5
+  const data: unknown[] = []; data[2] = 'D'; data[4] = dataColor; data[11] = dataWeight
   const firstTotal: unknown[] = []; firstTotal[0] = 2; firstTotal[2] = 'TOTAL'; firstTotal[12] = 12.5
   const secondTotal: unknown[] = []; secondTotal[0] = 2; secondTotal[2] = 'TOTAL'; secondTotal[12] = secondMachineTotal
   const cumulativeTotal: unknown[] = []; cumulativeTotal[2] = 'TOTAL'; cumulativeTotal[12] = 999
@@ -36,4 +36,12 @@ test('1810-08 still warns when a machine cumulative delta differs from data rows
   const { warnings } = parseWithWarnings(report(24))
   assert.equal(warnings.length, 1)
   assert.match(warnings[0], /TOTAL lũy kế chênh = 11\.5, sum WEIGHT = 12\.50/)
+})
+
+test('invalid Knitting output retains source row and is not presented as a valid zero', () => {
+  const rows = parseKnittingDetailReport(report(25, '', 'not-a-number'))
+  assert.equal(rows[0].sourceRow, 4)
+  assert.equal(rows[0].isValid, false)
+  assert.equal(rows[0].weightKgs, 0)
+  assert.deepEqual(rows[0].validationErrors, ['Thiếu COLOR', 'WEIGHT(KG) thiếu hoặc không phải số'])
 })

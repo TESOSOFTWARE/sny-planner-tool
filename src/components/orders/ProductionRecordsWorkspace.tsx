@@ -1,29 +1,73 @@
 'use client'
 import Link from 'next/link'
+import type { ReactNode } from 'react'
 import { useState, useEffect } from 'react'
 import { useMaterialPage } from '@/components/materials/useMaterialPage'
 import TablePager from '@/components/materials/TablePager'
+import ProductionImportWorkspace from '@/components/orders/ProductionImportWorkspace'
+import ProductionProgressWorkspace from '@/components/orders/ProductionProgressWorkspace'
 
-interface Output { id: string; date: string; orderRef: string | null; orderId: string | null; color: string | null; machine: string | null; shift: string | null; kilograms: string | null; meters: string | null; metric: string | null; value: string | null }
-interface Result { success: boolean; error?: string; records: Output[]; total: number }
+interface Output {
+  id: string; date: string; orderRef: string | null; orderId: string | null; color: string | null; machine: string | null; shift: string | null
+  denier?: string | null; beamNote?: string | null; weavingMachineRef?: string | null; strand?: string | null; beamCount1?: string | null
+  mPerEa?: string | null; weigValue?: string | null; beamCount2?: string | null; quantity?: string | null
+  width?: string | null; weightSpec?: string | null; lengthM?: string | null; tapeRoll?: string | null; mValue?: string | null
+  avgPerRoll?: string | null; machineNote?: string | null; meshType?: string | null; machineSizeM?: string | null
+  cmPerMin?: string | null; meterPerDay?: string | null; operatingGrade?: string | null; totalPct?: string | null
+  widthM?: string | null; weightKgsOrder?: string | null; kilograms?: string | null; metric?: string | null; value?: string | null
+  unit?: string | null; note?: string | null; source: string
+}
+interface Result { success: boolean; error?: string; records: Output[]; total: number; summary?: { metrics: Array<{ label: string; value: string; unit?: string }> } }
 const format = (value: string | null) => value == null ? '—' : Number(value).toLocaleString('vi-VN', { maximumFractionDigits: 2 })
-const stages = [['extruder', 'Kéo sợi'], ['warping', 'Mắc sợi'], ['knitting', 'Dệt'], ['rolling', 'Cuộn']] as const
+const stages = [['extruder', 'Kéo sợi'], ['warping', 'Mắc sợi'], ['knitting', 'Dệt'], ['rolling', 'Cuộn'], ['packing', 'Đóng gói']] as const
 const control = 'rounded border border-outline px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary'
+type OutputColumn = { label: string; cell: (row: Output) => ReactNode }
+
+function itemCell(row: Output) {
+  return row.orderId ? <Link href={'/orders/' + encodeURIComponent(row.orderId)} className="text-primary underline">Xem item</Link> : 'Chưa gắn item'
+}
+
+function outputColumns(stage: string): OutputColumn[] {
+  const date: OutputColumn = { label: 'Ngày', cell: row => <span className="whitespace-nowrap">{row.date.slice(0, 10).split('-').reverse().join('/')}</span> }
+  const pi: OutputColumn = { label: 'PI nguồn', cell: row => row.orderRef ?? 'Chưa ghi mã' }
+  const item: OutputColumn = { label: 'Thuộc đơn', cell: itemCell }
+  const color: OutputColumn = { label: 'Màu', cell: row => row.color ?? '—' }
+  const shift: OutputColumn = { label: 'Ca', cell: row => row.shift === 'D' ? 'Ngày' : row.shift === 'N' ? 'Đêm' : '—' }
+  const machine: OutputColumn = { label: 'Máy', cell: row => row.machine ?? '—' }
+  const source: OutputColumn = { label: 'Nguồn file', cell: row => row.source }
+  const numeric = (label: string, key: keyof Output): OutputColumn => ({ label, cell: row => <span className="tabular-nums">{format((row[key] as string | null | undefined) ?? null)}</span> })
+
+  if (stage === 'extruder') return [date, machine, shift, pi, item, color, numeric('Denier', 'denier'), numeric('WEIGHT (kg)', 'kilograms'), { label: 'REMARK / ghi chú beam', cell: row => row.beamNote ?? '—' }, source]
+  if (stage === 'warping') return [date, machine, shift, { label: 'Máy dệt liên quan', cell: row => row.weavingMachineRef ?? '—' }, pi, item, color, numeric('Denier', 'denier'), numeric('STRAND', 'strand'), numeric('BEAM 1', 'beamCount1'), numeric('M/EA', 'mPerEa'), numeric('WEIG', 'weigValue'), numeric('BEAM 2', 'beamCount2'), numeric('QUANTITY', 'quantity'), numeric('WEIGHT (kg)', 'kilograms'), source]
+  if (stage === 'knitting') return [date, machine, shift, pi, item, color, { label: 'Loại lưới', cell: row => row.meshType ?? '—' }, numeric('WIDTH', 'width'), numeric('WEIGHT / định lượng', 'weightSpec'), numeric('LENGTH (m)', 'lengthM'), numeric('TAPE/ROLL', 'tapeRoll'), numeric('M', 'mValue'), numeric('AVERAGE/ROLL', 'avgPerRoll'), numeric('QUANTITY', 'quantity'), numeric('WEIGHT (kg)', 'kilograms'), numeric('Khổ máy (m)', 'machineSizeM'), numeric('CM/MIN', 'cmPerMin'), numeric('METER/DAY', 'meterPerDay'), { label: 'Operating grade', cell: row => row.operatingGrade ?? '—' }, numeric('TOTAL %', 'totalPct'), { label: 'Ghi chú máy', cell: row => row.machineNote ?? '—' }, source]
+  if (stage === 'rolling') return [date, pi, item, color, numeric('WIDTH (m)', 'widthM'), numeric('LENGTH (m)', 'lengthM'), numeric('WEIGHT theo đơn (kg)', 'weightKgsOrder'), { label: 'Chỉ tiêu Excel', cell: row => row.metric ?? '—' }, numeric('Giá trị', 'value'), source]
+  return [date, pi, item, machine, shift, color, { label: 'Chỉ tiêu đóng gói', cell: row => row.metric ?? '—' }, numeric('Số lượng', 'value'), { label: 'Đơn vị', cell: row => row.unit ?? '—' }, { label: 'Ghi chú', cell: row => row.note ?? '—' }, source]
+}
 
 function ProductionRecordsTable({ embedded = false }: { embedded?: boolean }) {
   const [stage, setStage] = useState('extruder'), [state, setState] = useState('all'), [text, setText] = useState(''), [query, setQuery] = useState('')
   useEffect(() => { const timer = setTimeout(() => setQuery(text.trim()), 300); return () => clearTimeout(timer) }, [text])
   const paging = useMaterialPage<Result>('/api/production-records', new URLSearchParams({ stage, state, q: query }).toString())
   const rows = paging.data?.records ?? [], total = paging.data?.total ?? 0
+  const stageLabel = stages.find(([id]) => id === stage)?.[1] ?? 'Sản lượng'
+  const columns = outputColumns(stage)
+  const stageDescription: Record<string, string> = {
+    extruder: 'Theo mẫu EXTRUDER: ca, màu, Denier, WEIGHT và ghi chú/PI nguồn.',
+    warping: 'Theo mẫu WARPING: máy dệt liên quan, Strand, hai cột BEAM, M/EA, WEIG, QUANTITY và WEIGHT.',
+    knitting: 'Theo mẫu KNITTING: khổ, định lượng, chiều dài, cuộn, mét, số lượng, cân nặng và thông số máy.',
+    rolling: 'Mỗi dòng giữ nguyên một chỉ tiêu và nhãn nguồn SMALL/BIG, DAY/NIGHT hoặc TOTAL(M).',
+    packing: 'Theo dữ liệu đóng gói nhập trực tiếp: chỉ tiêu, số lượng, đơn vị và ghi chú.',
+  }
   return <div className="space-y-5 px-4 py-6 md:px-8" ref={paging.tableRef}>
     {!embedded && <nav className="flex flex-wrap gap-4 text-sm"><Link href="/orders" className="text-primary underline">Đơn hàng</Link><span aria-current="page">Sản lượng theo mã PI</span><Link href="/reports" className="text-primary underline">Báo cáo thống kê / Nhập Excel</Link></nav>}
-    <div><h1 className="text-2xl font-semibold text-primary">Sản lượng theo mã PI</h1><p className="mt-2 text-sm text-secondary">Tra cứu số thực tế theo mã ghi trong báo cáo. Dòng chưa liên kết vẫn giữ nguyên mã nguồn để rà soát.</p></div>
+    <div><h1 className="text-2xl font-semibold text-primary">Sản lượng {stageLabel.toLocaleLowerCase()} theo mã PI</h1><p className="mt-2 text-sm text-secondary">{stageDescription[stage]} Các PI chưa gắn item vẫn được giữ để đối soát.</p></div>
     <div className="flex flex-wrap gap-3">
       <label className="text-sm">Công đoạn <select className={control} value={stage} onChange={e => setStage(e.target.value)}>{stages.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       <label className="text-sm">Mã PI nguồn <input className={control} type="search" value={text} maxLength={150} onChange={e => setText(e.target.value)} placeholder="Tìm theo mã ghi trong file" /></label>
       <label className="text-sm">Liên kết <select className={control} value={state} onChange={e => setState(e.target.value)}><option value="all">Tất cả</option><option value="linked">Đã gắn item</option><option value="unlinked">Chưa gắn item</option></select></label>
     </div>
-    {paging.loading ? <p role="status">Đang tải sản lượng…</p> : paging.error ? <div role="alert" className="text-error">{paging.error} <button className={control} onClick={paging.retry}>Thử lại</button></div> : !rows.length ? <p role="status">Chưa có dữ liệu phù hợp bộ lọc.</p> : <div data-material-scroll className="overflow-x-auto rounded border border-outline-variant"><table className="w-full text-sm"><thead className="bg-surface-container"><tr>{['Ngày', 'PI nguồn', 'Liên kết', 'Máy / Ca', 'Màu', 'Kg', 'Mét', 'Chỉ tiêu nguồn', 'Giá trị'].map(label => <th key={label} scope="col" className="p-3 text-left whitespace-nowrap">{label}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.id} className="border-t border-outline-variant"><td className="p-3 whitespace-nowrap">{row.date.slice(0, 10).split('-').reverse().join('/')}</td><td className="p-3">{row.orderRef ?? 'Chưa ghi mã'}</td><td className="p-3 whitespace-nowrap">{row.orderId ? <Link href={'/orders/' + encodeURIComponent(row.orderId)} className="text-primary underline">Xem item</Link> : 'Chưa gắn item'}</td><td className="p-3 whitespace-nowrap">{row.machine ?? '—'} / {row.shift === 'D' ? 'Ngày' : row.shift === 'N' ? 'Đêm' : '—'}</td><td className="p-3">{row.color ?? '—'}</td><td className="p-3 tabular-nums">{format(row.kilograms)}</td><td className="p-3 tabular-nums">{format(row.meters)}</td><td className="p-3">{row.metric ?? '—'}</td><td className="p-3 tabular-nums">{format(row.value)}</td></tr>)}</tbody></table></div>}
+    {!paging.loading && !paging.error && query && paging.data?.summary && <div role="status" aria-label="Tổng quan sản lượng theo điều kiện tìm kiếm" className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded border border-primary/30 bg-primary/5 px-4 py-3 text-sm"><strong className="text-primary">Tổng quan PI / kết quả lọc · {total.toLocaleString('vi-VN')} dòng</strong>{paging.data.summary.metrics.map(metric => <span key={`${metric.label}:${metric.unit ?? ''}`}>{metric.label}: <strong className="tabular-nums">{format(metric.value)}</strong>{metric.unit ? ` ${metric.unit}` : ''}</span>)}</div>}
+    {paging.loading ? <p role="status">Đang tải sản lượng…</p> : paging.error ? <div role="alert" className="text-error">{paging.error} <button className={control} onClick={paging.retry}>Thử lại</button></div> : !rows.length ? <p role="status">Chưa có dữ liệu phù hợp bộ lọc.</p> : <div data-material-scroll className="overflow-x-auto rounded border border-outline-variant"><table className="w-full min-w-max text-sm"><thead className="bg-surface-container"><tr>{columns.map((column, index) => <th key={`${column.label}-${index}`} scope="col" className="p-3 text-left whitespace-nowrap">{column.label}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.id} className="border-t border-outline-variant">{columns.map((column, index) => <td key={`${column.label}-${index}`} className="p-3 whitespace-nowrap">{column.cell(row)}</td>)}</tr>)}</tbody></table></div>}
     <TablePager {...paging} total={total} label="Sản lượng" />
   </div>
 }
@@ -103,24 +147,25 @@ function ProductionPlanPrint({ stage, date, onClose }: { stage: 'extruder' | 'kn
           ? ['STT', 'Máy / Ca', 'PI / Mã đơn', 'Item', 'Khách hàng', 'Màu / MB Code', 'GSM', 'Chỉ tiêu', 'Kế hoạch', 'Thực tế', 'Phiên bản', 'Ghi chú']
           : ['STT', 'Ngày', 'Máy dệt', 'PI / Mã đơn', 'Item', 'Khách hàng', 'Màu', 'Khổ (m)', 'GSM', 'Kế hoạch', 'Thực tế', 'Phiên bản', 'Ghi chú']
         return <table key={`${group[0]?.machineId ?? 'machine'}-${groupIndex}`} className={`print-table ${stage === 'extruder' ? 'print-machine-table' : ''}`}>
-        <thead><tr><th colSpan={columns.length} className="print-report-title">{title} · {printDate(payload.from)}{payload.from !== payload.to && ` – ${printDate(payload.to)}`}{stage === 'extruder' ? ` · Máy ${group[0]?.machineId ?? 'chưa phân máy'}` : ''}</th></tr><tr>{columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
-        <tbody>{group.map((plan, index) => {
-          const order = plan.order, item = order ? (order.itemCode || `Dòng ${order.subLineIndex + 1}`) : plan.orderId ? 'Item' : 'Chưa gắn item'
-          const pi = order?.piNumber ?? plan.orderRef ?? '—', color = order?.color ?? plan.color ?? '—', gsm = order?.productionGsm ?? order?.gsm
-          return <tr key={plan.id}>
-            <td>{index + 1}</td>
-            {stage === 'extruder' ? <>
-              <td>{plan.machineId ?? '—'}{plan.shift ? ` / ${plan.shift === 'D' ? 'Ngày' : 'Đêm'}` : ''}</td><td>{pi}</td><td>{item}</td><td>{order?.customer ?? '—'}</td>
-              <td>{color}{order?.mbCode ? ` / ${order.mbCode}` : ''}</td><td>{printNumber(gsm)}</td><td>{plan.metricLabel}</td><td>{printNumber(plan.plannedValue)} {plan.unit}</td>
-              <td className="print-handwritten"></td><td>v{plan.revision}</td><td>{plan.note || '—'}</td>
-            </> : <>
-              <td>{printDate(plan.date)}</td><td>{plan.machineId ?? '—'}{plan.shift ? ` / ${plan.shift === 'D' ? 'Ngày' : 'Đêm'}` : ''}</td><td>{pi}</td><td>{item}</td>
-              <td>{order?.customer ?? '—'}</td><td>{color}</td><td>{printNumber(order?.widthM)}</td><td>{printNumber(gsm)}</td>
-              <td>{printNumber(plan.plannedValue)} {plan.unit}</td><td className="print-handwritten"></td><td>v{plan.revision}</td><td>{plan.note || '—'}</td>
-            </>}
-          </tr>
-        })}</tbody>
-      </table>})}</div>}
+          <thead><tr><th colSpan={columns.length} className="print-report-title">{title} · {printDate(payload.from)}{payload.from !== payload.to && ` – ${printDate(payload.to)}`}{stage === 'extruder' ? ` · Máy ${group[0]?.machineId ?? 'chưa phân máy'}` : ''}</th></tr><tr>{columns.map(column => <th key={column}>{column}</th>)}</tr></thead>
+          <tbody>{group.map((plan, index) => {
+            const order = plan.order, item = order ? (order.itemCode || `Dòng ${order.subLineIndex + 1}`) : plan.orderId ? 'Item' : 'Chưa gắn item'
+            const pi = order?.piNumber ?? plan.orderRef ?? '—', color = order?.color ?? plan.color ?? '—', gsm = order?.productionGsm ?? order?.gsm
+            return <tr key={plan.id}>
+              <td>{index + 1}</td>
+              {stage === 'extruder' ? <>
+                <td>{plan.machineId ?? '—'}{plan.shift ? ` / ${plan.shift === 'D' ? 'Ngày' : 'Đêm'}` : ''}</td><td>{pi}</td><td>{item}</td><td>{order?.customer ?? '—'}</td>
+                <td>{color}{order?.mbCode ? ` / ${order.mbCode}` : ''}</td><td>{printNumber(gsm)}</td><td>{plan.metricLabel}</td><td>{printNumber(plan.plannedValue)} {plan.unit}</td>
+                <td className="print-handwritten"></td><td>v{plan.revision}</td><td>{plan.note || '—'}</td>
+              </> : <>
+                <td>{printDate(plan.date)}</td><td>{plan.machineId ?? '—'}{plan.shift ? ` / ${plan.shift === 'D' ? 'Ngày' : 'Đêm'}` : ''}</td><td>{pi}</td><td>{item}</td>
+                <td>{order?.customer ?? '—'}</td><td>{color}</td><td>{printNumber(order?.widthM)}</td><td>{printNumber(gsm)}</td>
+                <td>{printNumber(plan.plannedValue)} {plan.unit}</td><td className="print-handwritten"></td><td>v{plan.revision}</td><td>{plan.note || '—'}</td>
+              </>}
+            </tr>
+          })}</tbody>
+        </table>
+      })}</div>}
       {plans.length > 0 && <div className="print-totals"><strong>Tổng kế hoạch:</strong> {totalsByUnit.map(([unit, total]) => `${printNumber(total)} ${unit}`).join('　|　')}<span>Thực tế: ____________________</span></div>}
       <footer className="print-signatures"><span>Người vận hành: ____________________</span><span>Quản đốc xác nhận: ____________________</span><span>Người lập kế hoạch: ____________________</span></footer>
     </div>}
@@ -168,14 +213,14 @@ function EntryForm({ kind, stage, date, onSaved, editing, onCancel }: { kind: 'a
   const unitOptions = Array.from(new Set([...options.units, ...(form.unit ? [form.unit] : [])]))
   return <form onSubmit={submit} className="grid gap-3 rounded border border-outline-variant p-4 md:grid-cols-4">
     <label className="text-sm">Ngày<input type="date" className={control} value={date} readOnly /></label>
-    <label className="text-sm">Máy<select className={control} value={other.machine ? '__other__' : form.machineId} onChange={e => e.target.value === '__other__' ? (setOther({ ...other, machine: true }),setForm({ ...form, machineId: '' })) : (setOther({ ...other, machine: false }),setForm({ ...form, machineId: e.target.value }))}><option value="">Chọn máy</option>{machineOptions.map(value=><option key={value} value={value}>{value}</option>)}<option value="__other__">Nhập máy khác…</option></select>{other.machine&&<input className={`${control} mt-1`} aria-label="Nhập mã máy khác" maxLength={40} value={form.machineId} onChange={e=>setForm({...form,machineId:e.target.value})}/>}</label>
+    <label className="text-sm">Máy<select className={control} value={other.machine ? '__other__' : form.machineId} onChange={e => e.target.value === '__other__' ? (setOther({ ...other, machine: true }), setForm({ ...form, machineId: '' })) : (setOther({ ...other, machine: false }), setForm({ ...form, machineId: e.target.value }))}><option value="">Chọn máy</option>{machineOptions.map(value => <option key={value} value={value}>{value}</option>)}<option value="__other__">Nhập máy khác…</option></select>{other.machine && <input className={`${control} mt-1`} aria-label="Nhập mã máy khác" maxLength={40} value={form.machineId} onChange={e => setForm({ ...form, machineId: e.target.value })} />}</label>
     <label className="text-sm">Ca<select className={control} value={form.shift} onChange={e => setForm({ ...form, shift: e.target.value })}><option value="">Không áp dụng</option><option value="D">Ngày</option><option value="N">Đêm</option></select></label>
-    <label className="text-sm">PI nguồn<select className={control} value={other.pi ? '__other__' : form.orderRef} onChange={e=>{const value=e.target.value;if(value==='__other__'){setOther({...other,pi:true});setForm({...form,orderRef:'',orderId:''});setCandidates([])}else{setOther({...other,pi:false});setForm({...form,orderRef:value,orderId:''});void lookupOrder(value)}}}><option value="">Chọn PI</option>{piOptions.map(value=><option key={value} value={value}>{value}</option>)}<option value="__other__">Nhập PI khác…</option></select>{other.pi&&<input className={`${control} mt-1`} aria-label="Nhập PI nguồn khác" maxLength={150} value={form.orderRef} onChange={e=>setForm({...form,orderRef:e.target.value,orderId:''})} onBlur={()=>void lookupOrder()}/>}</label>
-    <label className="text-sm">Màu<select className={control} value={other.color ? '__other__' : form.color} onChange={e=>e.target.value==='__other__'?(setOther({...other,color:true}),setForm({...form,color:''})):(setOther({...other,color:false}),setForm({...form,color:e.target.value}))}><option value="">Chọn màu</option>{colorOptions.map(value=><option key={value} value={value}>{value}</option>)}<option value="__other__">Nhập màu khác…</option></select>{other.color&&<input className={`${control} mt-1`} aria-label="Nhập màu khác" maxLength={120} value={form.color} onChange={e=>setForm({...form,color:e.target.value})}/>}</label>
-    <label className="text-sm">Chỉ tiêu<select required className={control} value={other.metric ? '__other__' : form.metricLabel} onChange={e=>e.target.value==='__other__'?(setOther({...other,metric:true}),setForm({...form,metricLabel:''})):(setOther({...other,metric:false}),setForm({...form,metricLabel:e.target.value}))}><option value="">Chọn chỉ tiêu</option>{metricOptions.map(value=><option key={value} value={value}>{value}</option>)}<option value="__other__">Nhập chỉ tiêu khác…</option></select>{other.metric&&<input className={`${control} mt-1`} aria-label="Nhập chỉ tiêu khác" required maxLength={80} value={form.metricLabel} onChange={e=>setForm({...form,metricLabel:e.target.value})}/>}</label>
+    <label className="text-sm">PI nguồn<select className={control} value={other.pi ? '__other__' : form.orderRef} onChange={e => { const value = e.target.value; if (value === '__other__') { setOther({ ...other, pi: true }); setForm({ ...form, orderRef: '', orderId: '' }); setCandidates([]) } else { setOther({ ...other, pi: false }); setForm({ ...form, orderRef: value, orderId: '' }); void lookupOrder(value) } }}><option value="">Chọn PI</option>{piOptions.map(value => <option key={value} value={value}>{value}</option>)}<option value="__other__">Nhập PI khác…</option></select>{other.pi && <input className={`${control} mt-1`} aria-label="Nhập PI nguồn khác" maxLength={150} value={form.orderRef} onChange={e => setForm({ ...form, orderRef: e.target.value, orderId: '' })} onBlur={() => void lookupOrder()} />}</label>
+    <label className="text-sm">Màu<select className={control} value={other.color ? '__other__' : form.color} onChange={e => e.target.value === '__other__' ? (setOther({ ...other, color: true }), setForm({ ...form, color: '' })) : (setOther({ ...other, color: false }), setForm({ ...form, color: e.target.value }))}><option value="">Chọn màu</option>{colorOptions.map(value => <option key={value} value={value}>{value}</option>)}<option value="__other__">Nhập màu khác…</option></select>{other.color && <input className={`${control} mt-1`} aria-label="Nhập màu khác" maxLength={120} value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} />}</label>
+    <label className="text-sm">Chỉ tiêu<select required className={control} value={other.metric ? '__other__' : form.metricLabel} onChange={e => e.target.value === '__other__' ? (setOther({ ...other, metric: true }), setForm({ ...form, metricLabel: '' })) : (setOther({ ...other, metric: false }), setForm({ ...form, metricLabel: e.target.value }))}><option value="">Chọn chỉ tiêu</option>{metricOptions.map(value => <option key={value} value={value}>{value}</option>)}<option value="__other__">Nhập chỉ tiêu khác…</option></select>{other.metric && <input className={`${control} mt-1`} aria-label="Nhập chỉ tiêu khác" required maxLength={80} value={form.metricLabel} onChange={e => setForm({ ...form, metricLabel: e.target.value })} />}</label>
     <label className="text-sm">Số lượng<input required type="number" min="0" step="0.01" className={control} value={form.value} onChange={e => setForm({ ...form, value: e.target.value })} /></label>
-    <label className="text-sm">Đơn vị<select required className={control} value={other.unit ? '__other__' : form.unit} onChange={e=>e.target.value==='__other__'?(setOther({...other,unit:true}),setForm({...form,unit:''})):(setOther({...other,unit:false}),setForm({...form,unit:e.target.value}))}><option value="">Chọn đơn vị</option>{unitOptions.map(value=><option key={value} value={value}>{value}</option>)}<option value="__other__">Nhập đơn vị khác…</option></select>{other.unit&&<input className={`${control} mt-1`} aria-label="Nhập đơn vị khác" required maxLength={24} value={form.unit} onChange={e=>setForm({...form,unit:e.target.value})}/>}</label>
-    {candidates.length > 0 && <label className="text-sm md:col-span-2">Dòng đơn (chọn đúng item)<select className={control} value={form.orderId} onChange={e => {const candidate=candidates.find(order=>order.id===e.target.value);setForm({ ...form, orderId: e.target.value, color: candidate?.color ?? form.color })}}><option value="">Giữ chưa liên kết</option>{candidates.map(order=><option key={order.id} value={order.id}>Dòng {order.subLineIndex + 1} · {order.color ?? 'Chưa có màu'} · {order.itemCode ?? 'Chưa có mã item'} · {order.customer}</option>)}</select></label>}
+    <label className="text-sm">Đơn vị<select required className={control} value={other.unit ? '__other__' : form.unit} onChange={e => e.target.value === '__other__' ? (setOther({ ...other, unit: true }), setForm({ ...form, unit: '' })) : (setOther({ ...other, unit: false }), setForm({ ...form, unit: e.target.value }))}><option value="">Chọn đơn vị</option>{unitOptions.map(value => <option key={value} value={value}>{value}</option>)}<option value="__other__">Nhập đơn vị khác…</option></select>{other.unit && <input className={`${control} mt-1`} aria-label="Nhập đơn vị khác" required maxLength={24} value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })} />}</label>
+    {candidates.length > 0 && <label className="text-sm md:col-span-2">Dòng đơn (chọn đúng item)<select className={control} value={form.orderId} onChange={e => { const candidate = candidates.find(order => order.id === e.target.value); setForm({ ...form, orderId: e.target.value, color: candidate?.color ?? form.color }) }}><option value="">Giữ chưa liên kết</option>{candidates.map(order => <option key={order.id} value={order.id}>Dòng {order.subLineIndex + 1} · {order.color ?? 'Chưa có màu'} · {order.itemCode ?? 'Chưa có mã item'} · {order.customer}</option>)}</select></label>}
     {lookupError && <p role="alert" className="text-xs text-error md:col-span-2">{lookupError}</p>}
     {optionsError && <p role="status" className="text-xs text-secondary md:col-span-4">Không tải được danh sách có sẵn; chọn “Nhập … khác” để điền thủ công.</p>}
     <label className="text-sm md:col-span-3">Ghi chú<input className={control} maxLength={1000} value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} /></label>
@@ -184,8 +229,8 @@ function EntryForm({ kind, stage, date, onSaved, editing, onCancel }: { kind: 'a
   </form>
 }
 
-function ProductionEntryWorkspace({ kind }: { kind: 'actual' | 'plan' }) {
-  const [stage, setStage] = useState<Stage>('extruder'), [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+function ProductionEntryWorkspace({ kind, selectedStage, selectedDate, onStageChange, onPlanSaved, hideStageSelector = false }: { kind: 'actual' | 'plan'; selectedStage?: Stage; selectedDate?: string; onStageChange?: (stage: Stage) => void; onPlanSaved?: () => void; hideStageSelector?: boolean }) {
+  const [stage, setStage] = useState<Stage>(selectedStage ?? 'extruder'), [date, setDate] = useState(selectedDate ?? new Date().toISOString().slice(0, 10))
   const [rows, setRows] = useState<Entry[]>([]), [loading, setLoading] = useState(false), [error, setError] = useState(''), [editing, setEditing] = useState<Entry | null>(null)
   const [showPrint, setShowPrint] = useState(false)
   const endpoint = kind === 'plan' ? '/api/production-plans' : '/api/production-records/manual'
@@ -195,21 +240,27 @@ function ProductionEntryWorkspace({ kind }: { kind: 'actual' | 'plan' }) {
     catch (e) { setError(e instanceof Error ? e.message : 'Không tải được dữ liệu.') }
     finally { setLoading(false) }
   }
+  useEffect(() => { if (selectedStage) setStage(selectedStage) }, [selectedStage])
+  useEffect(() => { if (selectedDate) setDate(selectedDate) }, [selectedDate])
   useEffect(() => { void load() }, [stage, date])
   const control = 'rounded border border-outline px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary'
   return <section className="space-y-4">
     {kind === 'plan' && (stage === 'extruder' || stage === 'knitting') && <div>{showPrint
       ? <ProductionPlanPrint key={`${stage}-${date}`} stage={stage} date={date} onClose={() => setShowPrint(false)} />
       : <button type="button" onClick={() => setShowPrint(true)} className="no-print rounded border border-primary px-4 py-2 text-sm text-primary">Mở mẫu in</button>}</div>}
-    <div className="flex flex-wrap items-end gap-3"><label className="text-sm">Công đoạn<select className={control} value={stage} onChange={e => setStage(e.target.value as Stage)}>{stageOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-sm">Ngày<input type="date" className={control} value={date} onChange={e => setDate(e.target.value)} /></label></div>
-    <EntryForm key={`${kind}-${stage}-${date}-${editing?.id ?? 'new'}`} kind={kind} stage={stage} date={date} editing={editing} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); void load() }} />
+    <div className="flex flex-wrap items-end gap-3">{!hideStageSelector && <label className="text-sm">Công đoạn<select className={control} value={stage} onChange={e => { const value = e.target.value as Stage; setStage(value); onStageChange?.(value) }}>{stageOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}<label className="text-sm">Ngày<input type="date" className={control} value={date} onChange={e => setDate(e.target.value)} /></label></div>
+    <EntryForm key={`${kind}-${stage}-${date}-${editing?.id ?? 'new'}`} kind={kind} stage={stage} date={date} editing={editing} onCancel={() => setEditing(null)} onSaved={() => { setEditing(null); void load(); if (kind === 'plan') onPlanSaved?.() }} />
     {kind === 'actual' && <p className="text-sm text-secondary">Máy, PI, màu, chỉ tiêu và đơn vị có danh sách chọn từ dữ liệu sẵn có. Nếu giá trị chưa có, chọn mục “Nhập … khác”. Các file báo cáo Excel theo công đoạn được nhập ở <Link href="/reports" className="text-primary underline">Báo cáo thống kê</Link>. Dòng PI chưa xác minh được item được giữ nguyên và chưa gắn đơn.</p>}
-    {error && <p role="alert" className="text-sm text-error">{error}</p>}{loading ? <p role="status">Đang tải…</p> : !rows.length ? <p role="status">Chưa có dữ liệu cho bộ lọc này.</p> : <div className="overflow-x-auto rounded border border-outline-variant"><table className="w-full text-sm"><thead className="bg-surface-container"><tr>{['Ngày','Công đoạn','Máy','PI nguồn','Chỉ tiêu','Số lượng','Đơn vị','Phiên bản',''].map(x=><th key={x} className="p-3 text-left">{x}</th>)}</tr></thead><tbody>{rows.map(row=><tr key={row.id} className="border-t border-outline-variant"><td className="p-3 whitespace-nowrap">{(row.planDate ?? row.reportDate ?? '').slice(0,10).split('-').reverse().join('/')}</td><td className="p-3">{stageOptions.find(([v])=>v===row.stage)?.[1]}</td><td className="p-3">{row.machineId ?? '—'}</td><td className="p-3">{row.orderRef ?? '—'}{row.orderRef && <span className="ml-2 text-xs text-secondary">(chưa gắn item)</span>}</td><td className="p-3">{row.metricLabel}</td><td className="p-3 tabular-nums">{Number(row.plannedValue ?? row.metricValue).toLocaleString('vi-VN',{maximumFractionDigits:2})}</td><td className="p-3">{row.unit}</td><td className="p-3">{kind==='plan' ? `v${row.revision}` : 'Nhập tay'}</td><td className="p-3">{kind==='plan' && <button className="text-primary underline" onClick={()=>setEditing(row)}>Sửa</button>}</td></tr>)}</tbody></table></div>}
+    {error && <p role="alert" className="text-sm text-error">{error}</p>}{loading ? <p role="status">Đang tải…</p> : !rows.length ? <p role="status">Chưa có dữ liệu cho bộ lọc này.</p> : <div className="overflow-x-auto rounded border border-outline-variant"><table className="w-full text-sm"><thead className="bg-surface-container"><tr>{['Ngày', 'Công đoạn', 'Máy', 'PI nguồn', 'Chỉ tiêu', 'Số lượng', 'Đơn vị', 'Phiên bản', ''].map(x => <th key={x} className="p-3 text-left">{x}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.id} className="border-t border-outline-variant"><td className="p-3 whitespace-nowrap">{(row.planDate ?? row.reportDate ?? '').slice(0, 10).split('-').reverse().join('/')}</td><td className="p-3">{stageOptions.find(([v]) => v === row.stage)?.[1]}</td><td className="p-3">{row.machineId ?? '—'}</td><td className="p-3">{row.orderRef ?? '—'}{row.orderRef && <span className="ml-2 text-xs text-secondary">(chưa gắn item)</span>}</td><td className="p-3">{row.metricLabel}</td><td className="p-3 tabular-nums">{Number(row.plannedValue ?? row.metricValue).toLocaleString('vi-VN', { maximumFractionDigits: 2 })}</td><td className="p-3">{row.unit}</td><td className="p-3">{kind === 'plan' ? `v${row.revision}` : 'Nhập tay'}</td><td className="p-3">{kind === 'plan' && <button className="text-primary underline" onClick={() => setEditing(row)}>Sửa</button>}</td></tr>)}</tbody></table></div>}
   </section>
 }
 
+export function ProductionPlanEntryWorkspace({ selectedStage, selectedDate, onStageChange, onPlanSaved, hideStageSelector }: { selectedStage?: Stage; selectedDate?: string; onStageChange?: (stage: Stage) => void; onPlanSaved?: () => void; hideStageSelector?: boolean }) {
+  return <ProductionEntryWorkspace kind="plan" selectedStage={selectedStage} selectedDate={selectedDate} onStageChange={onStageChange} onPlanSaved={onPlanSaved} hideStageSelector={hideStageSelector} />
+}
+
 export default function ProductionRecordsWorkspace({ embedded = false }: { embedded?: boolean }) {
-  const [tab, setTab] = useState<'imported'|'manual'|'plans'>('imported')
-  const tabs = [['imported','Sản lượng từ báo cáo'],['manual','Nhập sản lượng trực tiếp'],['plans','Kế hoạch sản xuất']] as const
-  return <div className="space-y-4"><div role="tablist" aria-label="Sản lượng và kế hoạch" className="flex gap-2 overflow-x-auto border-b border-outline-variant px-4 pt-4 md:px-8">{tabs.map(([id,label])=><button key={id} role="tab" aria-selected={tab===id} onClick={()=>setTab(id)} className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab===id?'border-primary font-semibold text-primary':'border-transparent text-secondary'}`}>{label}</button>)}</div>{tab==='imported'?<ProductionRecordsTable embedded={embedded}/>:<div className="px-4 pb-6 md:px-8"><ProductionEntryWorkspace key={tab} kind={tab==='plans'?'plan':'actual'}/></div>}</div>
+  const [tab, setTab] = useState<'imported' | 'progress' | 'import'>('imported')
+  const tabs = [['imported', 'Tra cứu theo mã PI'], ['progress', 'Tiến độ theo PI'], ['import', 'Import dữ liệu']] as const
+  return <div className="space-y-4"><div role="tablist" aria-label="Sản lượng" className="flex gap-2 overflow-x-auto border-b border-outline-variant px-4 pt-4 md:px-8">{tabs.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === id ? 'border-primary font-semibold text-primary' : 'border-transparent text-secondary'}`}>{label}</button>)}</div>{tab === 'imported' ? <ProductionRecordsTable embedded={embedded} /> : tab === 'progress' ? <ProductionProgressWorkspace /> : <ProductionImportWorkspace />}</div>
 }

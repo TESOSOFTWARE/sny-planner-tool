@@ -1578,25 +1578,25 @@ export default function PiMasterDetailEditor({
                             )}
 
                             <details className="rounded-lg border border-outline-variant/50 bg-surface-variant/10 p-3">
-                              <summary className="cursor-pointer text-xs font-semibold text-primary">Thông tin bổ sung từ ORDER LIST / PO</summary>
+                              <summary className="cursor-pointer text-xs font-semibold text-primary">Thông tin theo đơn đặt hàng</summary>
                               <div className="mt-3 space-y-4">
                                 <fieldset className="grid grid-cols-1 gap-2 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
-                                  <legend className="px-1 text-[11px] font-semibold text-secondary">Thông số nguồn và nhãn</legend>
-                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Gauge &amp; Denier</label><input value={line.gaugeDenier} onChange={e=>updateLineField(idx,'gaugeDenier',e.target.value)} maxLength={100} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
-                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Label / nhãn sản phẩm</label><input value={line.labelInstruction} onChange={e=>updateLineField(idx,'labelInstruction',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
-                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Shipping (nguyên văn)</label><input value={line.shippingNote} onChange={e=>updateLineField(idx,'shippingNote',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <legend className="px-1 text-[11px] font-semibold text-secondary">Thông số kỹ thuật và nhận diện sản phẩm</legend>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Gauge / Denier</label><input value={line.gaugeDenier} onChange={e=>updateLineField(idx,'gaugeDenier',e.target.value)} maxLength={100} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Yêu cầu nhãn sản phẩm</label><input value={line.labelInstruction} onChange={e=>updateLineField(idx,'labelInstruction',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Ghi chú giao hàng (Shipping)</label><input value={line.shippingNote} onChange={e=>updateLineField(idx,'shippingNote',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
                                 </fieldset>
                                 <fieldset className="grid grid-cols-1 gap-2 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
-                                  <legend className="px-1 text-[11px] font-semibold text-secondary">Ngày theo nguồn</legend>
-                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">ETD</label><input type="date" value={line.etdDate} onChange={e=>updateLineField(idx,'etdDate',e.target.value)} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
-                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Loading date</label><input type="date" value={line.loadingDate} onChange={e=>updateLineField(idx,'loadingDate',e.target.value)} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
-                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Loading date 2</label><input type="date" value={line.loadingDate2} onChange={e=>updateLineField(idx,'loadingDate2',e.target.value)} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <legend className="px-1 text-[11px] font-semibold text-secondary">Lịch giao hàng</legend>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Ngày dự kiến xuất hàng (ETD)</label><input type="date" value={line.etdDate} onChange={e=>updateLineField(idx,'etdDate',e.target.value)} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Ngày xếp hàng (Loading date)</label><input type="date" value={line.loadingDate} onChange={e=>updateLineField(idx,'loadingDate',e.target.value)} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Ngày xếp hàng 2</label><input type="date" value={line.loadingDate2} onChange={e=>updateLineField(idx,'loadingDate2',e.target.value)} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
                                 </fieldset>
                                 <fieldset className="grid grid-cols-1 gap-2 border-t border-outline-variant/30 pt-3 sm:grid-cols-3">
-                                  <legend className="px-1 text-[11px] font-semibold text-secondary">Ghi chú ngày dạng chữ từ PO</legend>
-                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">ETD note</label><input value={line.etdNote} onChange={e=>updateLineField(idx,'etdNote',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
-                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Loading date note</label><input value={line.loadingDateNote} onChange={e=>updateLineField(idx,'loadingDateNote',e.target.value)} maxLength={200} placeholder="VD: Mid August, 2026" className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
-                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Loading date 2 note</label><input value={line.loadingDate2Note} onChange={e=>updateLineField(idx,'loadingDate2Note',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <legend className="px-1 text-[11px] font-semibold text-secondary">Ghi chú lịch giao hàng</legend>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Ghi chú ETD</label><input value={line.etdNote} onChange={e=>updateLineField(idx,'etdNote',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Ghi chú ngày xếp hàng</label><input value={line.loadingDateNote} onChange={e=>updateLineField(idx,'loadingDateNote',e.target.value)} maxLength={200} placeholder="VD: Giữa tháng 8/2026" className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
+                                  <div><label className="block text-[11px] font-medium text-secondary mb-1">Ghi chú ngày xếp hàng 2</label><input value={line.loadingDate2Note} onChange={e=>updateLineField(idx,'loadingDate2Note',e.target.value)} maxLength={200} className="w-full rounded border border-outline-variant px-2 py-1.5 text-xs" /></div>
                                 </fieldset>
                               </div>
                             </details>
@@ -2145,7 +2145,7 @@ export default function PiMasterDetailEditor({
                                     />
                                   </div>
                                   <div>
-                                    <label className="block text-[10px] font-medium text-secondary mb-0.5">Dung sai rộng/dài/nặng (±%)</label>
+                                    <label className="block text-[10px] font-medium text-secondary mb-0.5">Dung sai quy cách (khổ / dài / nặng, ±%)</label>
                                     <input
                                       type="number"
                                       step="0.5"

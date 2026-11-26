@@ -44,15 +44,15 @@ export async function POST(req: NextRequest) {
       piMap.set(key, piMap.has(key) ? null : o.id)
     }
 
-    let matchedOrderCount = 0
-    const sampleRows = parseResult.metrics.slice(0, 10).map((m) => {
+    const rows: Record<string, unknown>[] = parseResult.metrics.map((m) => {
       const orderId = m.orderRef ? (piMap.get(m.orderRef.trim().toUpperCase()) ?? null) : null
-      if (orderId) matchedOrderCount++
       return {
         ...m,
         orderId,
       }
     })
+    rows.push(...parseResult.invalidMetrics.map(metric => ({ ...metric, isValid: false, date: null, orderId: null })))
+    const matchedOrderCount = rows.filter(row => row.isValid !== false && row.orderId !== null).length
 
     const uniqueOrders = Array.from(new Set(parseResult.metrics.map((m) => m.orderRef).filter(Boolean)))
     const dates = Array.from(new Set(parseResult.metrics.map((m) => m.date))).sort()
@@ -66,15 +66,19 @@ export async function POST(req: NextRequest) {
       fileName: file.name,
       period,
       expectedSnapshot,
-      skippedDateBlocks: parseResult.dateBlockMappings.filter(block => !block.isoDate),
+      skippedDateBlocks: parseResult.dateBlockMappings.filter(block => !block.isoDate).map(block => ({ ...block, blocked: block.hasData })),
       totalMetrics: parseResult.metrics.length,
+      invalidMetricCount: parseResult.invalidMetrics.length,
       totalOrderRows: parseResult.totalOrderRows,
       summarySkipped: parseResult.summarySkipped,
       uniqueOrdersCount: uniqueOrders.length,
+      matchedOrderCount,
+      unmatchedOrderCount: rows.filter(row => row.orderRef && row.orderId === null).length,
       dateRange: dates.length > 0 ? `${dates[0]} → ${dates[dates.length - 1]}` : 'N/A',
       dates,
       replacementDays,
-      sampleRows,
+      rows,
+      sampleRows: rows.slice(0, 10),
     })
   } catch (error: any) {
     if (error instanceof RollingDateConflictError) return NextResponse.json({ success: false, error: error.message }, { status: 422 })

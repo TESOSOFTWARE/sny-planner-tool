@@ -27,6 +27,10 @@ export interface ExtruderRow {
   color:      string       // e.g. "BLACK B045 UV 2%"
   denier:     number | null
   weightKgs:  number       // 0 is valid
+  sourceWeight: string
+  sourceRow: number
+  isValid: boolean
+  validationErrors: string[]
   beamNote:   string | null
   orderRef:   string | null
   sourceOrderRefs?: string[] // Whole source cells retained for catalog resolution.
@@ -76,6 +80,18 @@ function toNum(v: unknown): number {
   if (v == null || v === '') return 0
   const n = Number(v)
   return isNaN(n) || !isFinite(n) ? 0 : n
+}
+
+function parseNumericCell(v: unknown): number | null {
+  if (v == null || v === '') return null
+  const value = Number(v)
+  return Number.isFinite(value) ? value : null
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+  if (value == null || String(value).trim() === '') return false
+  const numeric = Number(value)
+  return !(Number.isFinite(numeric) && numeric === 0)
 }
 
 function toStr(v: unknown): string {
@@ -138,6 +154,22 @@ export function parseExtruderReport(buffer: Buffer): ExtruderRow[] {
   }) as unknown[][]
 
   const results: ExtruderRow[] = []
+  const sheetRange = XLSX.utils.decode_range(ws['!ref'] ?? 'A1')
+  const firstSheetRow = sheetRange.s.r + 1
+  const mergedCellValues = new Map<string, string>()
+  for (const merge of (ws['!merges'] as XLSX.Range[] | undefined) ?? []) {
+    if (merge.s.c !== merge.e.c || merge.e.r <= merge.s.r) continue
+    // sheet_to_json arrays start at the worksheet's !ref origin, while merge
+    // coordinates are absolute worksheet coordinates (0-based).
+    const rowStart = merge.s.r - sheetRange.s.r
+    const rowEnd = merge.e.r - sheetRange.s.r
+    const column = merge.s.c - sheetRange.s.c
+    const anchor = toStr(rows[rowStart]?.[column])
+    if (!anchor) continue
+    for (let row = rowStart + 1; row <= rowEnd; row++) mergedCellValues.set(`${row}:${column}`, anchor)
+  }
+  const explicitOrderColumns = new Set<number>()
+  const mergedValue = (row: number, column: number) => mergedCellValues.get(`${row}:${column}`) ?? ''
 
   let currentDate: Date | null = null
   let currentMachineId: string | null = null
@@ -202,7 +234,7 @@ export function parseExtruderReport(buffer: Buffer): ExtruderRow[] {
         else if (h === 'WEIGHT') colWeight = c
         else if (h === 'TOTAL') colTotal = c
         else if (h.replace(/\s/g, '').includes('REMARK')) colRemark = c
-        else if (h.includes('ORDER') || h.includes('REF') || h === 'PI' || h === 'PI CODE') colOrder = c
+        else if (h.includes('ORDER') || h.includes('REF') || h === 'PI' || h === 'PI CODE') { colOrder = c; explicitOrderColumns.add(c) }
         else if (h.includes('BEAM') || h.includes('NOTE')) colBeam = c
       }
       if (colRemark >= 0) {
@@ -235,19 +267,30 @@ export function parseExtruderReport(buffer: Buffer): ExtruderRow[] {
     if (shift !== 'D' && shift !== 'N') continue
 
     const color = toStr(row[colColor])
-    if (!color) continue
+    const hasRowData = row.slice(1).some(hasMeaningfulValue)
+    if (!color && !hasRowData) continue
+    const validationErrors: string[] = []
+    if (!color) validationErrors.push('Thiếu COLOR')
 
-    const denier = row[colDenier] != null && row[colDenier] !== '' && !isNaN(Number(row[colDenier]))
-      ? Number(row[colDenier])
-      : null
+    const rawDenier = row[colDenier]
+    const denier = parseNumericCell(rawDenier)
+    if (rawDenier != null && rawDenier !== '' && denier == null) validationErrors.push('DENIER không phải số')
+    else if (denier != null && denier < 0) validationErrors.push('DENIER không được âm')
 
-    const weightKgs = Math.max(0, toNum(row[colWeight])) // 0 is valid
+    const sourceWeight = toStr(row[colWeight])
+    const parsedWeight = parseNumericCell(row[colWeight])
+    if (parsedWeight == null) validationErrors.push('WEIGHT thiếu hoặc không phải số')
+    else if (parsedWeight < 0) validationErrors.push('WEIGHT không được âm')
+    const weightKgs = parsedWeight ?? 0 // 0 is valid; invalid source values are explicitly flagged below.
 
-    // Col 5 is BEAM NOTE (e.g. "11 BEAM ( 158 SỢI)")
-    // Col 6 is ORDER REF / PI CODE (e.g. "JPY26-274")
+    // Some reports put the PI in the unlabelled column next to REMARK; it may
+    // be vertically merged across multiple shift/output rows.
     const rawBeam = toStr(row[colBeam])
-    const rawOrder = toStr(row[colOrder])
-    const rawLooseNote = toStr(row[colLooseNote])
+    const mergedOrder = mergedValue(r, colOrder)
+    const rawOrder = toStr(row[colOrder]) || (explicitOrderColumns.has(colOrder) || productionPi(mergedOrder) ? mergedOrder : '')
+    // In the current EXTRUDER workbook, PI is commonly stored in the unlabelled
+    // column next to REMARK, with one cell merged across several D/N rows.
+    const rawLooseNote = toStr(row[colLooseNote]) || mergedValue(r, colLooseNote)
 
     const refs = Array.from(new Set([productionPi(rawOrder), productionPi(rawLooseNote)].filter((ref): ref is string => ref !== null)))
     const orderRef = refs.length === 1 ? refs[0] : null
@@ -262,6 +305,10 @@ export function parseExtruderReport(buffer: Buffer): ExtruderRow[] {
       color,
       denier,
       weightKgs,
+      sourceWeight,
+      sourceRow: firstSheetRow + r,
+      isValid: validationErrors.length === 0,
+      validationErrors,
       beamNote,
       orderRef,
       sourceOrderRefs: Array.from(new Set([rawOrder, rawLooseNote].filter(Boolean))),

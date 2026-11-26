@@ -8,6 +8,7 @@ export function permissionModule(key: PermissionKey) { return key.split('.')[0] 
 
 export function permissionForRequest(pathname: string, method: string): PermissionKey | null {
   if (pathname.startsWith('/api/auth/')) return null
+  if (pathname.startsWith('/production-handoffs')) return 'output.read'
   if (pathname.startsWith('/orders/production')) return 'output.read'
   if (pathname === '/' || pathname.startsWith('/orders')) return 'orders.read'
   if (pathname.startsWith('/customers')) return 'customers.read'

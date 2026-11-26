@@ -7,12 +7,19 @@ import { permissionForRequest, userHasPermission, type PermissionKey } from '@/l
 
 export const SESSION_COOKIE = 'sny_session'
 export const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex')
+function requestSessionToken(request: Request) {
+  return request.headers.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(SESSION_COOKIE + '='))?.slice(SESSION_COOKIE.length + 1) ?? null
+}
 
 export async function currentUser(providedToken?: string | null) {
   const token = providedToken === undefined ? cookies().get(SESSION_COOKIE)?.value : providedToken
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null
   const session = await prisma.snySession.findUnique({ where: { tokenHash: tokenHash(token) }, include: { user: { select: { id: true, email: true, lockedUntil: true } } } })
   return session && session.expiresAt > new Date() && (!session.user.lockedUntil || session.user.lockedUntil <= new Date()) ? session.user : null
+}
+
+export async function currentUserFromRequest(request: Request) {
+  return currentUser(requestSessionToken(request))
 }
 
 export async function requireUser() {
@@ -35,7 +42,7 @@ export function sameOrigin(request?: Request) {
 
 /** Called by every business Route Handler, including requests bypassing UI. */
 export async function authError(method: string, request: Request, explicitPermission?: PermissionKey) {
-  const token = request.headers.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(SESSION_COOKIE + '='))?.slice(SESSION_COOKIE.length + 1) ?? null
+  const token = requestSessionToken(request)
   const user = await currentUser(token)
   if (!user) return NextResponse.json({ success: false, error: 'Vui lòng đăng nhập.' }, { status: 401 })
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !sameOrigin(request)) return NextResponse.json({ success: false, error: 'Nguồn yêu cầu không hợp lệ.' }, { status: 403 })

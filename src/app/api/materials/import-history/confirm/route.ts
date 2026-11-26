@@ -5,6 +5,7 @@ import { prisma } from '@/lib/db'
 import { planHistoryImport, readHistoryFile } from '@/lib/materials/reportHistoryImport'
 import { loadMonthlyHistoryState } from '@/lib/materials/monthlyHistoryState'
 import { importedTaxonomy } from '@/lib/materials/reportPayload'
+import { assertProductionImportAttempt, markProductionImportAttemptCommitted, ProductionImportAttemptError, ProductionImportAttemptReplayError } from '@/lib/production/importAttempt'
 
 class StaleHistoryPreview extends Error {}
 class InvalidHistory extends Error {}
@@ -24,6 +25,8 @@ export async function POST(req: NextRequest) {
   } catch (error) { return NextResponse.json({ success: false, code: 'INVALID_INPUT', error: error instanceof Error ? error.message : 'Không đọc được file Excel.' }, { status: 422 }) }
   try {
     const result = await prisma.$transaction(async tx => {
+      const attempt = input.importAttempt ? { ...input.importAttempt, sheet: 'HDPE' as const } : undefined
+      await assertProductionImportAttempt(tx, attempt)
       await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'")
       await tx.$executeRawUnsafe('LOCK TABLE "materials" IN SHARE ROW EXCLUSIVE MODE')
       await tx.$executeRawUnsafe('LOCK TABLE "material_transactions" IN SHARE ROW EXCLUSIVE MODE')
@@ -39,16 +42,28 @@ export async function POST(req: NextRequest) {
         const material = await tx.material.create({ data: { name: row.materialName.trim(), group: row.group, ...importedTaxonomy(row), currentStock: 0, stockReportDate: null, stockReportDirty: false, unit: 'kg' } })
         createdIds.set('new:' + key, material.id)
       }
-      const data = plan.writes.map(write => ({ ...write, materialId: createdIds.get(write.materialId) ?? write.materialId }))
-      const created = data.length ? (await tx.materialReportSnapshot.createMany({ data })).count : 0
+      const data = plan.writes.map(({ updateExisting: _updateExisting, ...write }) => ({ ...write, materialId: createdIds.get(write.materialId) ?? write.materialId }))
+      const creates = data.filter((_, index) => !plan.writes[index].updateExisting)
+      const updates = data.filter((_, index) => plan.writes[index].updateExisting)
+      const created = creates.length ? (await tx.materialReportSnapshot.createMany({ data: creates })).count : 0
+      for (const update of updates) {
+        await tx.materialReportSnapshot.update({
+          where: { materialId_reportDate: { materialId: update.materialId, reportDate: update.reportDate } },
+          data: { payload: update.payload, contentHash: update.contentHash, version: update.version },
+        })
+      }
       for (const update of plan.stockUpdates) {
         const materialId = createdIds.get(update.materialId) ?? update.materialId
         await tx.material.update({ where: { id: materialId }, data: { currentStock: update.to.stock, stockReportDate: new Date(update.to.date + 'T00:00:00.000Z'), stockReportDirty: false } })
       }
-      return { success: true, created, materialsCreated: createdIds.size, stockUpdated: plan.stockUpdates.map(update => ({ ...update, materialId: createdIds.get(update.materialId) ?? update.materialId })), stockKept: plan.stockKept, totalRows: plan.preview.totalRows, counts: plan.preview.counts }
+      const receipt = { created, updated: updates.length, materialsCreated: createdIds.size, stockUpdated: plan.stockUpdates.map(update => ({ ...update, materialId: createdIds.get(update.materialId) ?? update.materialId })), stockKept: plan.stockKept, totalRows: plan.preview.totalRows, counts: plan.preview.counts }
+      await markProductionImportAttemptCommitted(tx, attempt, receipt)
+      return { success: true, ...receipt }
     }, { maxWait: 5000, timeout: 30000 })
     return NextResponse.json(result)
   } catch (error) {
+    if (error instanceof ProductionImportAttemptReplayError) return NextResponse.json({ success: true, ...error.receipt, replayed: true })
+    if (error instanceof ProductionImportAttemptError) return NextResponse.json({ success: false, code: 'IMPORT_ATTEMPT_EXPIRED', error: error.message }, { status: 409 })
     if (error instanceof StaleHistoryPreview) return NextResponse.json({ success: false, code: 'STALE_PREVIEW', error: 'Dữ liệu đã thay đổi sau khi xem trước; vui lòng xem trước lại.' }, { status: 409 })
     if (error instanceof InvalidHistory) return NextResponse.json({ success: false, code: 'INVALID_INPUT', error: error.message }, { status: 422 })
     if (lockUnavailable(error)) return NextResponse.json({ success: false, code: 'LOCK_UNAVAILABLE', error: 'Đang có thao tác khác, vui lòng thử lại.' }, { status: 409 })

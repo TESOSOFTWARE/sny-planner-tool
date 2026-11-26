@@ -18,7 +18,7 @@ interface PreviewResponse {
   period:            RollingPeriod
   expectedSnapshot:  string
   periodRequired?:   boolean
-  skippedDateBlocks: Array<{ dateLabelRaw: string; note: string | null }>
+  skippedDateBlocks: Array<{ dateLabelRaw: string; note: string | null; hasData?: boolean; blocked?: boolean }>
   success:           boolean
   fileName:          string
   totalMetrics:      number
@@ -58,6 +58,7 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
   const [successMsg, setSuccessMsg] = useState('')
   const [acknowledgeLoss, setAcknowledgeLoss] = useState(false)
   const losses = rollingLosses(preview?.replacementDays ?? [])
+  const invalidPopulatedBlocks = preview?.skippedDateBlocks.filter(block => block.blocked || block.hasData) ?? []
   const displayDate = (date: string) => date.split('-').reverse().join('/')
 
   // ── Step 1: Upload & Preview ───────────────────────────────────────────────
@@ -101,7 +102,7 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
   // ── Step 2: Confirm & Save to DB ──────────────────────────────────────────
 
   const handleConfirm = async () => {
-    if (!file || !preview || (losses.length > 0 && !acknowledgeLoss)) return
+    if (!file || !preview || invalidPopulatedBlocks.length > 0 || (losses.length > 0 && !acknowledgeLoss)) return
     setError(null)
     setIsLoading(true)
 
@@ -216,9 +217,9 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
           {step === 'preview' && preview && (
             <div className="space-y-4">
               <p className="text-sm font-semibold">Kỳ đang dùng: {String(preview.period.month).padStart(2, '0')}/{preview.period.year}</p>
-              {preview.skippedDateBlocks.length > 0 && <div role="status" className="p-3 border border-amber-400 bg-amber-50 text-sm">
-                <p>Bỏ qua {preview.skippedDateBlocks.length} khối ngày không hợp lệ:</p>
-                <ul>{preview.skippedDateBlocks.map((block, index) => <li key={index}>{block.note}</li>)}</ul>
+              {preview.skippedDateBlocks.length > 0 && <div role={invalidPopulatedBlocks.length ? 'alert' : 'status'} className={`p-3 border text-sm ${invalidPopulatedBlocks.length ? 'border-error bg-error-container/30 text-error' : 'border-amber-400 bg-amber-50'}`}>
+                <p>{invalidPopulatedBlocks.length ? 'Có khối ngày chứa số liệu nhưng ngày không hợp lệ; cần sửa file trước khi nhập.' : `Bỏ qua ${preview.skippedDateBlocks.length} khối ngày rỗng không hợp lệ:`}</p>
+                <ul>{preview.skippedDateBlocks.map((block, index) => <li key={index}>{block.dateLabelRaw}: {block.note}</li>)}</ul>
               </div>}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="p-3 bg-surface-container rounded-lg border border-outline-variant">
@@ -309,7 +310,7 @@ export default function ImportRollingReportModal({ onImported, onClose }: Props)
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={isLoading || preview?.totalMetrics === 0 || (losses.length > 0 && !acknowledgeLoss)}
+                disabled={isLoading || preview?.totalMetrics === 0 || invalidPopulatedBlocks.length > 0 || (losses.length > 0 && !acknowledgeLoss)}
                 className="px-4 py-2 text-sm font-semibold bg-primary text-on-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 inline-flex items-center gap-2"
               >
                 {isLoading && <span aria-hidden="true" className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>}

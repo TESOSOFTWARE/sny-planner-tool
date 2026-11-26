@@ -40,6 +40,10 @@ export interface WarpingRow {
   beamCount2:        number | null // placeholder
   quantity:          number | null
   weightKgs:         number       // 0 is valid
+  sourceWeight:      string
+  sourceRow:         number
+  isValid:           boolean
+  validationErrors:  string[]
   orderRef:          string | null
   sourceOrderRefs?: string[]
 }
@@ -79,6 +83,12 @@ function toNum(v: unknown): number | null {
 
 function toStr(v: unknown): string {
   return String(v ?? '').trim()
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+  if (value == null || String(value).trim() === '') return false
+  const numeric = Number(value)
+  return !(Number.isFinite(numeric) && numeric === 0)
 }
 
 /**
@@ -242,7 +252,8 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
 
     const color = toStr(row[colColor])
     const rawWeight = toNum(row[colWeight])
-    if (blockStart !== null && (color || (rawWeight != null && rawWeight > 0)) && !blockHasData) {
+    const hasRowData = [colWeaving, colColor, colDenier, colStrand, colBeam1, colMPerEa, colWeig, colBeam2, colQuantity, colWeight, colRemark].some(column => hasMeaningfulValue(row[column]))
+    if (blockStart !== null && (color || (rawWeight != null && rawWeight > 0) || hasRowData) && !blockHasData) {
       if (!currentDate) throw new Error(`Khối Warping bắt đầu dòng ${blockStart} không có ngày báo cáo; hệ thống chưa nhập dữ liệu.`)
       const dateKey = currentDate.toISOString().slice(0, 10)
       const previous = populatedDates.get(dateKey)
@@ -251,7 +262,12 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
       blockHasData = true
     }
     if (!currentMachineId || !currentDate) continue
-    if (!color) continue // require color name
+    if (!color && !hasRowData) continue
+
+    const validationErrors: string[] = []
+    if (!color) validationErrors.push('Thiếu COLOR')
+    if (rawWeight == null) validationErrors.push('WEIGHT thiếu hoặc không phải số')
+    else if (rawWeight < 0) validationErrors.push('WEIGHT không được âm')
 
     const weavingMachineRef = toStr(row[colWeaving]) || null
     const denier            = toNum(row[colDenier])
@@ -261,7 +277,16 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
     const weigValue         = toNum(row[colWeig])
     const beamCount2        = toNum(row[colBeam2])
     const quantity          = toNum(row[colQuantity])
-    const weightKgs         = rawWeight != null ? Math.max(0, rawWeight) : 0
+    const weightKgs         = rawWeight ?? 0
+    const numericFields: Array<[string, number, number | null]> = [
+      ['DENIER', colDenier, denier], ['STRAND', colStrand, strand], ['BEAM 1', colBeam1, beamCount1],
+      ['M/EA', colMPerEa, mPerEa], ['WEIG', colWeig, weigValue], ['BEAM 2', colBeam2, beamCount2], ['QUANTITY', colQuantity, quantity],
+    ]
+    for (const [label, column, value] of numericFields) {
+      if (row[column] == null || row[column] === '') continue
+      if (value == null) validationErrors.push(`${label} không phải số`)
+      else if (value < 0) validationErrors.push(`${label} không được âm`)
+    }
     const orderRef          = productionPi(row[colRemark])
 
     blockWeightSum += weightKgs
@@ -280,6 +305,10 @@ export function parseWarpingReport(buffer: Buffer): WarpingRow[] {
       beamCount2,
       quantity,
       weightKgs,
+      sourceWeight: toStr(row[colWeight]),
+      sourceRow: firstSheetRow + r,
+      isValid: validationErrors.length === 0,
+      validationErrors,
       orderRef,
       sourceOrderRefs: toStr(row[colRemark]) ? [toStr(row[colRemark])] : [],
     })

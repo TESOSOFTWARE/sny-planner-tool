@@ -39,9 +39,9 @@ export function collectRemarkValues(rows: readonly RemarkRow[], context: RemarkC
 export class RemarkDecisionRequired extends Error {
   constructor(public values: string[]) { super('Chọn Loại lưới hoặc Ghi chú cho tất cả giá trị REMARK mới.') }
 }
-export function applyRemarkDecisions<T extends RemarkRow>(rows: readonly T[], context: RemarkContext, decisions: readonly RemarkDecision[]) {
+export function applyRemarkDecisions<T extends RemarkRow>(rows: readonly T[], context: RemarkContext, decisions: readonly RemarkDecision[], defaultUnknownTarget?: 'MESH' | 'NOTE') {
   const targets = new Map(decisions.map(decision => [remarkKey(decision.value), decision.target]))
-  const missing = collectRemarkValues(rows, context).filter(value => value.status === 'UNKNOWN' && !targets.has(remarkKey(value.value)))
+  const missing = collectRemarkValues(rows, context).filter(value => value.status === 'UNKNOWN' && !targets.has(remarkKey(value.value)) && !defaultUnknownTarget)
   if (missing.length) throw new RemarkDecisionRequired(missing.map(value => value.value))
   return rows.map(row => {
     // Keep the parser's header-note patterns, including operational headers without '*'.
@@ -55,7 +55,7 @@ export function applyRemarkDecisions<T extends RemarkRow>(rows: readonly T[], co
       if (!remarkKey(raw)) continue
       const status = classifyRemark(raw, context)
       if (status === 'PI') orderRef = raw
-      else if (status === 'MESH_KNOWN' || (status === 'UNKNOWN' && targets.get(remarkKey(raw)) === 'MESH')) meshType = normalizeRemark(raw)
+      else if (status === 'MESH_KNOWN' || (status === 'UNKNOWN' && (targets.get(remarkKey(raw)) ?? defaultUnknownTarget) === 'MESH')) meshType = normalizeRemark(raw)
       else notes.push(normalizeRemark(raw))
     }
     return { ...row, orderRef, meshType, machineNote: Array.from(new Set(notes)).join(' · ') || null }

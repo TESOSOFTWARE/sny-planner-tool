@@ -15,7 +15,10 @@ export async function POST(req: NextRequest) {
   }
   try {
     const state = await loadMonthlyHistoryState(prisma)
-    try { return NextResponse.json(planHistoryImport(input.rows, state.materials, state.snapshots, input.file, input.resolutions, state.manualTransactions).preview) }
+    try {
+      const preview = planHistoryImport(input.rows, state.materials, state.snapshots, input.file, input.resolutions, state.manualTransactions).preview
+      return NextResponse.json({ ...preview, rows: input.rows })
+    }
     catch (error) { return NextResponse.json({ success: false, code: 'INVALID_INPUT', error: error instanceof Error ? error.message : 'Báo cáo không hợp lệ.' }, { status: 422 }) }
   } catch { return NextResponse.json({ success: false, code: 'PREVIEW_FAILED', error: 'Không tải được dữ liệu để xem trước.' }, { status: 500 }) }
 }

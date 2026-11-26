@@ -21,6 +21,10 @@ interface PreviewRow {
   color:      string
   denier:     number | null
   weightKgs:  number
+  sourceWeight?: string
+  sourceRow?: number
+  isValid?: boolean
+  validationErrors?: string[]
   beamNote:   string | null
   orderRef:   string | null
 }
@@ -53,6 +57,7 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
   const [error, setError]       = useState<string | null>(null)
   const [preview, setPreview]   = useState<PreviewResponse | null>(null)
   const [successMsg, setSuccessMsg] = useState('')
+  const invalidRows = preview?.rows.filter(row => row.isValid === false || Boolean(row.validationErrors?.length)) ?? []
 
   // ── Step 1: upload + parse preview ────────────────────────────────────────
 
@@ -160,6 +165,8 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
                   </p>
                 )}
               </div>
+
+              {invalidRows.length > 0 && <div role="alert" className="rounded-lg border border-error/40 bg-error-container/30 p-3 text-sm text-error"><p className="font-medium">Có {invalidRows.length} dòng lỗi; chưa thể thay dữ liệu cũ.</p><ul className="mt-2 list-disc pl-5">{invalidRows.map((row, index) => <li key={`${row.sourceRow ?? index}:${index}`}>Dòng Excel {row.sourceRow ?? '—'}: {row.validationErrors?.join('; ') || 'Dữ liệu không hợp lệ'} · WEIGHT nguồn: {row.sourceWeight ?? '—'}</li>)}</ul></div>}
 
               <div className="bg-surface-container rounded-lg p-4 text-xs text-secondary space-y-1">
                 <p className="font-medium text-on-surface mb-2">Yêu cầu file:</p>
@@ -278,7 +285,7 @@ export default function ImportExtruderModal({ onImported, onClose }: Props) {
                   </button>
                   <button
                     onClick={handleConfirm}
-                    disabled={isLoading}
+                    disabled={isLoading || invalidRows.length > 0}
                     className="px-5 py-2 bg-primary text-on-primary rounded-md text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
                   >
                     {isLoading && (

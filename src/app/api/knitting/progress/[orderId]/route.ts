@@ -1,160 +1,72 @@
 import { authError } from '@/lib/auth/session'
-// src/app/api/knitting/progress/[orderId]/route.ts
-// GET /api/knitting/progress/[orderId]
-// Returns production progress for one order:
-//   - producedMeters: SUM(dailyMeters) across all assigned machines, within assignment date range
-//   - remainingMeters: MAX(0, order.lengthM - producedMeters)
-//   - avgDailyOutput: AVG(dailyMeters > 0) for last 7 days across assigned machines
-//   - remainingDays: ceil(remainingMeters / avgDailyOutput) — null if no output data
-//
-// totalMeters source: order.lengthM (confirmed: all orders are orderType=meters)
-
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
-import { scheduleDay, scheduleOutputBounds, outputFallsWithinSchedule } from '@/lib/schedule/importSafety'
-import { dayShare } from '@/lib/schedule/outputShare'
 
 interface Params { params: { orderId: string } }
 
-export async function GET(_req: NextRequest, { params }: Params) {
-  const accessError = await authError('GET', _req)
+/** [MoM 30/10 §2, §4] Return knitting actual linked to this specific PI line.
+ * KnittingDailyOutput is a machine/day total and must not be assigned to an order
+ * by schedule share when presenting actual production by PI.
+ */
+export async function GET(request: NextRequest, { params }: Params) {
+  const accessError = await authError('GET', request)
   if (accessError) return accessError
 
-  const { orderId } = params
-
-  // ── 1. Fetch order ─────────────────────────────────────────────────────────
-  const order = await prisma.productionOrder.findUnique({
-    where: { id: orderId },
-    select: { id: true, lengthM: true, isDraft: true },
-  })
-  if (!order) {
-    return NextResponse.json({ success: false, error: 'Order not found' }, { status: 404 })
-  }
-
-  if (order.isDraft || order.lengthM == null) {
-    return NextResponse.json({
-      success: true,
-      producedMeters: 0,
-      remainingMeters: 0,
-      avgDailyOutput: null,
-      remainingDays: null,
-      hasData: false,
+  try {
+    const order = await prisma.productionOrder.findUnique({
+      where: { id: params.orderId },
+      select: { id: true, piNumber: true, lengthM: true, isDraft: true },
     })
-  }
+    if (!order) return NextResponse.json({ success: false, error: 'Không tìm thấy dòng đơn hàng.' }, { status: 404 })
 
-  // ── 2. Fetch all machine assignments for this order ─────────────────────────
-  const assignments = await prisma.machineAssignment.findMany({
-    where: { orderId },
-    select: { machineId: true, startDate: true, endDate: true },
-  })
-
-  if (assignments.length === 0) {
-    // No assignments — no progress data available
-    return NextResponse.json({
-      success: true,
-      producedMeters: 0,
-      remainingMeters: order.lengthM,
-      avgDailyOutput: null,
-      remainingDays: null,
-      hasData: false,
-    })
-  }
-
-  const today = new Date(`${scheduleDay(new Date())}T00:00:00Z`)
-
-  // [FB 22/10 ý 3] Nhiều dòng có thể chung máy/ngày (xếp chung cùng quy cách): lấy mọi lịch trùm các máy/ngày này
-  // để chia sản lượng theo tỷ lệ mét thay vì cộng toàn bộ cho từng dòng.
-  const minStart = assignments.map(a => a.startDate).reduce((m, d) => (d < m ? d : m))
-  const maxEnd = assignments.map(a => a.endDate).reduce((m, d) => (d > m ? d : m))
-  const sharing = await prisma.machineAssignment.findMany({
-    where: {
-      machineId: { in: Array.from(new Set(assignments.map(a => a.machineId))) },
-      startDate: { lte: new Date(`${scheduleDay(maxEnd)}T23:59:59.999+07:00`) },
-      endDate: { gte: new Date(`${scheduleDay(minStart)}T00:00:00+07:00`) },
-    },
-    select: { orderId: true, machineId: true, startDate: true, endDate: true, allocatedMeters: true, order: { select: { lengthM: true } } },
-  })
-
-  // ── 3. Compute producedMeters per assignment ───────────────────────────────
-  let totalProduced = 0
-  const countedOutputKeys = new Set<string>()
-
-  for (const assignment of assignments) {
-    const bounds = scheduleOutputBounds(assignment)
-    const effectiveEnd = bounds.lte < today ? bounds.lte : today
-
-    // Skip if assignment hasn't started yet
-    if (bounds.gte > today) continue
-
-    const rows = await prisma.knittingDailyOutput.findMany({
-      where: {
-        machineId: assignment.machineId,
-        reportDate: {
-          gte: bounds.gte,
-          lte: effectiveEnd,
-        },
-      },
-      select: { reportDate: true, dailyMeters: true },
-    })
-
-    for (const r of rows) {
-      // KnittingDailyOutput is unique per machine/day.  An order can have
-      // overlapping assignments after a schedule correction; count that
-      // machine/day once instead of multiplying the same output.
-      const key = `${assignment.machineId}:${r.reportDate.toISOString()}`
-      if (countedOutputKeys.has(key)) continue
-      countedOutputKeys.add(key)
-      totalProduced += Number(r.dailyMeters) * dayShare(orderId, assignment.machineId, r.reportDate, sharing)
+    if (order.isDraft || order.lengthM == null) {
+      return NextResponse.json({ success: true, producedMeters: null, remainingMeters: null, avgDailyOutput: null, remainingDays: null, hasData: false, hasUnlinkedData: false })
     }
-  }
 
-  const totalMeters = order.lengthM
-  const remaining = Math.max(0, totalMeters - totalProduced)
+    const now = new Date()
+    const sevenCalendarDaysAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 6))
+    const [linked, unlinked, recentRows] = await Promise.all([
+      prisma.knittingDailyDetail.aggregate({
+        where: { orderId: order.id },
+        _count: { mValue: true },
+        _sum: { mValue: true },
+      }),
+      prisma.knittingDailyDetail.count({
+        where: { orderId: null, orderRef: { equals: order.piNumber, mode: 'insensitive' } },
+      }),
+      prisma.knittingDailyDetail.findMany({
+        where: {
+          orderId: order.id,
+          reportDate: { gte: sevenCalendarDaysAgo },
+          mValue: { gt: 0 },
+        },
+        select: { reportDate: true, mValue: true },
+      }),
+    ])
 
-  // ── 4. Compute avgDailyOutput — last 7 days, across all assigned machines ──
-  const machineIds = assignments.map((a) => a.machineId)
-  const sevenDaysAgo = new Date(today)
-  sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7)
-
-  const recentRows = await prisma.knittingDailyOutput.findMany({
-    where: {
-      machineId: { in: machineIds },
-      reportDate: { gte: sevenDaysAgo, lte: today },
-      dailyMeters: { gt: 0 }, // exclude idle days from average
-    },
-    select: { machineId: true, reportDate: true, dailyMeters: true },
-  })
-
-  const assignedRecentKeys = new Set<string>()
-  const assignedRecentRows = recentRows.filter((row) => {
-    const inAssignment = assignments.some((assignment) =>
-      assignment.machineId === row.machineId &&
-      outputFallsWithinSchedule(row.reportDate, assignment)
-    )
-    if (!inAssignment) return false
-    const key = `${row.machineId}:${row.reportDate.toISOString()}`
-    if (assignedRecentKeys.has(key)) return false
-    assignedRecentKeys.add(key)
-    return true
-  })
-
-  let avgDailyOutput: number | null = null
-  if (assignedRecentRows.length > 0) {
-    const sum = assignedRecentRows.reduce((acc, r) => acc + Number(r.dailyMeters) * dayShare(orderId, r.machineId, r.reportDate, sharing), 0)
-    avgDailyOutput = sum / assignedRecentRows.length
-  }
-
-  const remainingDays =
-    avgDailyOutput && avgDailyOutput > 0
-      ? Math.ceil(remaining / avgDailyOutput)
+    const hasData = linked._count.mValue > 0
+    const producedMeters = Number(linked._sum.mValue ?? 0)
+    const remainingMeters = Math.max(0, Number(order.lengthM) - producedMeters)
+    const dailyTotals = new Map<string, number>()
+    for (const row of recentRows) {
+      const day = row.reportDate.toISOString().slice(0, 10)
+      dailyTotals.set(day, (dailyTotals.get(day) ?? 0) + Number(row.mValue ?? 0))
+    }
+    const avgDailyOutput = dailyTotals.size
+      ? Array.from(dailyTotals.values()).reduce((sum, value) => sum + value, 0) / dailyTotals.size
       : null
 
-  return NextResponse.json({
-    success: true,
-    producedMeters: Math.round(totalProduced * 100) / 100,
-    remainingMeters: Math.round(remaining * 100) / 100,
-    avgDailyOutput: avgDailyOutput !== null ? Math.round(avgDailyOutput) : null,
-    remainingDays,
-    hasData: true,
-  })
+    return NextResponse.json({
+      success: true,
+      producedMeters: hasData ? Math.round(producedMeters * 100) / 100 : null,
+      remainingMeters: hasData ? Math.round(remainingMeters * 100) / 100 : null,
+      avgDailyOutput: avgDailyOutput !== null ? Math.round(avgDailyOutput) : null,
+      remainingDays: avgDailyOutput && avgDailyOutput > 0 ? Math.ceil(remainingMeters / avgDailyOutput) : null,
+      hasData,
+      hasUnlinkedData: unlinked > 0,
+    })
+  } catch (err) {
+    console.error('[GET /api/knitting/progress/[orderId]]', err)
+    return NextResponse.json({ success: false, error: 'Không tải được sản lượng dệt theo dòng đơn.' }, { status: 500 })
+  }
 }

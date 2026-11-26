@@ -218,6 +218,7 @@ model ProductionOrder {
   productionPlans ProductionOutputPlan[]
   manualProductionEntries ManualProductionEntry[]
   attachments ProductionOrderAttachment[]
+  productionHandoffs ProductionHandoff[]
 
   // Timestamps
   createdAt    DateTime @default(now())
@@ -411,6 +412,7 @@ model ExtruderDailyOutput {
   orderId    String?  // Link chính xác tới ProductionOrder (nếu PI duy nhất 1 sub-line)
   order      ProductionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
+  sourceKey  String?  @unique(map: "extruder_daily_output_sourceKey_key") @db.VarChar(64) // Khóa dòng từ workbook; null với dữ liệu legacy chưa ghép được
   dataSource String   @default("import")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -460,6 +462,45 @@ model ProductionPlanRevision {
   @@map("production_plan_revisions")
 }
 
+// Stage-specific source snapshots; raw values are kept when no numeric/unit mapping is confirmed.
+model ProductionStagePlanImportBatch {
+  id         String   @id @default(cuid())
+  stage      String
+  profile    String
+  scopeKey   String
+  fileName   String
+  fileHash   String   @db.VarChar(64)
+  status     String   @default("CONFIRMED")
+  summary    Json     @default("{}")
+  createdAt  DateTime @default(now())
+  confirmedAt DateTime @default(now())
+  rows       ProductionStagePlanImportRow[]
+
+  @@unique([fileHash, profile, scopeKey], map: "production_stage_plan_import_batches_file_profile_scope_key")
+  @@index([stage, profile, scopeKey, confirmedAt], map: "prod_stage_plan_batch_scope_confirmed_idx")
+  @@map("production_stage_plan_import_batches")
+}
+
+model ProductionStagePlanImportRow {
+  id          String   @id @default(cuid())
+  batchId     String
+  batch       ProductionStagePlanImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  sourceKey   String   @db.VarChar(64)
+  sourceSheet String
+  sourceRow   Int
+  planDate    DateTime? @db.Date
+  machineLabel String?
+  orderRef    String?
+  displayData Json
+  warnings    Json     @default("[]")
+  createdAt   DateTime @default(now())
+
+  @@unique([batchId, sourceKey], map: "production_stage_plan_import_rows_batch_source_key")
+  @@index([batchId, planDate])
+  @@index([sourceSheet, sourceRow])
+  @@map("production_stage_plan_import_rows")
+}
+
 model ProductionOrderAttachment {
   id        String   @id @default(cuid())
   orderId   String
@@ -472,6 +513,32 @@ model ProductionOrderAttachment {
 
   @@index([orderId, createdAt])
   @@map("production_order_attachments")
+}
+
+// [MoM 30/10 §2, §4] Append-only WIP transfers between adjacent production stages.
+model ProductionHandoff {
+  id                String   @id @default(cuid())
+  orderId           String
+  order             ProductionOrder @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  fromStage         String
+  toStage           String
+  sourceMetricLabel String
+  quantity          Decimal  @db.Decimal(12, 2)
+  unit              String   @db.VarChar(24)
+  transferredAt     DateTime @db.Date
+  shift             String
+  handedOffBy       String
+  receivedBy        String
+  note              String?
+  createdByEmail    String
+  createdAt         DateTime @default(now())
+  voidedAt          DateTime?
+  voidedByEmail     String?
+  voidReason        String?
+
+  @@index([orderId, transferredAt])
+  @@index([fromStage, toStage, transferredAt])
+  @@map("production_handoffs")
 }
 
 // [MoM 30/10 §4] Manual actual entries remain distinguishable from imported stage-specific reports.
@@ -524,6 +591,7 @@ model WarpingDailyOutput {
   orderId           String?  // Link chính xác tới ProductionOrder (nếu PI duy nhất 1 sub-line)
   order             ProductionOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
 
+  sourceKey         String?  @unique(map: "warping_daily_output_sourceKey_key") @db.VarChar(64) // Khóa dòng từ workbook; null với dữ liệu legacy chưa ghép được
   dataSource        String   @default("import")
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -567,6 +635,7 @@ model KnittingDailyDetail {
   operatingGrade String?                      // Operating grade (vd "A", "B")
   totalPct       Decimal? @db.Decimal(5, 2)  // Total % (vd 98.5)
 
+  sourceKey      String?  @unique(map: "knitting_daily_detail_sourceKey_key") @db.VarChar(64) // Khóa dòng từ workbook; null với dữ liệu legacy chưa ghép được
   dataSource     String   @default("import")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -632,6 +701,7 @@ model RollingDailyMetric {
   weightKgsOrder Decimal?
   metricLabel    String           // e.g. "QUANTITY SMALL", "WEIGHT NIGHT" — ONLY the 6 primary shift/size labels
   metricValue    Decimal?
+  sourceKey      String?          @unique(map: "rolling_daily_metrics_sourceKey_key") @db.VarChar(64) // Khóa metric từ workbook; null với dữ liệu legacy chưa ghép được
   dataSource     String
   createdAt      DateTime         @default(now())
 
@@ -711,6 +781,46 @@ model FactoryCalendarException {
   updatedAt DateTime @updatedAt
 
   @@map("factory_calendar_exceptions")
+}
+
+// [MoM 30/10 §4; FB 19/11/2026] Preserve each confirmed Statistical Report version.
+model ProductionReportImportBatch {
+  id            String   @id @default(cuid())
+  fileName      String
+  fileHash      String   @db.VarChar(64)
+  decisionHash  String   @db.VarChar(64)
+  reportMonth   String   @db.VarChar(7)
+  selectedSheets Json
+  decisions     Json     @default("{}")
+  sheetResults  Json     @default("{}")
+  status        String   @default("PREPARED") // PREPARED | PROCESSING | PARTIAL | CONFIRMED
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  completedAt   DateTime?
+  sheets        ProductionReportImportSheet[]
+
+  @@unique([fileHash, reportMonth], map: "production_report_import_batches_fileHash_reportMonth_key")
+  @@index([reportMonth, createdAt])
+  @@index([status, createdAt])
+  @@map("production_report_import_batches")
+}
+
+model ProductionReportImportSheet {
+  id          String   @id @default(cuid())
+  batchId     String
+  sheetName   String
+  sourceRows  Json
+  attemptToken String? @db.VarChar(64)
+  attemptCommittedAt DateTime?
+  status      String   @default("PREPARED") // PREPARED | PROCESSING | FAILED | UNCERTAIN | CONFIRMED
+  result      Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  batch       ProductionReportImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, sheetName])
+  @@index([sheetName, createdAt])
+  @@map("production_report_import_sheets")
 }
 
 enum CalendarExceptionKind {

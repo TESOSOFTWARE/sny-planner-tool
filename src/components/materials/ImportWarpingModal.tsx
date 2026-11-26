@@ -26,6 +26,10 @@ interface PreviewRow {
   beamCount2:        number | null
   quantity:          number | null
   weightKgs:         number
+  sourceWeight?:     string
+  sourceRow?:        number
+  isValid?:          boolean
+  validationErrors?: string[]
   orderRef:          string | null
 }
 
@@ -57,6 +61,7 @@ export default function ImportWarpingModal({ onImported, onClose }: Props) {
   const [error, setError]       = useState<string | null>(null)
   const [preview, setPreview]   = useState<PreviewResponse | null>(null)
   const [successMsg, setSuccessMsg] = useState('')
+  const invalidRows = preview?.rows.filter(row => row.isValid === false || Boolean(row.validationErrors?.length)) ?? []
 
   const handlePreview = async () => {
     if (!file) { setError('Vui lòng chọn file .xlsx'); return }
@@ -191,6 +196,8 @@ export default function ImportWarpingModal({ onImported, onClose }: Props) {
                 </div>
               </div>
 
+              {invalidRows.length > 0 && <div role="alert" className="rounded-lg border border-error/40 bg-error-container/30 p-3 text-sm text-error"><p className="font-medium">Có {invalidRows.length} dòng lỗi; chưa thể thay dữ liệu cũ.</p><ul className="mt-2 list-disc pl-5">{invalidRows.map((row, index) => <li key={`${row.sourceRow ?? index}:${index}`}>Dòng Excel {row.sourceRow ?? '—'}: {row.validationErrors?.join('; ') || 'Dữ liệu không hợp lệ'} · WEIGHT nguồn: {row.sourceWeight ?? '—'}</li>)}</ul></div>}
+
               <div>
                 <p className="text-xs font-medium text-secondary mb-2">Ngày báo cáo ({preview.dates.length} ngày)</p>
                 <div className="flex flex-wrap gap-2">
@@ -274,7 +281,7 @@ export default function ImportWarpingModal({ onImported, onClose }: Props) {
                   </button>
                   <button
                     onClick={handleConfirm}
-                    disabled={isLoading}
+                    disabled={isLoading || invalidRows.length > 0}
                     className="px-5 py-2 bg-primary text-on-primary rounded-md text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
                   >
                     {isLoading && (
