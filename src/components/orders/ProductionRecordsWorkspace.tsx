@@ -48,8 +48,13 @@ function outputColumns(stage: string): OutputColumn[] {
 
 function ProductionRecordsTable({ embedded = false }: { embedded?: boolean }) {
   const [stage, setStage] = useState('extruder'), [state, setState] = useState('all'), [text, setText] = useState(''), [query, setQuery] = useState('')
+  // [MoM 27/11/2026 §Issue 2] Apply an optional inclusive report date range.
+  const [fromDate, setFromDate] = useState(''), [toDate, setToDate] = useState('')
   useEffect(() => { const timer = setTimeout(() => setQuery(text.trim()), 300); return () => clearTimeout(timer) }, [text])
-  const paging = useMaterialPage<Result>('/api/production-records', new URLSearchParams({ stage, state, q: query }).toString())
+  const filters = new URLSearchParams({ stage, state, q: query })
+  if (fromDate) filters.set('from', fromDate)
+  if (toDate) filters.set('to', toDate)
+  const paging = useMaterialPage<Result>('/api/production-records', filters.toString())
   const rows = paging.data?.records ?? [], total = paging.data?.total ?? 0
   const stageLabel = stages.find(([id]) => id === stage)?.[1] ?? 'Sản lượng'
   const columns = outputColumns(stage)
@@ -66,6 +71,8 @@ function ProductionRecordsTable({ embedded = false }: { embedded?: boolean }) {
     <div><h1 className="text-2xl font-semibold text-primary">Sản lượng {stageLabel.toLocaleLowerCase()} theo mã PI</h1><p className="mt-2 text-sm text-secondary">{stageDescription[stage]} Các PI chưa gắn item vẫn được giữ để đối soát.</p></div>
     <div className="flex flex-wrap gap-3">
       <label className="text-sm">Công đoạn <select className={control} value={stage} onChange={e => setStage(e.target.value)}>{stages.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+      <label className="text-sm">Từ ngày <input className={control} type="date" value={fromDate} max={toDate || undefined} onChange={e => setFromDate(e.target.value)} /></label>
+      <label className="text-sm">Đến ngày <input className={control} type="date" value={toDate} min={fromDate || undefined} onChange={e => setToDate(e.target.value)} /></label>
       <label className="text-sm">Mã PI nguồn <input className={control} type="search" value={text} maxLength={150} onChange={e => setText(e.target.value)} placeholder="Tìm theo mã ghi trong file" /></label>
       <label className="text-sm">Liên kết <select className={control} value={state} onChange={e => setState(e.target.value)}><option value="all">Tất cả</option><option value="linked">Đã gắn item</option><option value="unlinked">Chưa gắn item</option></select></label>
     </div>

@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server'
 import { withTestSession } from '@/lib/auth/testSession'
 
 const singleton = globalThis as unknown as { prisma: unknown }, previous = singleton.prisma
-let lastQuery: { where: { orderId?: unknown; orderRef?: unknown }; skip: number; take: number } | undefined
+let lastQuery: { where: Record<string, unknown>; skip: number; take: number } | undefined
 let calls = 0
 const model = {
   findMany: async (query: NonNullable<typeof lastQuery>) => {
@@ -63,4 +63,20 @@ test('invalid filters and oversized page limits fail before data queries', async
 test('shared pager supports its 200-row option', async () => {
   assert.equal((await GET(new NextRequest('http://qa.invalid/api/production-records?stage=extruder&limit=200'))).status, 200)
   assert.equal(lastQuery?.take, 200)
+})
+test('date range filters use inclusive start and end days for report and rolling dates', async () => {
+  const reportResponse = await GET(new NextRequest('http://qa.invalid/api/production-records?stage=extruder&from=2026-10-27&to=2026-10-28'))
+  assert.equal(reportResponse.status, 200)
+  assert.deepEqual(lastQuery?.where.reportDate, { gte: new Date('2026-10-27T00:00:00.000Z'), lt: new Date('2026-10-29T00:00:00.000Z') })
+
+  const rollingResponse = await GET(new NextRequest('http://qa.invalid/api/production-records?stage=rolling&from=2026-10-27&to=2026-10-28'))
+  assert.equal(rollingResponse.status, 200)
+  assert.deepEqual(lastQuery?.where.date, { gte: new Date('2026-10-27T00:00:00.000Z'), lt: new Date('2026-10-29T00:00:00.000Z') })
+})
+test('invalid or reversed date filters fail before data queries', async () => {
+  const baseline = calls
+  for (const query of ['stage=extruder&from=2026-02-30', 'stage=extruder&from=2026-11-02&to=2026-11-01']) {
+    assert.equal((await GET(new NextRequest('http://qa.invalid/api/production-records?' + query))).status, 422)
+  }
+  assert.equal(calls, baseline)
 })
