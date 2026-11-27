@@ -87,6 +87,24 @@ test('CC2018 work orders stay undated instead of being assigned a calendar date'
   assert.ok(parsed.rows[0].warnings.length)
 })
 
+test('CC AQ work-order identifiers update for each block within the same sheet', () => {
+  const parsed = parseStagePlanWorkbook(bufferFor([
+    [null, null, 'AQ'],
+    ['AQ 20-1', 'Mã'],
+    [null, null, null, 'WARPING WORK ORDER'],
+    ['No', 'DENIOR', 'STRAND', 'COLOUR', 'WEAVING NO.', 'AMOUNT', 'BIM', 'WEIGHT (KG)', 'REMARK'],
+    [1, 18.5, 146, 'DARK GREEN UV 2%', '3', 10, 10, '20 KG', ''],
+    [],
+    ['AQ 20-2', 'Mã'],
+    [null, null, null, 'WARPING WORK ORDER'],
+    ['No', 'DENIOR', 'STRAND', 'COLOUR', 'WEAVING NO.', 'AMOUNT', 'BIM', 'WEIGHT (KG)', 'REMARK'],
+    [1, 18.5, 146, 'DARK GREEN UV 2%', '3', 10, 10, '20 KG', ''],
+  ], 'AQ'), 'cc AQ.xlsx', 'warping-work-order')
+
+  assert.deepEqual(parsed.rows.map(row => row.orderRef), ['AQ 20-1', 'AQ 20-2'])
+  assert.deepEqual(parsed.rows.map(row => row.displayData.orderRef), ['AQ 20-1', 'AQ 20-2'])
+})
+
 test('CC2018 parser supports binary XLSB workbooks and preserves source identifiers', () => {
   const workbook = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
