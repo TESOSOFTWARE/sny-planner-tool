@@ -410,12 +410,12 @@ export default function SchedulePage() {
           >
             <span className="material-symbols-outlined text-[18px]">chevron_right</span>
           </button>
-          <CalendarMonthPopover yearMonth={yearMonth} weekdays={monthOverride ?? calendar.nonWorkingWeekdays} configured={monthOverride !== undefined} note={monthNote} exceptions={Object.values(exceptions).sort((a, b) => a.date.localeCompare(b.date))} disabled={calendarLoading || !!calendarError}
+          {planStage === 'knitting' && <CalendarMonthPopover yearMonth={yearMonth} weekdays={monthOverride ?? calendar.nonWorkingWeekdays} configured={monthOverride !== undefined} note={monthNote} exceptions={Object.values(exceptions).sort((a, b) => a.date.localeCompare(b.date))} disabled={calendarLoading || !!calendarError}
             onCalendarReload={async () => { await reload(); await fetchAssignments() }}
             onSave={async (weekdays, note) => { await setMonthRule(weekdays, note); await fetchAssignments(); setCalendarRuleSaved(true) }}
-            onDayChange={async (day, kind, note) => { await setDayKind(day, kind, note); await fetchAssignments() }} />
+            onDayChange={async (day, kind, note) => { await setDayKind(day, kind, note); await fetchAssignments() }} />}
         </div>
-        <div className="flex flex-wrap items-center gap-md">
+        {planStage === 'knitting' && <div className="flex flex-wrap items-center gap-md">
           <div role="group" aria-label="Chế độ xem lịch" className="flex rounded border border-outline-variant">
             {(['detail', 'overview', 'list'] as const).map(mode => <button key={mode} type="button" aria-pressed={viewMode === mode} onClick={() => changeView(mode)} className={`px-3 py-1.5 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${viewMode === mode ? 'bg-primary text-white' : 'bg-white text-primary'}`}>{mode === 'detail' ? 'Chi tiết' : mode === 'list' ? 'Danh sách' : 'Tổng quan'}</button>)}
           </div>
@@ -435,7 +435,7 @@ export default function SchedulePage() {
           <p className="text-label-sm font-inter text-secondary">
             {totalDays} ngày · {MACHINES.length} máy
           </p>
-        </div>
+        </div>}
       </div>
 
       <section aria-label="Kế hoạch sản xuất theo công đoạn" className="mb-md space-y-3">
@@ -469,6 +469,8 @@ export default function SchedulePage() {
         </details>
       </section>
 
+      {/* [MoM 27/11/2026 §Issue 11] The machine assignment calendar applies to knitting only. */}
+      {planStage === 'knitting' && <section aria-label="Lịch phân công máy dệt (Dệt)">
       <h2 className="mb-sm text-base font-semibold text-primary">Lịch phân công máy dệt (Dệt)</h2>
       {viewMode === 'list' && hasSelection && selectionToolbar}
       {viewMode !== 'list' && <div aria-label="Chú giải lịch máy" className="mb-sm flex flex-wrap items-center gap-md text-xs text-on-surface-variant">
@@ -631,6 +633,7 @@ export default function SchedulePage() {
         </table>
         <div aria-hidden="true" style={{ height: 'var(--selection-footer-height, 0px)' }} />
       </div><div data-selection-footer aria-hidden={!hasSelection} className="absolute inset-x-0 bottom-0 z-40 pt-2" style={{ visibility: hasSelection ? 'visible' : 'hidden' }}>{selectionToolbar}</div></div>}
+      </section>}
       {conflicts && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeConflicts}><div ref={conflictRef} role="dialog" aria-modal="true" aria-label="Các phân công trùng lịch" onClick={event => event.stopPropagation()} className="max-h-[90vh] w-full max-w-xl overflow-auto rounded-xl border border-outline-variant bg-white p-4">
         <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">Các phân công trùng lịch</h2><button type="button" onClick={closeConflicts} className="rounded border border-outline-variant px-3 py-2 text-xs">Đóng</button></div>
         {conflicts.map(assignment => <div key={assignment.id} className="mb-2 rounded border border-outline-variant p-3"><button type="button" onClick={() => { conflictTrigger.current?.focus(); closeConflicts(); setSelectedAssignment(assignment); setIsDetailOpen(true) }} className="block w-full text-left text-sm font-semibold text-primary">{assignment.order.piNumber} · Dòng {lineLabel(assignment.order)}</button><p className="my-1 text-xs">{scheduleDay(assignment.startDate).split('-').reverse().join('/')} → {scheduleDay(assignment.endDate).split('-').reverse().join('/')}</p><button type="button" onClick={() => { conflictTrigger.current?.focus(); closeConflicts(); setSelectedPi(assignment.order.piNumber) }} className="text-xs text-primary underline">Xem toàn bộ PI</button></div>)}
