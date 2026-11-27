@@ -3,15 +3,15 @@ import { z } from 'zod'
 import { prisma } from '@/lib/db'
 import { authError } from '@/lib/auth/session'
 
-const stages = ['extruder', 'warping', 'knitting', 'rolling', 'packing'] as const
+const stages = ['extruder', 'warping', 'knitting', 'rolling', 'packing', 'sewing'] as const
 type Stage = typeof stages[number]
 const baseMetrics: Record<Stage, string[]> = {
-  extruder: ['Sản lượng kéo sợi'], warping: ['Sản lượng mắc sợi'], knitting: ['Sản lượng dệt'],
-  rolling: ['Số lượng cuộn', 'Trọng lượng', 'Chiều dài'], packing: ['Số lượng đóng gói', 'Trọng lượng', 'Chiều dài'],
+  extruder: ['Sản lượng kéo sợi'], warping: ['Sản lượng cuốn chỉ'], knitting: ['Sản lượng dệt'],
+  rolling: ['Số lượng cuộn', 'Trọng lượng', 'Chiều dài'], packing: ['Số lượng đóng gói', 'Trọng lượng', 'Chiều dài'], sewing: ['Sản lượng may'],
 }
 const baseUnits: Record<Stage, string[]> = {
   extruder: ['kg', 'm'], warping: ['kg', 'm'], knitting: ['m', 'kg', 'cuộn'],
-  rolling: ['cuộn', 'm', 'kg', 'giá trị'], packing: ['cuộn', 'm', 'kg', 'thùng'],
+  rolling: ['cuộn', 'm', 'kg', 'giá trị'], packing: ['cuộn', 'm', 'kg', 'thùng'], sewing: ['sản phẩm', 'm', 'kg'],
 }
 
 export async function GET(request: NextRequest) {
@@ -58,6 +58,8 @@ async function readStageOptions(stage: Stage) {
       return { machines: [], colors: rows.map(r => r.color ?? ''), metrics: rows.map(r => r.metricLabel) }
     }
     case 'packing':
+      return { machines: [], colors: [], metrics: [] }
+    case 'sewing':
       return { machines: [], colors: [], metrics: [] }
   }
 }

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
-export const productionStages = ['extruder', 'warping', 'knitting', 'rolling', 'packing'] as const
+// [MoM 21/11/2026, Issue 1] May is entered as a manual plan/output stage.
+export const productionStages = ['extruder', 'warping', 'knitting', 'rolling', 'packing', 'sewing'] as const
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ngày phải có dạng YYYY-MM-DD.')
 const common = {
   stage: z.enum(productionStages),

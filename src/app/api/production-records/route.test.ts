@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server'
 import { withTestSession } from '@/lib/auth/testSession'
 
 const singleton = globalThis as unknown as { prisma: unknown }, previous = singleton.prisma
-let lastQuery: { where: { orderId?: unknown; orderRef?: unknown }; skip: number; take: number } | undefined
+let lastQuery: { where: Record<string, unknown>; skip: number; take: number } | undefined
 let calls = 0
 const model = {
   findMany: async (query: NonNullable<typeof lastQuery>) => {
@@ -22,7 +22,7 @@ before(async () => {
 })
 after(() => { singleton.prisma = previous })
 test('each stage response retains its own Excel fields and preserves unresolved PI text', async () => {
-  for (const stage of ['extruder', 'warping', 'knitting', 'rolling', 'packing']) {
+  for (const stage of ['extruder', 'warping', 'knitting', 'rolling', 'packing', 'sewing']) {
     const response = await GET(new NextRequest('http://qa.invalid/api/production-records?stage=' + stage + '&q=RAW&state=unlinked&page=2&limit=50'))
     assert.equal(response.status, 200)
     const data = await response.json()
@@ -33,7 +33,7 @@ test('each stage response retains its own Excel fields and preserves unresolved 
     if (stage === 'warping') { assert.equal(data.records[0].weavingMachineRef, 'M-040'); assert.equal(data.records[0].strand, '4'); assert.equal(data.records[0].quantity, '4') }
     if (stage === 'knitting') { assert.equal(data.records[0].width, '2'); assert.equal(data.records[0].tapeRoll, '50'); assert.equal(data.records[0].machineSizeM, '6.8'); assert.equal(data.records[0].machineNote, 'operator note') }
     if (stage === 'rolling') { assert.equal(data.records[0].metric, 'QUANTITY SMALL'); assert.equal(data.records[0].kilograms, undefined); assert.equal(data.records[0].widthM, '2'); assert.equal(data.records[0].weightKgsOrder, '90') }
-    if (stage === 'packing') { assert.equal(data.records[0].metric, 'QUANTITY SMALL'); assert.equal(data.records[0].unit, 'roll'); assert.equal(data.records[0].note, 'packing note') }
+    if (stage === 'packing' || stage === 'sewing') { assert.equal(data.records[0].metric, 'QUANTITY SMALL'); assert.equal(data.records[0].unit, 'roll'); assert.equal(data.records[0].note, 'packing note') }
   }
 })
 test('search summary aggregates all matching PI rows, independently of the current page, without summing specification fields', async () => {
@@ -43,6 +43,7 @@ test('search summary aggregates all matching PI rows, independently of the curre
     ['knitting', [{ label: 'M', value: '543.2', unit: 'm' }, { label: 'QUANTITY', value: '6' }, { label: 'WEIGHT (kg)', value: '1234.5', unit: 'kg' }]],
     ['rolling', [{ label: 'QUANTITY SMALL', value: '6' }, { label: 'WEIGHT BIG', value: '1234.5' }]],
     ['packing', [{ label: 'QUANTITY SMALL', value: '6', unit: 'roll' }, { label: 'WEIGHT BIG', value: '1234.5', unit: 'kg' }]],
+    ['sewing', [{ label: 'QUANTITY SMALL', value: '6', unit: 'roll' }, { label: 'WEIGHT BIG', value: '1234.5', unit: 'kg' }]],
   ] as const) {
     const response = await GET(new NextRequest(`http://qa.invalid/api/production-records?stage=${stage}&q=RAW&page=2&limit=1`))
     assert.equal(response.status, 200)
@@ -62,4 +63,20 @@ test('invalid filters and oversized page limits fail before data queries', async
 test('shared pager supports its 200-row option', async () => {
   assert.equal((await GET(new NextRequest('http://qa.invalid/api/production-records?stage=extruder&limit=200'))).status, 200)
   assert.equal(lastQuery?.take, 200)
+})
+test('date range filters use inclusive start and end days for report and rolling dates', async () => {
+  const reportResponse = await GET(new NextRequest('http://qa.invalid/api/production-records?stage=extruder&from=2026-10-27&to=2026-10-28'))
+  assert.equal(reportResponse.status, 200)
+  assert.deepEqual(lastQuery?.where.reportDate, { gte: new Date('2026-10-27T00:00:00.000Z'), lt: new Date('2026-10-29T00:00:00.000Z') })
+
+  const rollingResponse = await GET(new NextRequest('http://qa.invalid/api/production-records?stage=rolling&from=2026-10-27&to=2026-10-28'))
+  assert.equal(rollingResponse.status, 200)
+  assert.deepEqual(lastQuery?.where.date, { gte: new Date('2026-10-27T00:00:00.000Z'), lt: new Date('2026-10-29T00:00:00.000Z') })
+})
+test('invalid or reversed date filters fail before data queries', async () => {
+  const baseline = calls
+  for (const query of ['stage=extruder&from=2026-02-30', 'stage=extruder&from=2026-11-02&to=2026-11-01']) {
+    assert.equal((await GET(new NextRequest('http://qa.invalid/api/production-records?' + query))).status, 422)
+  }
+  assert.equal(calls, baseline)
 })

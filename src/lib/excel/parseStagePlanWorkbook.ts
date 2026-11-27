@@ -105,6 +105,11 @@ function resultRow(profile: StagePlanProfile, sheet: string, sourceRow: number, 
   return { sourceKey: hash([profile, sheet, coordinate]), sourceSheet: sheet, sourceRow, ...values }
 }
 
+const WARPING_WORK_ORDER_REF = /^[A-Z][A-Z0-9]*(?:\s+\d{1,6})?\s*[-/]\s*\d{1,6}(?:\s*[-/]\s*\d{1,6})*$/i
+function warpingWorkOrderRef(row: unknown[]): string | null {
+  return row.slice(0, 3).map(text).find(value => WARPING_WORK_ORDER_REF.test(value)) ?? null
+}
+
 function parseExtruderMachine(workbook: XLSX.WorkBook, fileName: string, selectedSheet?: string): StagePlanParseResult {
   const date1904 = Boolean(workbook.Workbook?.WBProps?.date1904)
   const availableSheets = workbook.SheetNames.filter(name => monthSheet(name) !== null)
@@ -199,11 +204,18 @@ function parseWarpingOrders(workbook: XLSX.WorkBook, fileName: string): StagePla
     const col = (needle: string) => headers.findIndex(value => normalized(value).includes(needle)) + range.s.c
     const cols = { denier: col('DENIOR'), strand: col('STRAND'), color: col('COLOUR'), weaving: col('WEAVING NO'), amount: col('AMOUNT'), beam: col('BIM'), weight: col('WEIGHT (KG)'), counting: col('COUNTING'), remark: col('REMARK'), netWeight: col('SỐ KG CÂN'), beamWeight: col('SỐ KG BEAM'), winding: col('SỐ MÁY CUỐN') }
     sourceSheets.push(sourceSheet)
-    const orderRef = text(at(range.s.r, range.s.c + 2)) || sourceSheet
+    let orderRef = text(at(range.s.r, range.s.c + 2)) || sourceSheet
     const product = text(at(range.s.r + 1, range.s.c + 2))
+    for (let row = range.s.r; row <= headerRow; row++) {
+      const blockOrderRef = warpingWorkOrderRef(rows[row - range.s.r] ?? [])
+      if (blockOrderRef) orderRef = blockOrderRef
+    }
     for (let row = headerRow + 1; row <= range.e.r; row++) {
+      // [MoM 27/11/2026 §Issue 10] One CC AQ sheet can contain multiple work-order blocks.
+      const blockOrderRef = warpingWorkOrderRef(rows[row - range.s.r] ?? [])
+      if (blockOrderRef) orderRef = blockOrderRef
       const denier = at(row, cols.denier), strand = at(row, cols.strand), color = at(row, cols.color)
-      if (!Number.isFinite(Number(denier)) || !Number.isFinite(Number(strand)) || !text(color)) continue
+      if (denier == null || text(denier) === '' || strand == null || text(strand) === '' || !Number.isFinite(Number(denier)) || !Number.isFinite(Number(strand)) || !text(color)) continue
       const fields = {
         rowNo: jsonValue(at(row, range.s.c)), denier: jsonValue(denier), strand: jsonValue(strand), color: jsonValue(color),
         weavingMachineRef: jsonValue(at(row, cols.weaving)), amount: jsonValue(at(row, cols.amount)), beamCount: jsonValue(at(row, cols.beam)),

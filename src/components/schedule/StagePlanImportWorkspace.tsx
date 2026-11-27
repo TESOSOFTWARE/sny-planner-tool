@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { StagePlanProfile } from '@/lib/excel/parseStagePlanWorkbook'
 import { prepareStagePlanFiles } from '@/lib/excel/prepareStagePlanFiles'
 
-type Stage = 'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing'
+type Stage = 'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing' | 'sewing'
 type PlanRow = { id?: string; sourceKey: string; sourceSheet: string; sourceRow: number; planDate: string | null; machineLabel: string | null; orderRef: string | null; displayData: Record<string, unknown>; warnings: string[] }
 type Preview = { success: boolean; error?: string; stage: string; profile: StagePlanProfile; scopeKey: string; fileName: string; sourceSheets: string[]; skippedSheets?: string[]; availableSheets: string[]; rows: PlanRow[]; totalRows?: number; datedCount?: number; undatedCount?: number; previewTruncated?: boolean; warnings: string[]; expectedSnapshot?: string; needsSheetSelection?: boolean }
 type SavedBatch = { id: string; fileName: string; createdAt: string; rowCount: number; summary: unknown }
@@ -21,9 +21,10 @@ const profileOptions: Record<Stage, Array<{ id: StagePlanProfile; label: string;
   knitting: [],
   rolling: [],
   packing: [{ id: 'pallet-dated', label: 'Kế hoạch đóng pallet', accept: '.xlsx' }],
+  sewing: [],
 }
 
-const stageLabel: Record<Stage, string> = { extruder: 'Kéo sợi', warping: 'Mắc sợi', knitting: 'Dệt', rolling: 'Cuộn', packing: 'Đóng pallet' }
+const stageLabel: Record<Stage, string> = { extruder: 'Kéo sợi', warping: 'Cuốn chỉ', knitting: 'Dệt', rolling: 'Cuộn', packing: 'Đóng gói', sewing: 'May' }
 const profileLabel: Record<StagePlanProfile, string> = {
   'extruder-machine': 'Lịch máy EXTRUDER',
   'fiber-demand-matrix': 'Kế hoạch chỉ kéo sợi theo ngày',
@@ -306,7 +307,7 @@ export default function StagePlanImportWorkspace({ selectedStage, yearMonth, ref
     finally { if (generation === requestGeneration.current) setLoadingPreview(false) }
   }
 
-  if (!profiles.length) return <section className="rounded border border-outline-variant bg-surface-container-lowest p-3 text-sm"><h2 className="font-semibold text-primary">Kế hoạch Excel — {stageLabel[selectedStage]}</h2><p className="mt-1 text-secondary">{selectedStage === 'knitting' ? 'Dệt đang dùng lưới lịch máy M-001…M-040 hiện có; chưa có file kế hoạch Dệt trong bộ mẫu này.' : 'Chưa có file kế hoạch Cuộn/Rolling trong bộ mẫu này.'}</p></section>
+  if (!profiles.length) return <section className="rounded border border-outline-variant bg-surface-container-lowest p-3 text-sm"><h2 className="font-semibold text-primary">Kế hoạch Excel — {stageLabel[selectedStage]}</h2><p className="mt-1 text-secondary">{selectedStage === 'knitting' ? 'Dệt đang dùng lưới lịch máy M-001…M-040 hiện có; chưa có file kế hoạch Dệt trong bộ mẫu này.' : `Chưa có file kế hoạch ${stageLabel[selectedStage]} trong bộ mẫu này.`}</p></section>
 
   const previewHeaders: Record<StagePlanProfile, string[]> = {
     'extruder-machine': ['Ngày', 'Máy', 'PI / đơn nguồn', 'Màu · Gauge · Denier', 'Giá trị trong ô lịch', 'Sheet / dòng nguồn', 'Cảnh báo'],
