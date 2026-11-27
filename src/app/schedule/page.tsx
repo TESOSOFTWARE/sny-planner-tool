@@ -48,7 +48,7 @@ export default function SchedulePage() {
     const now = new Date()
     return new Date(now.getFullYear(), now.getMonth(), 1)
   })
-  const [planStage, setPlanStage] = useState<'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing'>('extruder')
+  const [planStage, setPlanStage] = useState<'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing' | 'sewing'>('extruder')
   const [planRefreshToken, setPlanRefreshToken] = useState(0)
 
   const [assignments, setAssignments] = useState<(AssignmentDetail & { updatedAt: string })[]>([])
@@ -441,7 +441,7 @@ export default function SchedulePage() {
       <section aria-label="Kế hoạch sản xuất theo công đoạn" className="mb-md space-y-3">
         <label className="inline-flex items-center gap-2 text-sm font-medium">Công đoạn
           <select className="rounded border border-outline px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" value={planStage} onChange={event => setPlanStage(event.target.value as typeof planStage)}>
-            <option value="extruder">Kéo sợi</option><option value="warping">Mắc sợi</option><option value="knitting">Dệt</option><option value="rolling">Cuộn</option><option value="packing">Đóng gói</option>
+            <option value="extruder">Kéo sợi</option><option value="warping">Cuốn chỉ</option><option value="knitting">Dệt</option><option value="packing">Đóng gói</option><option value="sewing">May</option>
           </select>
         </label>
         <StagePlanImportWorkspace

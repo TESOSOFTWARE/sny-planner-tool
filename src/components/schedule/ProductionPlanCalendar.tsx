@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 
-type PlanStage = 'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing'
+type PlanStage = 'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing' | 'sewing'
 type Plan = {
   id: string; stage: PlanStage; planDate: string; machineId: string | null; shift: string | null
   orderRef: string | null; orderId: string | null; color: string | null; metricLabel: string

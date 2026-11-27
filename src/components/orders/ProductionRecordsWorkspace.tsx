@@ -19,7 +19,8 @@ interface Output {
 }
 interface Result { success: boolean; error?: string; records: Output[]; total: number; summary?: { metrics: Array<{ label: string; value: string; unit?: string }> } }
 const format = (value: string | null) => value == null ? '—' : Number(value).toLocaleString('vi-VN', { maximumFractionDigits: 2 })
-const stages = [['extruder', 'Kéo sợi'], ['warping', 'Mắc sợi'], ['knitting', 'Dệt'], ['rolling', 'Cuộn'], ['packing', 'Đóng gói']] as const
+// [MoM 21/11/2026, Issue 1] Match the requested factory process order.
+const stages = [['extruder', 'Kéo sợi'], ['warping', 'Cuốn chỉ'], ['knitting', 'Dệt'], ['packing', 'Đóng gói'], ['sewing', 'May']] as const
 const control = 'rounded border border-outline px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary'
 type OutputColumn = { label: string; cell: (row: Output) => ReactNode }
 
@@ -41,6 +42,7 @@ function outputColumns(stage: string): OutputColumn[] {
   if (stage === 'warping') return [date, machine, shift, { label: 'Máy dệt liên quan', cell: row => row.weavingMachineRef ?? '—' }, pi, item, color, numeric('Denier', 'denier'), numeric('STRAND', 'strand'), numeric('BEAM 1', 'beamCount1'), numeric('M/EA', 'mPerEa'), numeric('WEIG', 'weigValue'), numeric('BEAM 2', 'beamCount2'), numeric('QUANTITY', 'quantity'), numeric('WEIGHT (kg)', 'kilograms'), source]
   if (stage === 'knitting') return [date, machine, shift, pi, item, color, { label: 'Loại lưới', cell: row => row.meshType ?? '—' }, numeric('WIDTH', 'width'), numeric('WEIGHT / định lượng', 'weightSpec'), numeric('LENGTH (m)', 'lengthM'), numeric('TAPE/ROLL', 'tapeRoll'), numeric('M', 'mValue'), numeric('AVERAGE/ROLL', 'avgPerRoll'), numeric('QUANTITY', 'quantity'), numeric('WEIGHT (kg)', 'kilograms'), numeric('Khổ máy (m)', 'machineSizeM'), numeric('CM/MIN', 'cmPerMin'), numeric('METER/DAY', 'meterPerDay'), { label: 'Operating grade', cell: row => row.operatingGrade ?? '—' }, numeric('TOTAL %', 'totalPct'), { label: 'Ghi chú máy', cell: row => row.machineNote ?? '—' }, source]
   if (stage === 'rolling') return [date, pi, item, color, numeric('WIDTH (m)', 'widthM'), numeric('LENGTH (m)', 'lengthM'), numeric('WEIGHT theo đơn (kg)', 'weightKgsOrder'), { label: 'Chỉ tiêu Excel', cell: row => row.metric ?? '—' }, numeric('Giá trị', 'value'), source]
+  if (stage === 'sewing') return [date, pi, item, machine, shift, color, { label: 'Chỉ tiêu may', cell: row => row.metric ?? '—' }, numeric('Số lượng', 'value'), { label: 'Đơn vị', cell: row => row.unit ?? '—' }, { label: 'Ghi chú', cell: row => row.note ?? '—' }, source]
   return [date, pi, item, machine, shift, color, { label: 'Chỉ tiêu đóng gói', cell: row => row.metric ?? '—' }, numeric('Số lượng', 'value'), { label: 'Đơn vị', cell: row => row.unit ?? '—' }, { label: 'Ghi chú', cell: row => row.note ?? '—' }, source]
 }
 
@@ -57,6 +59,7 @@ function ProductionRecordsTable({ embedded = false }: { embedded?: boolean }) {
     knitting: 'Theo mẫu KNITTING: khổ, định lượng, chiều dài, cuộn, mét, số lượng, cân nặng và thông số máy.',
     rolling: 'Mỗi dòng giữ nguyên một chỉ tiêu và nhãn nguồn SMALL/BIG, DAY/NIGHT hoặc TOTAL(M).',
     packing: 'Theo dữ liệu đóng gói nhập trực tiếp: chỉ tiêu, số lượng, đơn vị và ghi chú.',
+    sewing: 'Theo dữ liệu may nhập trực tiếp: chỉ tiêu, số lượng, đơn vị và ghi chú.',
   }
   return <div className="space-y-5 px-4 py-6 md:px-8" ref={paging.tableRef}>
     {!embedded && <nav className="flex flex-wrap gap-4 text-sm"><Link href="/orders" className="text-primary underline">Đơn hàng</Link><span aria-current="page">Sản lượng theo mã PI</span><Link href="/reports" className="text-primary underline">Báo cáo thống kê / Nhập Excel</Link></nav>}
@@ -72,7 +75,7 @@ function ProductionRecordsTable({ embedded = false }: { embedded?: boolean }) {
   </div>
 }
 
-type Stage = 'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing'
+type Stage = 'extruder' | 'warping' | 'knitting' | 'rolling' | 'packing' | 'sewing'
 type Entry = { id: string; stage: Stage; reportDate?: string; planDate?: string; machineId: string | null; shift: string | null; orderRef: string | null; orderId: string | null; color: string | null; metricLabel: string; metricValue?: string; plannedValue?: string; unit: string; note: string | null; revision?: number; updatedAt: string }
 type OrderCandidate = { id: string; piNumber: string; subLineIndex: number; customer: string; itemCode: string | null; color: string | null; lifecycleStatus: string }
 type DropdownOptions = { machines: string[]; colors: string[]; orderRefs: string[]; metrics: string[]; units: string[] }
@@ -82,7 +85,7 @@ type PrintPlan = {
   order: { piNumber: string; subLineIndex: number; customer: string; itemCode: string | null; color: string | null; mbCode: string | null; widthM: number | null; gsm: number | null; productionGsm: number | null } | null;
 }
 type PrintPayload = { success: boolean; error?: string; stage: 'extruder' | 'knitting'; from: string; to: string; plans: PrintPlan[] }
-const stageOptions: [Stage, string][] = [['extruder', 'Kéo sợi'], ['warping', 'Mắc sợi'], ['knitting', 'Dệt'], ['rolling', 'Cuộn'], ['packing', 'Đóng gói']]
+const stageOptions: [Stage, string][] = [['extruder', 'Kéo sợi'], ['warping', 'Cuốn chỉ'], ['knitting', 'Dệt'], ['packing', 'Đóng gói'], ['sewing', 'May']]
 const blankForm = { machineId: '', shift: '', orderRef: '', orderId: '', color: '', metricLabel: '', value: '', unit: 'kg', note: '' }
 
 function printDateRange(date: string, mode: 'week' | 'month') {

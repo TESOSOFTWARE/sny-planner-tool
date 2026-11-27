@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/db'
 import { authError } from '@/lib/auth/session'
 
-const input = z.object({ stage: z.enum(['extruder', 'warping', 'knitting', 'rolling', 'packing']), q: z.string().trim().max(150).default(''), state: z.enum(['all', 'linked', 'unlinked']).default('all'), page: z.coerce.number().int().min(1).max(100000).default(1), limit: z.coerce.number().int().min(1).max(200).default(100) })
+const input = z.object({ stage: z.enum(['extruder', 'warping', 'knitting', 'rolling', 'packing', 'sewing']), q: z.string().trim().max(150).default(''), state: z.enum(['all', 'linked', 'unlinked']).default('all'), page: z.coerce.number().int().min(1).max(100000).default(1), limit: z.coerce.number().int().min(1).max(200).default(100) })
 const textValue = (value: unknown) => value == null ? null : String(value)
 
 /** [MoM 30/10 §4] Preserve source PI and show unresolved output-to-item links. */
@@ -38,8 +38,8 @@ export async function GET(request: NextRequest) {
       ].filter(metric => metric.value != null) } : undefined
       return NextResponse.json({ success: true, total, ...(summary ? { summary } : {}), records: rows.map(r => ({ id: r.id, date: r.reportDate.toISOString(), orderRef: r.orderRef, orderId: r.orderId, color: r.color, machine: r.machineId, shift: r.shift, width: r.width?.toString() ?? null, weightSpec: r.weightSpec?.toString() ?? null, lengthM: r.lengthM?.toString() ?? null, tapeRoll: r.tapeRoll?.toString() ?? null, mValue: r.mValue?.toString() ?? null, avgPerRoll: r.avgPerRoll?.toString() ?? null, quantity: r.quantity?.toString() ?? null, kilograms: r.weightKgs.toString(), machineNote: r.machineNote, meshType: r.meshType, machineSizeM: r.machineSizeM?.toString() ?? null, cmPerMin: r.cmPerMin?.toString() ?? null, meterPerDay: r.meterPerDay?.toString() ?? null, operatingGrade: r.operatingGrade, totalPct: r.totalPct?.toString() ?? null, source: r.dataSource })) })
     }
-    if (stage === 'packing') {
-      const manualWhere = { ...where, stage: 'packing' }
+    if (stage === 'packing' || stage === 'sewing') {
+      const manualWhere = { ...where, stage }
       const [rows, total, metrics] = await Promise.all([
         prisma.manualProductionEntry.findMany({ ...paging, where: manualWhere, orderBy: [{ reportDate: 'desc' }, { id: 'asc' }], select: { id: true, reportDate: true, orderRef: true, orderId: true, color: true, machineId: true, shift: true, metricLabel: true, metricValue: true, unit: true, note: true } }),
         prisma.manualProductionEntry.count({ where: manualWhere }),

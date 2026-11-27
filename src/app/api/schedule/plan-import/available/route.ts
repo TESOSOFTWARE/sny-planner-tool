@@ -9,6 +9,7 @@ const stageProfiles: Record<string, StagePlanProfile[]> = {
   knitting: [],
   rolling: [],
   packing: ['pallet-dated'],
+  sewing: [],
 }
 
 export async function GET(request: NextRequest) {

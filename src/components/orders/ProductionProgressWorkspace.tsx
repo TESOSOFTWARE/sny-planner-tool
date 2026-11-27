@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ProductionProgressRow } from '@/lib/production/progressSummary'
 
 type ApiResponse = { success: boolean; error?: string; progress?: ProductionProgressRow[]; piCount?: number; unmatchedActualMetrics?: number }
-const stageLabels: Record<string, string> = { extruder: 'Kéo sợi', warping: 'Mắc sợi', knitting: 'Dệt', rolling: 'Cuộn' }
+const stageLabels: Record<string, string> = { extruder: 'Kéo sợi', warping: 'Cuốn chỉ', knitting: 'Dệt', rolling: 'Cuộn', packing: 'Đóng gói', sewing: 'May' }
 const stateLabels: Record<ProductionProgressRow['state'], string> = {
   NO_PLAN: 'Chưa có kế hoạch', NO_ACTUAL: 'Chưa có actual', IN_PROGRESS: 'Đang thực hiện',
   PLAN_REACHED: 'Đạt/vượt kế hoạch', ZERO_PLAN: 'Kế hoạch 0',

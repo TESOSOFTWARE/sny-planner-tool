@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db'
 import { authError } from '@/lib/auth/session'
 import { manualProductionEntryInput, utcDay } from '@/lib/validations/productionEntry'
 
-const stages = ['extruder', 'warping', 'knitting', 'rolling', 'packing'] as const
+const stages = ['extruder', 'warping', 'knitting', 'rolling', 'packing', 'sewing'] as const
 
 export async function GET(request: NextRequest) {
   const denied = await authError('GET', request, 'output.read')

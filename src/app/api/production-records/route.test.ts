@@ -22,7 +22,7 @@ before(async () => {
 })
 after(() => { singleton.prisma = previous })
 test('each stage response retains its own Excel fields and preserves unresolved PI text', async () => {
-  for (const stage of ['extruder', 'warping', 'knitting', 'rolling', 'packing']) {
+  for (const stage of ['extruder', 'warping', 'knitting', 'rolling', 'packing', 'sewing']) {
     const response = await GET(new NextRequest('http://qa.invalid/api/production-records?stage=' + stage + '&q=RAW&state=unlinked&page=2&limit=50'))
     assert.equal(response.status, 200)
     const data = await response.json()
@@ -33,7 +33,7 @@ test('each stage response retains its own Excel fields and preserves unresolved 
     if (stage === 'warping') { assert.equal(data.records[0].weavingMachineRef, 'M-040'); assert.equal(data.records[0].strand, '4'); assert.equal(data.records[0].quantity, '4') }
     if (stage === 'knitting') { assert.equal(data.records[0].width, '2'); assert.equal(data.records[0].tapeRoll, '50'); assert.equal(data.records[0].machineSizeM, '6.8'); assert.equal(data.records[0].machineNote, 'operator note') }
     if (stage === 'rolling') { assert.equal(data.records[0].metric, 'QUANTITY SMALL'); assert.equal(data.records[0].kilograms, undefined); assert.equal(data.records[0].widthM, '2'); assert.equal(data.records[0].weightKgsOrder, '90') }
-    if (stage === 'packing') { assert.equal(data.records[0].metric, 'QUANTITY SMALL'); assert.equal(data.records[0].unit, 'roll'); assert.equal(data.records[0].note, 'packing note') }
+    if (stage === 'packing' || stage === 'sewing') { assert.equal(data.records[0].metric, 'QUANTITY SMALL'); assert.equal(data.records[0].unit, 'roll'); assert.equal(data.records[0].note, 'packing note') }
   }
 })
 test('search summary aggregates all matching PI rows, independently of the current page, without summing specification fields', async () => {
@@ -43,6 +43,7 @@ test('search summary aggregates all matching PI rows, independently of the curre
     ['knitting', [{ label: 'M', value: '543.2', unit: 'm' }, { label: 'QUANTITY', value: '6' }, { label: 'WEIGHT (kg)', value: '1234.5', unit: 'kg' }]],
     ['rolling', [{ label: 'QUANTITY SMALL', value: '6' }, { label: 'WEIGHT BIG', value: '1234.5' }]],
     ['packing', [{ label: 'QUANTITY SMALL', value: '6', unit: 'roll' }, { label: 'WEIGHT BIG', value: '1234.5', unit: 'kg' }]],
+    ['sewing', [{ label: 'QUANTITY SMALL', value: '6', unit: 'roll' }, { label: 'WEIGHT BIG', value: '1234.5', unit: 'kg' }]],
   ] as const) {
     const response = await GET(new NextRequest(`http://qa.invalid/api/production-records?stage=${stage}&q=RAW&page=2&limit=1`))
     assert.equal(response.status, 200)
